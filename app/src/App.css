@@ -1094,6 +1094,21 @@ td .record-link strong {
   font-size: 12px;
   font-weight: 400;
 }
+.client-document-status {
+  min-height: 14px;
+  font-size: 10px;
+  font-weight: 400;
+  line-height: 1.4;
+}
+.client-document-status.success {
+  color: #24764f;
+}
+.client-document-status.error {
+  color: var(--red-dark);
+}
+.client-document-status.loading {
+  color: var(--muted);
+}
 .full {
   grid-column: 1 / -1;
 }

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { FormEvent } from "react";
 import { Minus, Plus, Save, Trash2 } from "lucide-react";
 import {
@@ -22,6 +22,13 @@ import type {
 } from "./domain";
 import { errorMessage } from "./useDatabase";
 import { Modal } from "./components";
+import {
+  formatCnpj,
+  isValidCnpj,
+  lookupCompanyByCnpj,
+  normalizeCnpj,
+} from "./cnpj";
+import { formatCpf, isValidCpf } from "./cpf";
 
 export type FormKind =
   | "client"
@@ -54,6 +61,216 @@ function FormButtons({ onClose }: { onClose: () => void }) {
         Salvar
       </button>
     </footer>
+  );
+}
+
+function ClientFormFields({ client }: { client?: Client }) {
+  const [name, setName] = useState(client?.name ?? "");
+  const [document, setDocument] = useState(client?.document ?? "");
+  const [group, setGroup] = useState(client?.group ?? "Academias");
+  const [phone, setPhone] = useState(client?.phone ?? "");
+  const [email, setEmail] = useState(client?.email ?? "");
+  const [address, setAddress] = useState(client?.address ?? "");
+  const [active, setActive] = useState(client?.active ?? true);
+  const [lookup, setLookup] = useState<{
+    document: string;
+    status: "idle" | "loading" | "success" | "error";
+    message: string;
+    attempt: number;
+  }>({ document: "", status: "idle", message: "", attempt: 0 });
+  const digits = document.replace(/\D/g, "");
+  const cnpj = normalizeCnpj(document);
+  const isCnpjInput = /[A-Z]/i.test(document) || digits.length > 11;
+  const normalizedCnpj = isCnpjInput ? cnpj : "";
+  const currentLookup =
+    lookup.document === normalizedCnpj ? lookup : { ...lookup, status: "idle" as const, message: "" };
+
+  useEffect(() => {
+    if (!isValidCnpj(normalizedCnpj)) return;
+    const controller = new AbortController();
+    const attempt = lookup.attempt;
+    const timeout = window.setTimeout(() => {
+      setLookup({
+        document: normalizedCnpj,
+        status: "loading",
+        message: "Consultando o cadastro público da empresa…",
+        attempt,
+      });
+      void lookupCompanyByCnpj(normalizedCnpj, controller.signal)
+        .then((registration) => {
+          if (controller.signal.aborted) return;
+          setName(registration.tradeName || registration.legalName);
+          if (registration.phone) setPhone(registration.phone);
+          if (registration.email) setEmail(registration.email);
+          if (registration.address) setAddress(registration.address);
+          setLookup({
+            document: normalizedCnpj,
+            status: "success",
+            message: "Cadastro localizado. Os dados disponíveis foram preenchidos.",
+            attempt,
+          });
+        })
+        .catch((error: unknown) => {
+          if (controller.signal.aborted) return;
+          setLookup({
+            document: normalizedCnpj,
+            status: "error",
+            message:
+              error instanceof Error
+                ? error.message
+                : "Não foi possível consultar este CNPJ.",
+            attempt,
+          });
+        });
+    }, 450);
+    return () => {
+      window.clearTimeout(timeout);
+      controller.abort();
+    };
+  }, [normalizedCnpj, lookup.attempt]);
+
+  function retryCnpjLookup() {
+    setLookup((current) => ({
+      document: normalizedCnpj,
+      status: "idle",
+      message: "",
+      attempt: current.attempt + 1,
+    }));
+  }
+
+  let documentMessage = "";
+  let documentStatus: "idle" | "loading" | "success" | "error" = "idle";
+  if (document && isCnpjInput) {
+    if (normalizedCnpj.length === 14 && !isValidCnpj(normalizedCnpj)) {
+      documentMessage = "Confira o CNPJ informado.";
+      documentStatus = "error";
+    } else if (currentLookup.status !== "idle") {
+      documentMessage = currentLookup.message;
+      documentStatus = currentLookup.status;
+    } else if (isValidCnpj(normalizedCnpj)) {
+      documentMessage = "A consulta será iniciada automaticamente.";
+      documentStatus = "loading";
+    }
+  } else if (document && digits.length === 11) {
+    documentMessage = isValidCpf(digits)
+      ? "CPF válido. A consulta de dados pessoais exige um serviço autorizado; não há consulta pública aberta equivalente."
+      : "Confira o CPF informado.";
+    documentStatus = isValidCpf(digits) ? "idle" : "error";
+  }
+
+  const displayedDocument = isCnpjInput
+    ? formatCnpj(cnpj)
+    : formatCpf(document);
+
+  return (
+    <>
+      <label className="field full">
+        Nome *
+        <input
+          autoFocus
+          name="name"
+          value={name}
+          onChange={(event) => setName(event.target.value)}
+          required
+          maxLength={160}
+        />
+      </label>
+      <label className="field">
+        CPF / CNPJ
+        <input
+          name="document"
+          value={displayedDocument}
+          onChange={(event) => {
+            const value = event.target.value;
+            const next = /[A-Z]/i.test(value)
+              ? normalizeCnpj(value)
+              : value.replace(/\D/g, "").slice(0, 14);
+            setDocument(next);
+            setLookup((current) => ({
+              document:
+                next.replace(/\D/g, "").length > 11 || /[A-Z]/i.test(next)
+                  ? normalizeCnpj(next)
+                  : "",
+              status: "idle",
+              message: "",
+              attempt: current.attempt,
+            }));
+          }}
+          maxLength={25}
+          autoComplete="off"
+          aria-describedby="client-document-status"
+        />
+        <small
+          className={`client-document-status ${documentStatus}`}
+          id="client-document-status"
+          aria-live="polite"
+        >
+          {documentMessage}
+        </small>
+      </label>
+      <label className="field">
+        Grupo
+        <select
+          name="group"
+          value={group}
+          onChange={(event) => setGroup(event.target.value)}
+        >
+          <option>Academias</option>
+          <option>Condominios</option>
+          <option>Residencial</option>
+          <option>Outros</option>
+        </select>
+      </label>
+      <label className="field">
+        Telefone
+        <input
+          type="tel"
+          name="phone"
+          value={phone}
+          onChange={(event) => setPhone(event.target.value)}
+          maxLength={40}
+        />
+      </label>
+      <label className="field">
+        E-mail
+        <input
+          type="email"
+          name="email"
+          value={email}
+          onChange={(event) => setEmail(event.target.value)}
+          maxLength={160}
+        />
+      </label>
+      <label className="field full">
+        Endereço
+        <input
+          name="address"
+          value={address}
+          onChange={(event) => setAddress(event.target.value)}
+          maxLength={300}
+        />
+      </label>
+      <label className="field">
+        Situação
+        <select
+          name="active"
+          value={String(active)}
+          onChange={(event) => setActive(event.target.value === "true")}
+        >
+          <option value="true">Ativo</option>
+          <option value="false">Inativo</option>
+        </select>
+      </label>
+      {currentLookup.status === "error" && (
+        <button
+          className="text-button field full"
+          type="button"
+          onClick={retryCnpjLookup}
+        >
+          Tentar consulta do CNPJ novamente
+        </button>
+      )}
+    </>
   );
 }
 
@@ -346,74 +563,7 @@ export function EditorModal({
           )}
           <div className="form-grid">
             {editor.kind === "client" && (
-              <>
-                <label className="field full">
-                  Nome *
-                  <input
-                    autoFocus
-                    name="name"
-                    defaultValue={client?.name}
-                    required
-                    maxLength={160}
-                  />
-                </label>
-                <label className="field">
-                  CPF / CNPJ
-                  <input
-                    name="document"
-                    defaultValue={client?.document}
-                    maxLength={25}
-                  />
-                </label>
-                <label className="field">
-                  Grupo
-                  <select
-                    name="group"
-                    defaultValue={client?.group ?? "Academias"}
-                  >
-                    <option>Academias</option>
-                    <option>Condominios</option>
-                    <option>Residencial</option>
-                    <option>Outros</option>
-                  </select>
-                </label>
-                <label className="field">
-                  Telefone
-                  <input
-                    type="tel"
-                    name="phone"
-                    defaultValue={client?.phone}
-                    maxLength={40}
-                  />
-                </label>
-                <label className="field">
-                  E-mail
-                  <input
-                    type="email"
-                    name="email"
-                    defaultValue={client?.email}
-                    maxLength={160}
-                  />
-                </label>
-                <label className="field full">
-                  Endereço
-                  <input
-                    name="address"
-                    defaultValue={client?.address}
-                    maxLength={300}
-                  />
-                </label>
-                <label className="field">
-                  Situação
-                  <select
-                    name="active"
-                    defaultValue={String(client?.active ?? true)}
-                  >
-                    <option value="true">Ativo</option>
-                    <option value="false">Inativo</option>
-                  </select>
-                </label>
-              </>
+              <ClientFormFields client={client} />
             )}
             {editor.kind === "equipment" && (
               <>

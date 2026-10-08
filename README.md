@@ -28,7 +28,8 @@ npm --prefix app run build
 ## Entrega 0.1
 
 - Agenda em mes, semana, dia e lista; filtros, busca e criacao de OS por data.
-- Clientes e equipamentos: cadastro e edicao com associacoes validadas.
+- Clientes: cadastro e edicao; ao informar um CNPJ valido, consulta automatica dos dados publicos disponiveis (nome, telefone, e-mail e endereco). CPF recebe validacao de digitos; consulta de dados pessoais exige um provedor autorizado e nao e feita por uma API publica aberta.
+- Equipamentos: cadastro e edicao com associacoes validadas.
 - OS: cadastro, edicao, agendamento, prioridade, tecnico, status, relato e historico.
 - Conflitos de horario do mesmo tecnico bloqueados no formulario de OS.
 - Produtos e servicos: cadastro, edicao, precos, custos e alerta de estoque minimo.
