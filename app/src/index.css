@@ -1,0 +1,114 @@
+:root {
+  font-family: "IBM Plex Sans", sans-serif;
+  color: #242629;
+  background: #f4f5f6;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  --red: #bf3038;
+  --red-dark: #a1222b;
+  --graphite: #242427;
+  --muted: #70747b;
+  --line: #e4e6e8;
+  --blue: #24708f;
+  --green: #25836b;
+  --amber: #b27a17;
+  letter-spacing: 0;
+  color-scheme: light;
+}
+* {
+  box-sizing: border-box;
+}
+body {
+  margin: 0;
+  min-width: 320px;
+}
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+button {
+  cursor: pointer;
+}
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+button,
+a,
+input,
+select,
+textarea {
+  -webkit-tap-highlight-color: transparent;
+}
+button:focus-visible,
+a:focus-visible {
+  outline: 3px solid #24708f;
+  outline-offset: 3px;
+}
+input:focus,
+select:focus,
+textarea:focus {
+  outline: 2px solid #24708f;
+  outline-offset: 1px;
+}
+h1,
+h2,
+h3,
+p {
+  margin: 0;
+}
+h1,
+h2,
+h3 {
+  color: #242629;
+}
+input,
+select,
+textarea {
+  min-width: 0;
+  max-width: 100%;
+}
+input,
+select {
+  min-height: 39px;
+}
+textarea {
+  resize: vertical;
+}
+input,
+textarea,
+select {
+  border: 1px solid #d8dadd;
+  border-radius: 5px;
+  padding: 9px 11px;
+  background: #fff;
+  color: #242629;
+}
+input::placeholder,
+textarea::placeholder {
+  color: #92969c;
+}
+button {
+  border: 0;
+}
+small {
+  font-size: 12px;
+}
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+}
+.file-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  overflow: hidden;
+}
