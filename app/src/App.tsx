@@ -2009,6 +2009,7 @@ function SettingsPanel({
               commit((current) => ({
                 ...current,
                 settings: {
+                  ...current.settings,
                   company: String(form.get("company")).trim(),
                   technician: String(form.get("technician")).trim(),
                   kilometerRate: Math.round(
@@ -2122,6 +2123,23 @@ function SettingsPanel({
                 key={data.settings.kilometerRate}
               />
             </label>
+            {[
+              ["CNPJ", data.settings.cnpj],
+              ["Razão social", data.settings.legalName],
+              ["Nome fantasia", data.settings.tradeName],
+              ["Situação cadastral", data.settings.registrationStatus],
+              ["Data de abertura", data.settings.openingDate],
+              ["Endereço cadastral", data.settings.address],
+              ["Telefone cadastral", data.settings.phone],
+              ["E-mail cadastral", data.settings.email],
+            ]
+              .filter(([, value]) => value)
+              .map(([label, value]) => (
+                <label className="field" key={label}>
+                  {label}
+                  <input value={value} readOnly />
+                </label>
+              ))}
           </div>
           <button
             disabled={logoLoading}

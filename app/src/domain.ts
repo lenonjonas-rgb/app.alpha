@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { CompanyRegistration } from "./cnpj";
 
 const id = z.string().min(1);
 const text = z.string().trim().min(1, "Preencha este campo.").max(1000);
@@ -216,6 +217,15 @@ export const databaseSchema = z.object({
           /^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/.test(value),
         "Logo invalida.",
       ),
+    cnpj: z.string().max(14).default(""),
+    legalName: z.string().max(1000).default(""),
+    tradeName: z.string().max(1000).default(""),
+    registrationStatus: z.string().max(200).default(""),
+    openingDate: z.string().max(30).default(""),
+    address: z.string().max(1000).default(""),
+    phone: z.string().max(100).default(""),
+    email: z.string().max(320).default(""),
+    registrationData: z.record(z.string(), z.unknown()).default({}),
   }),
 });
 export type Database = z.infer<typeof databaseSchema>;
@@ -534,7 +544,11 @@ export const subtotal = (items: Line[]) =>
 export const total = (quote: Pick<Quote, "items" | "discount">) =>
   subtotal(quote.items) - quote.discount;
 
-export function emptyDatabase(company: string, technician: string): Database {
+export function emptyDatabase(
+  company: string,
+  technician: string,
+  registration?: CompanyRegistration,
+): Database {
   return validateDatabase({
     version: 1,
     clients: [],
@@ -545,7 +559,21 @@ export function emptyDatabase(company: string, technician: string): Database {
     quotes: [],
     movements: [],
     expenses: [],
-    settings: { company, technician, kilometerRate: 0, logo: "" },
+    settings: {
+      company,
+      technician,
+      kilometerRate: 0,
+      logo: "",
+      cnpj: registration?.cnpj ?? "",
+      legalName: registration?.legalName ?? "",
+      tradeName: registration?.tradeName ?? "",
+      registrationStatus: registration?.registrationStatus ?? "",
+      openingDate: registration?.openingDate ?? "",
+      address: registration?.address ?? "",
+      phone: registration?.phone ?? "",
+      email: registration?.email ?? "",
+      registrationData: registration?.raw ?? {},
+    },
   });
 }
 

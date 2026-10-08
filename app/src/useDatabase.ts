@@ -8,6 +8,7 @@ import {
   validateDatabase,
 } from "./domain";
 import type { Database } from "./domain";
+import type { CompanyRegistration } from "./cnpj";
 import {
   cloudConfigurationError,
   cloudEnabled,
@@ -201,14 +202,16 @@ export function useDatabase() {
   }, []);
 
   const createCompany = useCallback(
-    async (name: string) => {
+    async (registration: CompanyRegistration) => {
       if (!supabase || !user?.email) return;
       setCloudBusy(true);
       setCloudError("");
       try {
-        const payload = emptyDatabase(name, user.email);
+        const companyName =
+          registration.tradeName || registration.legalName;
+        const payload = emptyDatabase(companyName, user.email, registration);
         const result = await supabase.rpc("create_company_for_current_user", {
-          p_company_name: name,
+          p_company_name: companyName,
           p_payload: payload,
         });
         if (result.error) throw result.error;

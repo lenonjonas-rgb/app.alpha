@@ -40,6 +40,35 @@ describe("dados locais", () => {
       },
     });
   });
+  it("mantem os dados consultados pelo CNPJ no perfil da empresa", () => {
+    const registration = {
+      cnpj: "11222333000181",
+      legalName: "Empresa Exemplo LTDA",
+      tradeName: "Exemplo",
+      registrationStatus: "Ativa",
+      openingDate: "2020-01-02",
+      address: "Rua das Flores, 10",
+      phone: "1133334444",
+      email: "contato@example.test",
+      raw: { cnae_fiscal: 1234567 },
+    };
+    const data = emptyDatabase(
+      registration.tradeName,
+      "admin@example.test",
+      registration,
+    );
+    expect(data.settings).toMatchObject({
+      cnpj: "11222333000181",
+      legalName: "Empresa Exemplo LTDA",
+      tradeName: "Exemplo",
+      registrationStatus: "Ativa",
+      openingDate: "2020-01-02",
+      address: "Rua das Flores, 10",
+      phone: "1133334444",
+      email: "contato@example.test",
+      registrationData: { cnae_fiscal: 1234567 },
+    });
+  });
   it("rejeita referencias de cliente inexistente", () => {
     const data = demoDatabase();
     data.orders[0].clientId = "inexistente";

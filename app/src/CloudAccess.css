@@ -58,6 +58,46 @@
   font-size: 12px;
   line-height: 1.55;
 }
+.cnpj-lookup-status {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+.cnpj-lookup-status svg {
+  flex: 0 0 auto;
+  color: #26805a;
+}
+.cnpj-spinner {
+  animation: cnpj-spin 1s linear infinite;
+  color: var(--red-dark) !important;
+}
+.cnpj-result {
+  display: grid;
+  gap: 5px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fafafa;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+.cnpj-result strong {
+  color: var(--ink);
+  font-size: 14px;
+}
+.cnpj-retry {
+  justify-self: start;
+}
+@keyframes cnpj-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
 .cloud-help,
 .cloud-error {
   padding: 12px;
