@@ -31,6 +31,7 @@ npm --prefix app run build
 - Clientes: cadastro e edicao; ao informar um CNPJ valido, consulta automatica dos dados publicos disponiveis (nome, telefone, e-mail e endereco). CPF recebe validacao de digitos; consulta de dados pessoais exige um provedor autorizado e nao e feita por uma API publica aberta.
 - Equipamentos: cadastro e edicao com associacoes validadas.
 - OS: cadastro, edicao, agendamento, prioridade, tecnico, status, relato e historico.
+- Na criacao/edicao de OS, o campo Cliente oferece sugestoes enquanto voce digita partes do nome, CPF ou CNPJ, ignorando acentos e pontuacao. Selecione por clique ou com setas e Enter; somente um cliente cadastrado selecionado pode ser salvo, e os equipamentos acompanham o cliente escolhido.
 - Conflitos de horario do mesmo tecnico bloqueados no formulario de OS.
 - Produtos e servicos: cadastro, edicao, precos, custos e alerta de estoque minimo.
 - Estoque: entradas/saidas manuais, motivo, historico e bloqueio de saldo negativo.

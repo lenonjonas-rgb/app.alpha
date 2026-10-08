@@ -22,6 +22,7 @@ import type {
 } from "./domain";
 import { errorMessage } from "./useDatabase";
 import { Modal } from "./components";
+import { ClientPicker } from "./ClientPicker";
 import {
   formatCnpj,
   isValidCnpj,
@@ -738,17 +739,11 @@ export function EditorModal({
                     maxLength={250}
                   />
                 </label>
-                <label className="field full">
-                  Cliente *
-                  <select
-                    name="clientId"
-                    value={clientId}
-                    onChange={(event) => setClientId(event.target.value)}
-                    required
-                  >
-                    {clientOptions}
-                  </select>
-                </label>
+                <ClientPicker
+                  clients={data.clients}
+                  value={clientId}
+                  onChange={setClientId}
+                />
                 <label className="field full">
                   Equipamento
                   <select

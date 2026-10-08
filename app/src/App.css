@@ -1112,6 +1112,37 @@ td .record-link strong {
 .full {
   grid-column: 1 / -1;
 }
+.client-picker small {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 400;
+}
+.client-picker-results {
+  max-height: 210px;
+  overflow-y: auto;
+  list-style: none;
+  padding: 4px;
+  margin: 0;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fff;
+}
+.client-picker-results li {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px;
+  cursor: pointer;
+  border-radius: 4px;
+}
+.client-picker-results li.highlighted {
+  background: #f8e9ea;
+}
+.client-picker-results li span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 400;
+}
 .error-message {
   background: #fff0f1;
   border: 1px solid #f0c7cc;
