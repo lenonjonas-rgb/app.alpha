@@ -76,7 +76,26 @@ Os dados ficam no `localStorage` do navegador, na chave `alpha-tec.database.v1`.
 
 Os relatorios de satisfacao nao possuem respostas ate existir um fluxo de convite e resposta. Monitoramento GPS, bateria e conectividade nao e coletado. A tela nao cria esses dados ficticiamente. A Central de downloads gera CSV local, sem fila de processamento no servidor.
 
-Supabase, Vercel, Resend e o fluxo proprio de aprovacao por codigo foram escolhidos para a futura versao multiusuario, mas ainda nao foram configurados nem conectados. Nao publique a versao atual como sistema de producao nem cadastre dados reais: login, isolamento de empresas, permissoes no servidor e envios externos ainda nao estao implementados.
+## Fundacao de nuvem (preparada; nao conectada)
+
+O codigo inclui um cliente Supabase Auth, provisionamento inicial de uma empresa sem registros de demonstracao, persistencia por empresa, protecao RLS e controle de concorrencia por revisao. A migracao fica em `supabase/migrations/20261008010000_tenant_auth_and_company_data.sql`. O deploy Vercel espera a pasta `app` como diretorio raiz e as variaveis de build:
+
+- `VITE_SUPABASE_URL`
+- `VITE_SUPABASE_PUBLISHABLE_KEY` (ou a chave `anon` legada)
+
+Para preparar um projeto Supabase, crie o projeto na sua conta e aplique as migracoes:
+
+```powershell
+npx supabase login
+npx supabase link --project-ref SEU_PROJECT_REF
+npx supabase db push
+```
+
+Crie a primeira conta autorizada no painel Supabase Auth, sem habilitar cadastro publico para esta etapa. Configure as duas variaveis acima no projeto Vercel, importe o repositorio `lenonjonas-rgb/app.alpha` e defina o diretorio raiz como `app`. A chave publishable/anon pode estar no frontend; nunca configure `service_role` como variavel `VITE_*` ou a inclua no Git. `.env.example` e somente um modelo sem credenciais.
+
+**Ainda nao e uma aplicacao multiusuario de producao.** Este ambiente nao esta autenticado no Supabase/Vercel e nenhuma migracao ou deploy remoto foi executado. Somente membros `owner`/`admin` conseguem ler e gravar o documento da empresa; convites, gestao de membros, permissoes para tecnicos/gestores, recuperacao de senha, migracao dos dados locais, armazenamento seguro de anexos, limites/retencao e testes reais de isolamento ainda precisam ser implementados/validados. O armazenamento cloud atual e um documento JSONB de ate 5 MB por empresa, nao um modelo relacional normalizado; o cliente valida as regras de negocio, portanto nao se deve usar para registros operacionais reais antes de migrar as operacoes criticas e regras para o servidor.
+
+Resend, email transacional, link de aprovacao por codigo e assinatura nao estao ligados. Nao envie dados reais nem considere este foundation como autorizacao para lancar a aplicacao a clientes.
 
 Converter um orcamento cria uma OS com horario inicial padrao; revise o agendamento. A conversao nao baixa estoque. Marcacao de status `Enviado` apenas registra a situacao: nao envia email ou WhatsApp. `Imprimir` usa a impressao do navegador; nao gera arquivo PDF no servidor.
 

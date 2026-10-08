@@ -53,6 +53,7 @@ import { downloadFile, errorMessage, useDatabase } from "./useDatabase";
 import { Badge, Empty, Modal } from "./components";
 import { EditorModal, MovementModal } from "./Forms";
 import type { Editor, FormKind } from "./Forms";
+import { CloudAccess } from "./CloudAccess";
 import { OrderWorkspace } from "./OrderWorkspace";
 import "./App.css";
 
@@ -215,7 +216,13 @@ function Recovery({
 }
 
 export default function App() {
-  const { data, error: loadError, commit } = useDatabase();
+  const {
+    data,
+    error: loadError,
+    loading,
+    commit,
+    cloud,
+  } = useDatabase();
   const [view, setView] = useState<View>(viewFromHash);
   const [expandedOrderId, setExpandedOrderId] = useState<string | null>(
     orderFromHash,
@@ -256,7 +263,30 @@ export default function App() {
     const timeout = setTimeout(() => setNotice(""), 4500);
     return () => clearTimeout(timeout);
   }, [notice]);
-  if (!data) return <Recovery error={loadError} onRestore={commit} />;
+  if (cloud.enabled && cloud.mode !== "loading") {
+    return (
+      <CloudAccess
+        mode={cloud.mode}
+        email={cloud.email}
+        error={cloud.error}
+        busy={cloud.busy}
+        onLogin={(email, password) => void cloud.signIn(email, password)}
+        onCreateCompany={(name) => void cloud.createCompany(name)}
+        onRetry={cloud.retry}
+        onSignOut={() => void cloud.signOut()}
+      />
+    );
+  }
+  if (loading || (cloud.enabled && cloud.mode === "loading" && !data))
+    return (
+      <main className="cloud-screen">
+        <div className="cloud-card" role="status">
+          Conectando ao banco seguro da empresa…
+        </div>
+      </main>
+    );
+  if (!data)
+    return <Recovery error={loadError || cloud.error} onRestore={commit} />;
   const database = data;
   const today = localDay();
   const todayDate = new Date(today + "T12:00:00");
@@ -584,15 +614,29 @@ export default function App() {
         <div className="sidebar-bottom">
           <div className="local-status">
             <span />
-            Ambiente local <b>v0.3</b>
+            {cloud.enabled
+              ? cloud.syncState === "saving"
+                ? "Salvando na nuvem"
+                : cloud.syncState === "synced"
+                  ? "Nuvem sincronizada"
+                  : "Supabase seguro"
+              : "Ambiente local"}{" "}
+            <b>{cloud.enabled ? "beta" : "v0.3"}</b>
           </div>
-          <button className="user-profile" onClick={() => navigate("settings")}>
+          <button
+            className="user-profile"
+            onClick={() =>
+              cloud.enabled ? void cloud.signOut() : navigate("settings")
+            }
+          >
             <span className="profile-avatar">AT</span>
             <span>
-              <strong>{database.settings.company}</strong>
-              <small>Minha empresa</small>
+              <strong>
+                {cloud.enabled ? cloud.email : database.settings.company}
+              </strong>
+              <small>{cloud.enabled ? "Sair da conta" : "Minha empresa"}</small>
             </span>
-            <Settings size={16} />
+            {cloud.enabled ? <X size={16} /> : <Settings size={16} />}
           </button>
         </div>
       </aside>
@@ -614,7 +658,13 @@ export default function App() {
           <div className="topbar-right">
             <span className="local-badge">
               <span />
-              Dados locais
+              {cloud.enabled
+                ? cloud.syncState === "saving"
+                  ? "Salvando…"
+                  : cloud.syncState === "synced"
+                    ? "Sincronizado"
+                    : "Supabase"
+                : "Dados locais"}
             </span>
             <span className="topbar-date">
               {todayDate.toLocaleDateString("pt-BR", {
@@ -1562,6 +1612,7 @@ export default function App() {
               commit={commit}
               onSuccess={setNotice}
               onError={setError}
+              cloud={cloud.enabled}
             />
           )}
         </main>
@@ -1915,11 +1966,13 @@ function SettingsPanel({
   commit,
   onSuccess,
   onError,
+  cloud = false,
 }: {
   data: Database;
   commit: (update: Database | ((data: Database) => Database)) => void;
   onSuccess: (text: string) => void;
   onError: (text: string) => void;
+  cloud?: boolean;
 }) {
   const [logo, setLogo] = useState(data.settings.logo);
   const [logoLoading, setLogoLoading] = useState(false);
@@ -2042,7 +2095,11 @@ function SettingsPanel({
                 key={data.settings.company}
                 required
                 maxLength={100}
+                readOnly={cloud}
               />
+              {cloud && (
+                <small>Nome definido ao provisionar a empresa; edição remota ainda não está habilitada.</small>
+              )}
             </label>
             <label className="field">
               Técnico padrão *
@@ -2078,8 +2135,10 @@ function SettingsPanel({
       </section>
       <section className="settings-section">
         <div className="section-heading">
-          <h2>Backup e restauração</h2>
-          <span className="tag">Armazenamento local</span>
+          <h2>{cloud ? "Exportação da base" : "Backup e restauração"}</h2>
+          <span className="tag">
+            {cloud ? "Dados compartilhados na nuvem" : "Armazenamento local"}
+          </span>
         </div>
         <div className="backup-summary">
           <div>
@@ -2114,25 +2173,27 @@ function SettingsPanel({
             }
           >
             <ArrowDownToLine size={17} />
-            Exportar backup
+            {cloud ? "Exportar dados" : "Exportar backup"}
           </button>
-          <label className="button secondary">
-            <Upload size={17} />
-            Restaurar backup
-            <input
-              aria-label="Restaurar backup"
-              className="file-input"
-              type="file"
-              accept=".json,application/json"
-              onChange={(event) => {
-                void importBackup(event.target.files?.[0]);
-                event.target.value = "";
-              }}
-            />
-          </label>
+          {!cloud && (
+            <label className="button secondary">
+              <Upload size={17} />
+              Restaurar backup
+              <input
+                aria-label="Restaurar backup"
+                className="file-input"
+                type="file"
+                accept=".json,application/json"
+                onChange={(event) => {
+                  void importBackup(event.target.files?.[0]);
+                  event.target.value = "";
+                }}
+              />
+            </label>
+          )}
         </div>
       </section>
-      <section className="settings-section">
+      {!cloud && <section className="settings-section">
         <div className="section-heading">
           <h2>Base de dados</h2>
         </div>
@@ -2190,7 +2251,7 @@ function SettingsPanel({
             Restaurar demonstração
           </button>
         </div>
-      </section>
+      </section>}
     </div>
   );
 }

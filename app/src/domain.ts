@@ -534,6 +534,21 @@ export const subtotal = (items: Line[]) =>
 export const total = (quote: Pick<Quote, "items" | "discount">) =>
   subtotal(quote.items) - quote.discount;
 
+export function emptyDatabase(company: string, technician: string): Database {
+  return validateDatabase({
+    version: 1,
+    clients: [],
+    equipment: [],
+    products: [],
+    services: [],
+    orders: [],
+    quotes: [],
+    movements: [],
+    expenses: [],
+    settings: { company, technician, kilometerRate: 0, logo: "" },
+  });
+}
+
 export function validateDatabase(input: unknown): Database {
   const data = databaseSchema.parse(input);
   for (const collection of [

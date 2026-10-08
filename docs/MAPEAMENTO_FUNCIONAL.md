@@ -303,7 +303,10 @@ Regras explicitas da central de downloads:
 - CSV e gerado no navegador. A lista da Central de downloads e apenas da sessao atual e nao representa uma fila de servidor.
 - O resumo financeiro Alpha Tec separa valores registrados em OS de despesas; nao e faturamento, caixa, imposto ou conciliacao. O Dashboard financeiro do Auvo aparecia no menu, mas nao foi acessivel para levantamento funcional.
 - Pesquisa de satisfacao informa que ainda nao ha fluxo de respostas integrado. Monitoramento informa que nao coleta localizacao, bateria ou conectividade. Esses relatorios nao fabricam registros nem alegam integrações inexistentes.
-- Filtros, exportacao e calculos locais nao tornam esta entrega multiusuario. O Alpha Tec continua usando localStorage; Supabase, Vercel, Resend e aceite de cliente por codigo ainda precisam de implementacao/configuracao.
+- Filtros, exportacao e calculos locais nao tornam esta entrega multiusuario. Foi adicionada uma base Supabase com Auth, tenant e RLS, mas nenhum projeto remoto foi ligado e as credenciais nao estao configuradas.
+- Nesta etapa somente owner/admin conseguem ler e gravar o documento JSONB; convites, permissoes de tecnicos/gestores, recuperacao de senha, armazenamento de anexos, migracao do localStorage e validacao das regras no servidor ainda estao pendentes. O documento tem limite de 5 MB.
+- Vercel tem configuracao de build na pasta `app`, mas nao houve login, importacao do projeto, configuracao de ambiente ou deploy.
+- Resend, envio de email, aprovacao por codigo e assinatura remota nao estao ligados. Nao usar com dados reais ate implementar e validar os controles restantes.
 
 ## 10. Configuracoes gerais
 

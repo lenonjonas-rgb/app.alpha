@@ -11,6 +11,7 @@ import {
   replicateOrder,
   convertQuote,
   demoDatabase,
+  emptyDatabase,
   moveStock,
   shiftDay,
   subtotal,
@@ -21,6 +22,24 @@ import {
 describe("dados locais", () => {
   it("valida a base de demonstracao", () =>
     expect(validateDatabase(demoDatabase()).version).toBe(1));
+  it("cria uma base de empresa vazia para o primeiro acesso cloud", () => {
+    const data = emptyDatabase("Empresa de teste", "admin@example.test");
+    expect(data).toMatchObject({
+      clients: [],
+      equipment: [],
+      products: [],
+      services: [],
+      orders: [],
+      quotes: [],
+      movements: [],
+      expenses: [],
+      settings: {
+        company: "Empresa de teste",
+        technician: "admin@example.test",
+        kilometerRate: 0,
+      },
+    });
+  });
   it("rejeita referencias de cliente inexistente", () => {
     const data = demoDatabase();
     data.orders[0].clientId = "inexistente";
