@@ -66,4 +66,73 @@ describe("consulta de CNPJ", () => {
       vi.unstubAllGlobals();
     }
   });
+
+  it("usa CNPJ.ws automaticamente quando a BrasilAPI falha", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response('{"message":"upstream unavailable"}', { status: 500 }),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            cnpj_raiz: "67029106",
+            razao_social: "ALPHA TEC LTDA",
+            estabelecimento: {
+              cnpj: "67029106000199",
+              nome_fantasia: "",
+              situacao_cadastral: "Ativa",
+              data_inicio_atividade: "2026-05-25",
+              tipo_logradouro: "AVENIDA",
+              logradouro: "MAR MAX SCHRAMM",
+              numero: "2499",
+              bairro: "JARDIM ATLANTICO",
+              cep: "88095000",
+              ddd1: "47",
+              telefone1: "92701075",
+              email: "contato@example.test",
+              cidade: { nome: "Florianópolis" },
+              estado: { sigla: "SC" },
+            },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      const company = await lookupCompanyByCnpj("67.029.106/0001-99");
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect(fetchMock).toHaveBeenNthCalledWith(
+        2,
+        "https://publica.cnpj.ws/cnpj/67029106000199",
+        { signal: undefined },
+      );
+      expect(company).toMatchObject({
+        cnpj: "67029106000199",
+        legalName: "ALPHA TEC LTDA",
+        registrationStatus: "Ativa",
+        address:
+          "AVENIDA MAR MAX SCHRAMM 2499 · JARDIM ATLANTICO · Florianópolis - SC · CEP 88095000",
+        phone: "4792701075",
+        email: "contato@example.test",
+      });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("interrompe as tentativas quando a busca é cancelada", async () => {
+    const fetchMock = vi.fn().mockRejectedValue(new DOMException("Aborted", "AbortError"));
+    vi.stubGlobal("fetch", fetchMock);
+    const controller = new AbortController();
+    controller.abort();
+    try {
+      await expect(
+        lookupCompanyByCnpj("67029106000199", controller.signal),
+      ).rejects.toThrow("Aborted");
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
 });

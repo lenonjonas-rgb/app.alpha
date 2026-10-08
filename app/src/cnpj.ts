@@ -28,6 +28,32 @@ type BrasilApiCnpjResponse = {
   email?: unknown;
 };
 
+type CnpjWsResponse = {
+  cnpj?: unknown;
+  razao_social?: unknown;
+  estabelecimento?: unknown;
+};
+
+type CnpjWsEstablishment = {
+  cnpj?: unknown;
+  nome_fantasia?: unknown;
+  situacao_cadastral?: unknown;
+  data_inicio_atividade?: unknown;
+  tipo_logradouro?: unknown;
+  logradouro?: unknown;
+  numero?: unknown;
+  complemento?: unknown;
+  bairro?: unknown;
+  cep?: unknown;
+  ddd1?: unknown;
+  telefone1?: unknown;
+  ddd2?: unknown;
+  telefone2?: unknown;
+  email?: unknown;
+  cidade?: unknown;
+  estado?: unknown;
+};
+
 const firstDigitWeights = [5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2];
 const secondDigitWeights = [6, ...firstDigitWeights];
 
@@ -73,32 +99,22 @@ function text(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
 }
 
-export async function lookupCompanyByCnpj(
-  cnpj: string,
-  signal?: AbortSignal,
-): Promise<CompanyRegistration> {
-  const normalizedCnpj = normalizeCnpj(cnpj);
-  if (!isValidCnpj(normalizedCnpj))
-    throw new Error("Informe um CNPJ válido para consultar.");
+function object(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
 
-  const response = await fetch(
-    `https://brasilapi.com.br/api/cnpj/v1/${encodeURIComponent(normalizedCnpj)}`,
-    { signal },
-  );
-  if (!response.ok) {
-    if (response.status === 404)
-      throw new Error("CNPJ não encontrado na consulta pública.");
-    if (response.status === 429)
-      throw new Error("Muitas consultas. Aguarde um pouco e tente novamente.");
-    throw new Error(
-      `Não foi possível consultar o CNPJ (erro ${response.status}). Tente novamente.`,
-    );
-  }
+function joinPhone(ddd: unknown, phone: unknown): string {
+  const number = text(phone);
+  return number ? `${text(ddd)}${number}` : "";
+}
 
-  const raw: unknown = await response.json();
-  if (!raw || typeof raw !== "object" || Array.isArray(raw))
-    throw new Error("A consulta retornou uma resposta cadastral inválida.");
-  const result = raw as BrasilApiCnpjResponse;
+function mapBrasilApiResponse(
+  result: BrasilApiCnpjResponse,
+  raw: Record<string, unknown>,
+  normalizedCnpj: string,
+): CompanyRegistration {
   const legalName = text(result.razao_social);
   const tradeName = text(result.nome_fantasia);
   if (!legalName && !tradeName)
@@ -123,6 +139,115 @@ export async function lookupCompanyByCnpj(
       .filter(Boolean)
       .join(" / "),
     email: text(result.email),
-    raw: raw as Record<string, unknown>,
+    raw,
   };
+}
+
+function mapCnpjWsResponse(
+  result: CnpjWsResponse,
+  raw: Record<string, unknown>,
+  normalizedCnpj: string,
+): CompanyRegistration {
+  const establishment = object(result.estabelecimento) as CnpjWsEstablishment;
+  const legalName = text(result.razao_social);
+  const tradeName = text(establishment.nome_fantasia);
+  if (!legalName && !tradeName)
+    throw new Error("A consulta não retornou os dados cadastrais da empresa.");
+
+  const city = object(establishment.cidade);
+  const state = object(establishment.estado);
+  const addressParts = [
+    [
+      text(establishment.tipo_logradouro),
+      text(establishment.logradouro),
+      text(establishment.numero),
+    ]
+      .filter(Boolean)
+      .join(" "),
+    text(establishment.complemento),
+    text(establishment.bairro),
+    [text(city.nome), text(state.sigla)].filter(Boolean).join(" - "),
+    text(establishment.cep) ? `CEP ${text(establishment.cep)}` : "",
+  ].filter(Boolean);
+
+  return {
+    cnpj: normalizeCnpj(text(establishment.cnpj || result.cnpj)) || normalizedCnpj,
+    legalName,
+    tradeName,
+    registrationStatus: text(establishment.situacao_cadastral),
+    openingDate: text(establishment.data_inicio_atividade),
+    address: addressParts.join(" · "),
+    phone:
+      [
+        joinPhone(establishment.ddd1, establishment.telefone1),
+        joinPhone(establishment.ddd2, establishment.telefone2),
+      ]
+        .filter(Boolean)
+        .join(" / "),
+    email: text(establishment.email),
+    raw,
+  };
+}
+
+export async function lookupCompanyByCnpj(
+  cnpj: string,
+  signal?: AbortSignal,
+): Promise<CompanyRegistration> {
+  const normalizedCnpj = normalizeCnpj(cnpj);
+  if (!isValidCnpj(normalizedCnpj))
+    throw new Error("Informe um CNPJ válido para consultar.");
+
+  const endpoints = [
+    {
+      name: "BrasilAPI",
+      url: `https://brasilapi.com.br/api/cnpj/v1/${encodeURIComponent(normalizedCnpj)}`,
+      map: mapBrasilApiResponse,
+    },
+    {
+      name: "CNPJ.ws",
+      url: `https://publica.cnpj.ws/cnpj/${encodeURIComponent(normalizedCnpj)}`,
+      map: mapCnpjWsResponse,
+    },
+  ];
+  const failures: string[] = [];
+
+  for (const endpoint of endpoints) {
+    try {
+      const response = await fetch(endpoint.url, { signal });
+      if (!response.ok) {
+        failures.push(`${endpoint.name}: HTTP ${response.status}`);
+        continue;
+      }
+
+      const raw: unknown = await response.json();
+      if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+        failures.push(`${endpoint.name}: resposta cadastral inválida`);
+        continue;
+      }
+      return endpoint.map(
+        raw as BrasilApiCnpjResponse & CnpjWsResponse,
+        raw as Record<string, unknown>,
+        normalizedCnpj,
+      );
+    } catch (error) {
+      if (signal?.aborted) throw error;
+      failures.push(
+        `${endpoint.name}: ${
+          error instanceof Error ? error.message : "falha de conexão"
+        }`,
+      );
+    }
+  }
+
+  if (failures.some((failure) => failure.includes("HTTP 404")))
+    throw new Error(
+      "CNPJ não encontrado nas fontes públicas. Confira o número e tente novamente.",
+    );
+  if (failures.some((failure) => failure.includes("HTTP 429")))
+    throw new Error(
+      "As fontes públicas estão limitando consultas. Aguarde um pouco e tente novamente.",
+    );
+  throw new Error(
+    "Não foi possível consultar o CNPJ nas fontes públicas. Os serviços podem estar temporariamente indisponíveis; tente novamente.",
+  );
 }

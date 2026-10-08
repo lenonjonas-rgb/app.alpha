@@ -79,7 +79,7 @@ Os relatorios de satisfacao nao possuem respostas ate existir um fluxo de convit
 
 ## Fundacao de nuvem (preparada; nao conectada)
 
-O codigo inclui um cliente Supabase Auth, provisionamento inicial de uma empresa sem registros de demonstracao, consulta automatica do CNPJ pela BrasilAPI, persistencia dos dados cadastrais retornados, protecao RLS e controle de concorrencia por revisao. A consulta exige CNPJ com dígitos verificadores válidos e depende de disponibilidade da API pública. A migracao fica em `supabase/migrations/20261008010000_tenant_auth_and_company_data.sql`. O deploy Vercel espera a pasta `app` como diretorio raiz e as variaveis de build:
+O codigo inclui um cliente Supabase Auth, provisionamento inicial de uma empresa sem registros de demonstracao, consulta automatica do CNPJ pela BrasilAPI com fallback para CNPJ.ws, persistencia dos dados cadastrais retornados, protecao RLS e controle de concorrencia por revisao. A consulta exige CNPJ com dígitos verificadores válidos e depende da disponibilidade e dos limites das fontes públicas. A migracao fica em `supabase/migrations/20261008010000_tenant_auth_and_company_data.sql`. O deploy Vercel espera a pasta `app` como diretorio raiz e as variaveis de build:
 
 - `VITE_SUPABASE_URL`
 - `VITE_SUPABASE_PUBLISHABLE_KEY` (ou a chave `anon` legada)
