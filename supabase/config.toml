@@ -1,1 +1,4 @@
 project_id = "alpha-tec"
+
+[functions.manage-users]
+verify_jwt = false

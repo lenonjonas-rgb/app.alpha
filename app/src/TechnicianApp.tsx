@@ -11,6 +11,8 @@ import { errorMessage } from "./useDatabase";
 import { captureLocation, durationText, mobileSnapshotSchema, openRoute, prepareAttachment, shareAttachment } from "./mobile";
 import type { MobileSnapshot } from "./mobile";
 import "./TechnicianApp.css";
+import { loginEmail } from "./userAccess";
+import { PasswordSettings } from "./PasswordSettings";
 
 export default function TechnicianApp() {
   const [session, setSession] = useState<Session | null>(null);
@@ -111,11 +113,13 @@ export default function TechnicianApp() {
         if (!supabase) return;
         const data = new FormData(event.currentTarget);
         setBusy(true); setError("");
-        const result = await supabase.auth.signInWithPassword({ email: String(data.get("email")).trim(), password: String(data.get("password")) });
-        if (result.error) setError(errorMessage(result.error));
-        setBusy(false);
+        try {
+          const result = await supabase.auth.signInWithPassword({ email: loginEmail(String(data.get("email"))), password: String(data.get("password")) });
+          if (result.error) throw result.error;
+        } catch (cause) { setError(errorMessage(cause)); }
+        finally { setBusy(false); }
       }}>
-        <label>E-mail<input name="email" type="email" autoComplete="username" required /></label>
+        <label>Usuário ou e-mail<input name="email" type="text" placeholder="joao.aupha" autoComplete="username" required /></label>
         <label>Senha<input name="password" type="password" autoComplete="current-password" required /></label>
         <button disabled={busy || !supabase}>{busy ? "Entrando…" : "Entrar"}</button>
       </form>
@@ -146,6 +150,7 @@ export default function TechnicianApp() {
         if (hasDraft.current && !window.confirm("Sincronizar descartará as alterações não salvas. Continuar?")) return;
         void sync();
       }}>Sincronizar</button></div>}
+      {!order && !busy && <PasswordSettings />}
       {!snapshot ? <p role="status">{busy ? "Buscando suas tarefas…" : "Nenhuma tarefa carregada. Sincronize para continuar."}</p> : order ? (
         <Task key={order.id} order={order} snapshot={snapshot} busy={busy} mutate={mutate} onDraftChange={updateDraftStatus} onWorkingChange={updateWorkingStatus} />
       ) : (

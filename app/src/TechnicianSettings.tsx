@@ -2,6 +2,7 @@ import { useState } from "react";
 import { supabase } from "./supabase";
 import { useTechnicians } from "./useTechnicians";
 import { errorMessage } from "./useDatabase";
+import { displayLogin } from "./userAccess";
 
 export function TechnicianSettings() {
   const { accounts, loading, error, refresh } = useTechnicians();
@@ -44,7 +45,7 @@ export function TechnicianSettings() {
         </div>
         <button className="button primary" disabled={busy}>{busy ? "Vinculando…" : "Vincular técnico"}</button>
       </form>
-      {loading ? <p>Carregando equipe…</p> : <ul>{accounts.map((account) => <li key={account.userId}>{account.name} — {account.email}</li>)}</ul>}
+      {loading ? <p>Carregando equipe…</p> : <ul>{accounts.map((account) => <li key={account.userId}>{account.name} — {displayLogin(account.email)}</li>)}</ul>}
     </section>
   );
 }

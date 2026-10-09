@@ -15,6 +15,8 @@ import {
   supabase,
 } from "./supabase";
 import type { CloudScreenMode } from "./CloudAccess";
+import { displayLogin, loginEmail } from "./userAccess";
+import type { CompanyRole } from "./userAccess";
 
 type DatabaseState = {
   data: Database | null;
@@ -29,6 +31,8 @@ export function errorMessage(error: unknown): string {
       .join("\n");
   if (error instanceof DOMException && error.name === "QuotaExceededError")
     return "Armazenamento cheio. Exporte um backup antes de continuar.";
+  if (error && typeof error === "object" && "message" in error && typeof error.message === "string")
+    return error.message;
   return error instanceof Error
     ? error.message
     : "Não foi possível concluir a operação.";
@@ -52,6 +56,7 @@ export function useDatabase() {
       : { ...load(), loading: false },
   );
   const [user, setUser] = useState<User | null>(null);
+  const [role, setRole] = useState<CompanyRole | null>(null);
   const [cloudMode, setCloudMode] = useState<CloudScreenMode>(
     cloudEnabled ? (supabase ? "loading" : "configuration") : "login",
   );
@@ -99,6 +104,14 @@ export function useDatabase() {
       setState({ data: null, error: "", loading: false });
       return;
     }
+    const memberRole = z.enum(["owner", "admin", "manager", "technician"]).parse(membership.data.role);
+    setRole(memberRole);
+    if (memberRole === "technician") {
+      location.replace(`${location.pathname}?tecnico=1`);
+      return;
+    }
+    if (memberRole !== "owner" && memberRole !== "admin")
+      throw new Error("Nível sem acesso ao painel. Solicite ao Master o ajuste do seu usuário.");
     const result = await supabase
       .from("company_data")
       .select("payload, revision")
@@ -152,6 +165,7 @@ export function useDatabase() {
       loadSequence.current += 1;
       syncBlocked.current = false;
       setUser(nextUser);
+      setRole(null);
       setCloudError("");
       setCloudSyncState("idle");
       current.current = null;
@@ -192,7 +206,7 @@ export function useDatabase() {
     setCloudBusy(true);
     setCloudError("");
     try {
-      const result = await supabase.auth.signInWithPassword({ email, password });
+      const result = await supabase.auth.signInWithPassword({ email: loginEmail(email), password });
       if (result.error) throw result.error;
     } catch (error) {
       setCloudError(errorMessage(error));
@@ -326,7 +340,8 @@ export function useDatabase() {
     cloud: {
       enabled: cloudEnabled,
       mode: cloudMode,
-      email: user?.email ?? "",
+      email: displayLogin(user?.email ?? ""),
+      role,
       busy: cloudBusy,
       syncState: cloudSyncState,
       error: cloudError,

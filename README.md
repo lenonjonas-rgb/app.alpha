@@ -111,12 +111,35 @@ Aplicativo hibrido Capacitor 8, Android 7.0 ou superior, com interface dedicada 
 
 ### Preparar contas e tarefas
 
-1. Depois da migracao inicial, aplique `supabase/migrations/20261009010000_android_technicians.sql` e `supabase/migrations/20261009020000_technician_link_validation.sql`, nessa ordem. As migracoes incluem transacoes para nao deixar uma aplicacao parcial.
-2. Crie a conta de cada tecnico no Supabase **Authentication > Users**. O frontend nao cria contas Auth nem usa `service_role`.
-3. No painel Alpha Tec, abra **Configuracoes > Contas dos tecnicos**, informe nome e e-mail da conta criada e selecione **Vincular tecnico**.
+1. Depois da migracao inicial, aplique `supabase/migrations/20261009010000_android_technicians.sql`, `supabase/migrations/20261009020000_technician_link_validation.sql` e `supabase/migrations/20261009030000_user_levels.sql`, nessa ordem. As migracoes incluem transacoes para nao deixar uma aplicacao parcial.
+2. Publique a Edge Function `manage-users` do Supabase, conforme a secao de usuarios abaixo. O frontend nunca usa `service_role`.
+3. No painel Alpha Tec, como Master, abra **Configuracoes > Usuarios e niveis**, informe nome, nivel Tecnico e senha inicial, e selecione **Criar usuario**. Contas Auth antigas ainda podem ser vinculadas na opcao **Vincular conta ja existente no Supabase**.
 4. Ao criar ou editar uma OS, selecione a conta no campo **Tecnico**. Tarefas antigas com apenas nome em texto devem ser editadas para vincular uma conta; nao sao atribuidas automaticamente por coincidencia de nome.
 5. Ao converter orcamento em OS, o editor abre para selecionar a conta e ajustar a agenda. Replicas de tarefas conservam a atribuicao.
-6. O tecnico entra no APK com seu e-mail e senha. Tecnicos veem apenas tarefas atribuidas; contas de administrador veem todas as tarefas da empresa.
+6. O tecnico entra no APK com seu login `nome.aupha` e senha (contas antigas ainda aceitam e-mail). Tecnicos veem apenas tarefas atribuidas; contas de administrador veem todas as tarefas da empresa.
+
+### Usuarios e niveis
+
+- **Master** corresponde ao papel `owner` ja existente. Tem acesso completo, cria usuarios, vincula contas antigas e altera niveis. A conta Master nao pode ser rebaixada nem criada pelo formulario.
+- **Administrativo** corresponde a `admin`. Pode operar o painel (agenda, clientes, equipamentos, orcamentos, estoque, relatorios e configuracoes da empresa), mas nao criar/vincular usuarios nem alterar niveis.
+- **Tecnico** corresponde a `technician`. Recebe apenas a projecao das suas tarefas pelas RPCs mobile; nao pode ler o documento JSONB completo nem operar o painel administrativo. Ao entrar pelo site, e direcionado ao portal tecnico.
+- O papel legado `manager` nao ganha acesso implicitamente; o Master pode ajusta-lo para um dos niveis suportados.
+
+O login e globalmente unico e usa o primeiro nome sem acentos: `joao.aupha`, `joao2.aupha`, etc. A numeracao e reservada no banco sob trava, inclusive entre empresas; reservas falhas nao sao reutilizadas. Internamente, somente as contas novas usam o identificador Auth `login@users.aupha.invalid`, sem envio de e-mail para esse dominio. A conta Master existente continua com seu e-mail original.
+
+O Master define uma senha inicial de 12 a 128 caracteres, que nunca e salva na base de cadastros nem retornada pela API. Cada usuario pode altera-la em **Alterar minha senha**, no painel ou app. Recuperacao automatica por e-mail nao esta disponivel para os logins sinteticos; uma senha esquecida deve ser redefinida pelo responsavel no Supabase Auth. A troca de senha inicial nao e obrigatoria nem forcada. Alteracoes de nivel sao impostas pelo servidor; o usuario deve recarregar/entrar novamente para atualizar a interface.
+
+`userAccess.test.ts` testa login e o handler da Edge Function; `userLevelsServer.test.ts` executa as migracoes em PostgreSQL isolado e verifica os tres niveis, permissao de criacao, reservas, retry e protecao do Master. `node app\scripts\user-smoke.ts` disponibiliza respostas ficticias somente no loopback 5183 para validar a interface com `VITE_SUPABASE_URL=http://127.0.0.1:5183` e chave publica ficticia. Nao cria contas reais nem acessa producao; nao publique esse servidor.
+
+Para publicar o backend com o Supabase CLI autenticado:
+
+```powershell
+supabase functions deploy manage-users --project-ref ippyxcxygatluaofuilk
+```
+
+`supabase/config.toml` desativa a verificacao JWT legada do gateway apenas nessa funcao para compatibilidade com as chaves atuais. A funcao **exige e valida** o Bearer token via Supabase Auth e a permissao Master no banco antes de executar qualquer operacao privilegiada. `SUPABASE_URL` e `SUPABASE_SERVICE_ROLE_KEY` sao disponibilizadas no ambiente privado das Edge Functions pelo Supabase; nao devem ser copiadas para variaveis `VITE_*`.
+
+No editor do dashboard, publique `handler.ts` e `index.ts` da pasta `supabase/functions/manage-users` (ou seu conteudo combinado) e desative **Verify JWT with legacy secret** nessa funcao. Nunca habilite cadastro publico como substituto dessa operacao. Reservas usam identificador de operacao para evitar duplicacao no retry. Em erro de rede, confira a lista antes de repetir; falhas de limpeza da conta Auth sao apresentadas explicitamente para verificacao pelo Master.
 
 ### Recursos
 

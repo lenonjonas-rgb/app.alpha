@@ -25,6 +25,7 @@ import { Modal } from "./components";
 import { ClientPicker } from "./ClientPicker";
 import { useTechnicians } from "./useTechnicians";
 import { cloudEnabled } from "./supabase";
+import { displayLogin } from "./userAccess";
 import {
   formatCnpj,
   isValidCnpj,
@@ -817,7 +818,7 @@ export function EditorModal({
                       <select name="technicianUserId" value={assignedTechnicianId} onChange={(event) => setAssignedTechnicianId(event.target.value)} required disabled={technicians.loading}>
                         <option value="">Selecione uma conta vinculada</option>
                         {technicians.accounts.map((account) => (
-                          <option key={account.userId} value={account.userId}>{account.name} · {account.email}</option>
+                          <option key={account.userId} value={account.userId}>{account.name} · {displayLogin(account.email)}</option>
                         ))}
                       </select>
                       {technicians.error && <small role="alert">{technicians.error} <button type="button" className="text-button" onClick={() => void technicians.refresh()}>Tentar novamente</button></small>}

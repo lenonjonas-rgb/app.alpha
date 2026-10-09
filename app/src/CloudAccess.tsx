@@ -288,9 +288,10 @@ export function CloudAccess({
         {isLogin && (
           <form className="cloud-form" onSubmit={submit}>
             <label>
-              E-mail
+              Usuário ou e-mail
               <input
-                type="email"
+                type="text"
+                placeholder="joao.aupha"
                 autoComplete="username"
                 value={loginEmail}
                 onChange={(event) => setLoginEmail(event.target.value)}
@@ -312,8 +313,8 @@ export function CloudAccess({
               {busy ? "Entrando…" : "Entrar"}
             </button>
             <small>
-              As contas devem ser criadas ou convidadas por um administrador
-              pelo painel de autenticação do Supabase.
+              Use o login fornecido pelo Master (ex.: joao.aupha).
+              Contas já existentes podem continuar usando o e-mail.
             </small>
           </form>
         )}

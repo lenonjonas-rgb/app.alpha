@@ -55,7 +55,10 @@ import { EditorModal, MovementModal } from "./Forms";
 import type { Editor, FormKind } from "./Forms";
 import { CloudAccess } from "./CloudAccess";
 import { OrderWorkspace } from "./OrderWorkspace";
-import { TechnicianSettings } from "./TechnicianSettings";
+import { UserSettings } from "./UserSettings";
+import { PasswordSettings } from "./PasswordSettings";
+import { roleLabels } from "./userAccess";
+import type { CompanyRole } from "./userAccess";
 import "./App.css";
 
 const ReportsPanel = lazy(() =>
@@ -635,7 +638,7 @@ export default function App() {
               <strong>
                 {cloud.enabled ? cloud.email : database.settings.company}
               </strong>
-              <small>{cloud.enabled ? "Sair da conta" : "Minha empresa"}</small>
+              <small>{cloud.enabled ? `${cloud.role ? roleLabels[cloud.role] : ""} · Sair da conta` : "Minha empresa"}</small>
             </span>
             {cloud.enabled ? <X size={16} /> : <Settings size={16} />}
           </button>
@@ -1614,6 +1617,7 @@ export default function App() {
               onSuccess={setNotice}
               onError={setError}
               cloud={cloud.enabled}
+              role={cloud.role}
             />
           )}
         </main>
@@ -1974,12 +1978,14 @@ function SettingsPanel({
   onSuccess,
   onError,
   cloud = false,
+  role = null,
 }: {
   data: Database;
   commit: (update: Database | ((data: Database) => Database)) => void;
   onSuccess: (text: string) => void;
   onError: (text: string) => void;
   cloud?: boolean;
+  role?: CompanyRole | null;
 }) {
   const [logo, setLogo] = useState(data.settings.logo);
   const [logoLoading, setLogoLoading] = useState(false);
@@ -2004,7 +2010,8 @@ function SettingsPanel({
   }
   return (
     <div className="settings-page">
-      {cloud && <TechnicianSettings />}
+      {cloud && role === "owner" && <UserSettings />}
+      {cloud && <PasswordSettings />}
       <section className="settings-section">
         <div className="section-heading">
           <h2>Identidade da empresa</h2>
