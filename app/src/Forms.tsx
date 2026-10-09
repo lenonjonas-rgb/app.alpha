@@ -23,6 +23,8 @@ import type {
 import { errorMessage } from "./useDatabase";
 import { Modal } from "./components";
 import { ClientPicker } from "./ClientPicker";
+import { useTechnicians } from "./useTechnicians";
+import { cloudEnabled } from "./supabase";
 import {
   formatCnpj,
   isValidCnpj,
@@ -289,6 +291,12 @@ export function EditorModal({
   onSuccess: (text: string) => void;
 }) {
   const [error, setError] = useState("");
+  const technicians = useTechnicians(editor.kind === "order");
+  const [assignedTechnicianId, setAssignedTechnicianId] = useState(() =>
+    editor.kind === "order"
+      ? (data.orders.find((record) => record.id === editor.id)?.technicianUserId ?? "")
+      : "",
+  );
   const [clientId, setClientId] = useState(() =>
     editor.kind === "order"
       ? (data.orders.find((record) => record.id === editor.id)?.clientId ?? "")
@@ -425,12 +433,20 @@ export function EditorModal({
             const time = getText(form, "time");
             const duration = getNumber(form, "duration");
             const technician = getText(form, "technician");
+            const technicianUserId = getText(form, "technicianUserId");
+            const technicianAccount = technicians.accounts.find(
+              (account) => account.userId === technicianUserId,
+            );
+            if (cloudEnabled && !technicianAccount)
+              throw new Error("Selecione uma conta de técnico vinculada à empresa.");
             const start = new Date(`${date}T${time}`).getTime();
             const overlap = current.orders.some(
               (item) =>
                 item.id !== recordId &&
                 item.status !== "Finalizada" &&
-                item.technician.toLowerCase() === technician.toLowerCase() &&
+                (technicianUserId
+                  ? item.technicianUserId === technicianUserId
+                  : item.technician.toLowerCase() === technician.toLowerCase()) &&
                 start <
                   new Date(`${item.date}T${item.time}`).getTime() +
                     item.duration * 60000 &&
@@ -447,7 +463,8 @@ export function EditorModal({
               clientId: getText(form, "clientId"),
               equipmentId: getText(form, "equipmentId"),
               title: getText(form, "title"),
-              technician,
+              technician: technicianAccount?.name ?? technician,
+              technicianUserId,
               date,
               time,
               duration,
@@ -795,12 +812,20 @@ export function EditorModal({
                 </label>
                 <label className="field">
                   Técnico *
-                  <input
-                    name="technician"
-                    defaultValue={order?.technician ?? data.settings.technician}
-                    required
-                    maxLength={120}
-                  />
+                  {cloudEnabled ? (
+                    <>
+                      <select name="technicianUserId" value={assignedTechnicianId} onChange={(event) => setAssignedTechnicianId(event.target.value)} required disabled={technicians.loading}>
+                        <option value="">Selecione uma conta vinculada</option>
+                        {technicians.accounts.map((account) => (
+                          <option key={account.userId} value={account.userId}>{account.name} · {account.email}</option>
+                        ))}
+                      </select>
+                      {technicians.error && <small role="alert">{technicians.error} <button type="button" className="text-button" onClick={() => void technicians.refresh()}>Tentar novamente</button></small>}
+                      {!technicians.loading && !technicians.accounts.length && <small>Vincule técnicos em Configurações.</small>}
+                    </>
+                  ) : (
+                    <input name="technician" defaultValue={order?.technician ?? data.settings.technician} required maxLength={120} />
+                  )}
                 </label>
                 <label className="field">
                   Tipo

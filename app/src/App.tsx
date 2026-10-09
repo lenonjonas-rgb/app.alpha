@@ -55,6 +55,7 @@ import { EditorModal, MovementModal } from "./Forms";
 import type { Editor, FormKind } from "./Forms";
 import { CloudAccess } from "./CloudAccess";
 import { OrderWorkspace } from "./OrderWorkspace";
+import { TechnicianSettings } from "./TechnicianSettings";
 import "./App.css";
 
 const ReportsPanel = lazy(() =>
@@ -1678,14 +1679,20 @@ export default function App() {
           onEdit={() => openEditor("quote", activeQuote.id)}
           onStatus={(next) => quoteStatus(activeQuote.id, next)}
           onConvert={() => {
+            let generated = "";
             if (
               act(
-                (current) => convertQuote(current, activeQuote.id),
-                "OS gerada. Ajuste o agendamento antes do atendimento.",
+                (current) => {
+                  const converted = convertQuote(current, activeQuote.id);
+                  generated = converted.quotes.find((quote) => quote.id === activeQuote.id)?.orderId ?? "";
+                  return converted;
+                },
+                "OS gerada. Selecione o técnico e ajuste o agendamento antes do atendimento.",
               )
             ) {
               setDetail(null);
               navigate("orders");
+              if (generated) openEditor("order", generated);
             }
           }}
           onOpenOrder={() =>
@@ -1997,6 +2004,7 @@ function SettingsPanel({
   }
   return (
     <div className="settings-page">
+      {cloud && <TechnicianSettings />}
       <section className="settings-section">
         <div className="section-heading">
           <h2>Identidade da empresa</h2>

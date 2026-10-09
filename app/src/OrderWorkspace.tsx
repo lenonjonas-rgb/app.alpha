@@ -1461,6 +1461,7 @@ export function OrderWorkspace({
                       <th>Motivo</th>
                       <th>Justificativa</th>
                       <th>Origem</th>
+                      <th>Localização</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -1472,6 +1473,11 @@ export function OrderWorkspace({
                         <td>{item.reason || "—"}</td>
                         <td>{item.justification || "—"}</td>
                         <td>{item.origin}</td>
+                        <td>{item.location ? (
+                          <a target="_blank" rel="noopener noreferrer" href={`https://www.google.com/maps/search/?api=1&query=${item.location.latitude},${item.location.longitude}`}>
+                            {item.location.latitude.toFixed(5)}, {item.location.longitude.toFixed(5)} (±{Math.round(item.location.accuracy)} m)
+                          </a>
+                        ) : "—"}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -2455,6 +2461,7 @@ function OrderPrintable({
           {item.technician}
           {item.reason ? ` · ${item.reason}` : ""}
           {item.justification ? ` · ${item.justification}` : ""}
+          {item.location ? ` · GPS: ${item.location.latitude.toFixed(5)}, ${item.location.longitude.toFixed(5)} (precisão ${Math.round(item.location.accuracy)} m)` : ""}
         </p>
       ))}
       <h2>Valores</h2>

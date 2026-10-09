@@ -54,7 +54,7 @@ const imageData = z
   .string()
   .max(800_000)
   .regex(/^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/);
-const attachmentSchema = z
+export const attachmentSchema = z
   .object({
     id,
     name: text,
@@ -110,7 +110,15 @@ const activitySchema = z.object({
   technician: text,
   reason: z.string().max(1000),
   justification: z.string().max(1000),
-  origin: z.literal("Web local"),
+  origin: z.enum(["Web local", "Android"]),
+  location: z
+    .object({
+      latitude: z.number().min(-90).max(90),
+      longitude: z.number().min(-180).max(180),
+      accuracy: z.number().nonnegative(),
+      capturedAt: z.iso.datetime(),
+    })
+    .optional(),
 });
 export const orderDetailsSchema = z.object({
   archived: z.boolean().default(false),
@@ -143,6 +151,7 @@ const orderSchema = z.object({
   equipmentId: z.string(),
   title: text,
   technician: text,
+  technicianUserId: z.union([z.literal(""), z.uuid()]).default(""),
   date: day,
   time: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/),
   duration: z.number().int().min(15).max(1440),
@@ -745,6 +754,7 @@ export function convertQuote(data: Database, quoteId: string): Database {
     equipmentId: "",
     title: `Atendimento do ${quote.code}`,
     technician: data.settings.technician,
+    technicianUserId: "",
     date: localDay(),
     time: "09:00",
     duration: 60,
@@ -884,6 +894,7 @@ export function demoDatabase(): Database {
       equipmentId: equipment[0].id,
       title: "Revisao preventiva da esteira",
       technician: "Tecnico Alpha",
+      technicianUserId: "",
       date: today,
       time: "09:00",
       duration: 90,
@@ -900,6 +911,7 @@ export function demoDatabase(): Database {
       equipmentId: equipment[1].id,
       title: "Troca do cabo de aco",
       technician: "Tecnico Alpha",
+      technicianUserId: "",
       date: today,
       time: "14:00",
       duration: 60,
@@ -916,6 +928,7 @@ export function demoDatabase(): Database {
       equipmentId: equipment[2].id,
       title: "Diagnostico de ruido no pedal",
       technician: "Tecnico Alpha",
+      technicianUserId: "",
       date: shiftDay(today, 1),
       time: "10:30",
       duration: 60,
@@ -932,6 +945,7 @@ export function demoDatabase(): Database {
       equipmentId: equipment[0].id,
       title: "Inspecao de seguranca",
       technician: "Tecnico Alpha",
+      technicianUserId: "",
       date: shiftDay(today, -1),
       time: "11:00",
       duration: 60,

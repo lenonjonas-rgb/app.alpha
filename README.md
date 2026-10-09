@@ -78,7 +78,7 @@ Os dados ficam no `localStorage` do navegador, na chave `alpha-tec.database.v1`.
 
 Os relatorios de satisfacao nao possuem respostas ate existir um fluxo de convite e resposta. Monitoramento GPS, bateria e conectividade nao e coletado. A tela nao cria esses dados ficticiamente. A Central de downloads gera CSV local, sem fila de processamento no servidor.
 
-## Fundacao de nuvem (preparada; nao conectada)
+## Fundacao de nuvem
 
 O codigo inclui um cliente Supabase Auth, provisionamento inicial de uma empresa sem registros de demonstracao, consulta automatica do CNPJ pela BrasilAPI com fallback para CNPJ.ws, persistencia dos dados cadastrais retornados, protecao RLS e controle de concorrencia por revisao. A consulta exige CNPJ com dígitos verificadores válidos e depende da disponibilidade e dos limites das fontes públicas. A migracao fica em `supabase/migrations/20261008010000_tenant_auth_and_company_data.sql`. O deploy Vercel espera a pasta `app` como diretorio raiz e as variaveis de build:
 
@@ -95,7 +95,7 @@ npx supabase db push
 
 Crie a primeira conta autorizada no painel Supabase Auth, sem habilitar cadastro publico para esta etapa. Configure as duas variaveis acima no projeto Vercel, importe o repositorio `lenonjonas-rgb/app.alpha` e defina o diretorio raiz como `app`. A chave publishable/anon pode estar no frontend; nunca configure `service_role` como variavel `VITE_*` ou a inclua no Git. `.env.example` e somente um modelo sem credenciais.
 
-**Ainda nao e uma aplicacao multiusuario de producao.** Este ambiente nao esta autenticado no Supabase/Vercel e nenhuma migracao ou deploy remoto foi executado. Somente membros `owner`/`admin` conseguem ler e gravar o documento da empresa; convites, gestao de membros, permissoes para tecnicos/gestores, recuperacao de senha, migracao dos dados locais, armazenamento seguro de anexos, limites/retencao e testes reais de isolamento ainda precisam ser implementados/validados. O armazenamento cloud atual e um documento JSONB de ate 5 MB por empresa, nao um modelo relacional normalizado; o cliente valida as regras de negocio, portanto nao se deve usar para registros operacionais reais antes de migrar as operacoes criticas e regras para o servidor.
+O painel usa Supabase Auth e esta publicado na Vercel. Somente membros `owner`/`admin` conseguem ler e gravar o documento completo da empresa. A migracao Android adiciona vinculos de tecnicos, projecao das tarefas atribuidas e operacoes restritas no servidor; nao concede leitura do JSONB inteiro aos tecnicos. Convites automaticos, recuperacao de senha no app, migracao dos dados locais, armazenamento de anexos em Storage, limites/retencao e normalizacao relacional ainda nao estao implementados. O armazenamento cloud atual e um documento JSONB de ate 5 MB por empresa. Regras de edicao administrativa ainda dependem parcialmente da validacao do cliente; esta entrega continua sendo uma versao de validacao operacional.
 
 Resend, email transacional, link de aprovacao por codigo e assinatura nao estao ligados. Nao envie dados reais nem considere este foundation como autorizacao para lancar a aplicacao a clientes.
 
@@ -103,7 +103,52 @@ Converter um orcamento cria uma OS com horario inicial padrao; revise o agendame
 
 O logotipo enviado no chat nao estava disponivel como arquivo no projeto. A interface usa um wordmark provisório e permite carregar a imagem original em Configuracoes. Ao salvar, a imagem aparece no menu e nos documentos.
 
-Envios reais, GPS, check-in automatico e confirmacao de recebimento no aplicativo nao estao conectados. A aba Envios registra somente preparacao/exportacao local, sem simular envio ao cliente. Links de OS abrem dados da mesma origem/navegador; nao sao links publicos. A assinatura local nao tem autenticacao de identidade, codigo de email ou validade juridica certificada. Arquivos locais consomem a cota do navegador; falha ao salvar nao substitui os dados persistidos.
+Envios reais, check-in automatico e confirmacao de recebimento no aplicativo nao estao conectados. O GPS pontual esta implementado no app Android, conforme a secao abaixo. A aba Envios registra somente preparacao/exportacao local, sem simular envio ao cliente. Links de OS nao sao links publicos. A assinatura desenhada nao tem autenticacao de identidade, codigo de email ou validade juridica certificada.
+
+## App Android dos tecnicos
+
+Aplicativo hibrido Capacitor 8, Android 7.0 ou superior, com interface dedicada em `https://app-alpha-theta.vercel.app/?tecnico=1`. O APK carrega a interface desse endereco HTTPS, recebendo as atualizacoes publicadas na Vercel. Os assets locais incluem uma tela de falha de conexao. **Internet e necessaria; nao ha fila offline e nenhum atendimento e registrado como sucesso antes de a RPC confirmar a gravacao.**
+
+### Preparar contas e tarefas
+
+1. Depois da migracao inicial, aplique `supabase/migrations/20261009010000_android_technicians.sql` e `supabase/migrations/20261009020000_technician_link_validation.sql`, nessa ordem. As migracoes incluem transacoes para nao deixar uma aplicacao parcial.
+2. Crie a conta de cada tecnico no Supabase **Authentication > Users**. O frontend nao cria contas Auth nem usa `service_role`.
+3. No painel Alpha Tec, abra **Configuracoes > Contas dos tecnicos**, informe nome e e-mail da conta criada e selecione **Vincular tecnico**.
+4. Ao criar ou editar uma OS, selecione a conta no campo **Tecnico**. Tarefas antigas com apenas nome em texto devem ser editadas para vincular uma conta; nao sao atribuidas automaticamente por coincidencia de nome.
+5. Ao converter orcamento em OS, o editor abre para selecionar a conta e ajustar a agenda. Replicas de tarefas conservam a atribuicao.
+6. O tecnico entra no APK com seu e-mail e senha. Tecnicos veem apenas tarefas atribuidas; contas de administrador veem todas as tarefas da empresa.
+
+### Recursos
+
+- Dashboard, agenda, tarefas de hoje, atrasadas, em execucao e finalizadas.
+- Detalhes do cliente, telefone, orientacoes, data, prioridade, equipamentos, tags, valores da OS e orcamentos associados.
+- Navegacao por deep link no Google Maps ou Waze instalado, com fallback para a rota HTTPS no navegador; endereco ausente impede abrir a rota.
+- Check-in/check-out solicitam localizacao apenas naquele momento. Pausas exigem motivo; retorno retoma a contagem. Nao ha permissao de localizacao em segundo plano ou rastreamento continuo.
+- Horario de registro definido pelo servidor; coordenadas e precisao associadas ao evento. O GPS fornecido pelo dispositivo nao certifica presenca fisica e pode sofrer imprecisao.
+- Cronometro calculado a partir dos eventos persistidos, excluindo pausas; continua correto ao reabrir o app e nao cresce apos o check-out.
+- Relato, km, respostas dos questionarios definidos no painel, resolucao de pendencias, fotos/anexos e assinatura desenhada. Pendencias e respostas obrigatorias bloqueiam o check-out.
+- Fotos de ate 15 MB sao reduzidas a JPEG para armazenar no maximo 500 KB. PDF/TXT seguem o limite de 500 KB; o limite total continua sendo 5 MB por empresa.
+- Fotos aparecem no relatorio. No Android, o botao Compartilhar abre o seletor do sistema com uma copia do anexo no cache privado do app; no navegador, o link baixa o arquivo. Nao existe envio automatico por esse botao.
+- Controle de concorrencia por revisao da empresa: um conflito exige sincronizacao explicita, sem sobrescrever o trabalho de outro usuario.
+- A assinatura e armazenada na OS; envio de relatorio/link por e-mail ou WhatsApp ainda nao esta implementado.
+
+### Compilar e instalar
+
+Requisitos: Node.js 22.12+, JDK 21, Android SDK 36 e build-tools 36.0.0. Configure `JAVA_HOME` e `ANDROID_HOME` no terminal. Configure as variaveis publicas Supabase no build web e publique o painel/interface mobile antes de distribuir o APK.
+
+```powershell
+npm --prefix app install
+npm --prefix app run android:apk
+npm --prefix app run android:package
+```
+
+Saida: `app\android\app\build\outputs\apk\debug\app-debug.apk`.
+
+O comando `android:package` copia o APK e seu SHA256 para `app\public\downloads`, permitindo baixar pelo endereco `/downloads/alpha-tec-tecnicos-debug.apk` depois do deploy Vercel. O empacotamento Android exclui a pasta de downloads e arquivos `.apk` dos assets, evitando embutir o download dentro do proprio APK em recompilacoes.
+
+Esse e um **APK de teste, assinado com chave debug**, nao uma release pronta para a Play Store. Transfira ao Android e autorize a instalacao dessa origem. Ao registrar entrada/saida, permita localizacao precisa e confirme que o GPS esta ligado. Para distribuicao definitiva e necessario configurar uma chave release privada e protegida; arquivos de chave sao ignorados pelo Git.
+
+Os testes `mobile.test.ts` e `mobileServer.test.ts` verificam tempo, GPS, compatibilidade de backups, revisao, RLS e RPCs com PostgreSQL isolado via PGlite. `node app\scripts\mobile-smoke.ts` disponibiliza fixtures ficticias em `http://127.0.0.1:5180`; nao aponta para o banco de producao. A validacao de GPS no navegador usa localizacao simulada; o teste em um aparelho Android real deve validar a permissao, camera e abertura dos aplicativos instalados.
 
 ## Estrutura
 
