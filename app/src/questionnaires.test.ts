@@ -10,7 +10,7 @@ import { questionnaireRows } from "./reporting";
 
 function template(): QuestionnaireTemplate {
   return {
-    id: "template", title: "Inspeção", revision: 1, archived: false,
+    id: "template", title: "Inspeção", revision: 1, archived: false, requiredForCheckout: true,
     header: "Verifique o equipamento", footer: "Fim da inspeção",
     display: questionnaireDisplaySchema.parse({ equipment: true, columns: 2 }),
     questions: [
@@ -53,6 +53,7 @@ describe("catálogo e snapshots de questionários", () => {
     expect(first.id).not.toBe(second.id);
     expect(first.templateId).toBe(model.id);
     expect(first.templateRevision).toBe(1);
+    expect(first.requiredForCheckout).toBe(true);
     expect(first.questions[1].answer).toEqual([]);
     expect(first.questions[2].signature).toBeNull();
     first.questions[1].options.push("Extra");
@@ -128,6 +129,33 @@ describe("catálogo e snapshots de questionários", () => {
     const { data, order } = fixture();
     expect(() => changeOrderStatus(data, order.id, "Finalizada")).toThrow("pendencias");
     expect(() => appendActivity(data, order.id, { id: "out", kind: "Check-out", at: signature.at, technician: order.technician, reason: "", justification: "", origin: "Web local" })).toThrow("pendencias");
+  });
+  it("preserva o bloqueio dos modelos antigos e copia a opção sem alterar tarefas existentes", () => {
+    const { requiredForCheckout: _requirement, ...legacy } = template();
+    const data = validateDatabase({ ...demoDatabase(), questionnaires: [legacy] });
+    expect(data.questionnaires[0].requiredForCheckout).toBe(true);
+    const { data: configured, order } = fixture();
+    const edited = saveQuestionnaire(configured, { ...template(), requiredForCheckout: false });
+    expect(getOrderDetails(edited.orders[0]).checklists[0].requiredForCheckout).toBe(true);
+    expect(instantiateQuestionnaire(edited.questionnaires[0]).requiredForCheckout).toBe(false);
+    delete order.details.checklists[0].requiredForCheckout;
+    expect(orderPending(order)).toHaveLength(5);
+  });
+  it("questionário opcional não bloqueia finalização, mas pendências manuais e outros modelos continuam obrigatórios", () => {
+    const { data, order } = fixture();
+    order.details.checklists[0].requiredForCheckout = false;
+    expect(orderPending(order)).toEqual([]);
+    expect(changeOrderStatus(data, order.id, "Finalizada").orders[0].status).toBe("Finalizada");
+    const started = appendActivity(data, order.id, { id: "in", kind: "Check-in", at: "2026-10-10T11:00:00.000Z", technician: order.technician, reason: "", justification: "", origin: "Web local" });
+    expect(appendActivity(started, order.id, { id: "out", kind: "Check-out", at: signature.at, technician: order.technician, reason: "", justification: "", origin: "Web local" }).orders[0].status).toBe("Finalizada");
+    order.details.pending.push({ id: "manual", title: "Conferir", resolved: false });
+    expect(orderPending(order)).toHaveLength(1);
+    expect(() => changeOrderStatus(data, order.id, "Finalizada")).toThrow("pendencias");
+    order.details.checklists.push(instantiateQuestionnaire(template()));
+    expect(orderPending(order)).toHaveLength(6);
+    expect(() => appendActivity(data, order.id, { id: "out", kind: "Check-out", at: signature.at, technician: order.technician, reason: "", justification: "", origin: "Web local" })).toThrow("pendencias");
+    const replicated = replicateOrder(data, order.id, "2026-10-20", "09:00");
+    expect(getOrderDetails(replicated.orders.at(-1)!).checklists[0].requiredForCheckout).toBe(false);
   });
   it("replica estrutura sem copiar respostas, fotos ou assinaturas", () => {
     const { data, order } = fixture();

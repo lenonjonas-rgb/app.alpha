@@ -89,6 +89,7 @@ const checklistSchema = z.object({
   questions: z.array(questionSchema).min(1),
   templateId: z.string().optional(),
   templateRevision: z.number().int().positive().optional(),
+  requiredForCheckout: z.boolean().optional(),
   header: z.string().max(10000).optional(),
   footer: z.string().max(10000).optional(),
   display: questionnaireDisplaySchema.optional(),
@@ -249,6 +250,7 @@ export function instantiateQuestionnaire(template: QuestionnaireTemplate, equipm
   return {
     id: makeId(), title: parsed.title, equipmentId,
     templateId: parsed.id, templateRevision: parsed.revision,
+    requiredForCheckout: parsed.requiredForCheckout,
     header: parsed.header, footer: parsed.footer, display: { ...parsed.display },
     questions: parsed.questions.map((question) => ({
       ...question, options: [...question.options],
@@ -289,7 +291,7 @@ export const orderPending = (order: Order) => {
         title: item.title,
         source: "Registro manual",
       })),
-    ...details.checklists.flatMap((checklist) =>
+    ...details.checklists.filter((checklist) => checklist.requiredForCheckout !== false).flatMap((checklist) =>
       checklist.questions
         .filter(
           (question) =>

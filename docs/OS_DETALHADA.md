@@ -64,7 +64,8 @@ O resumo da tarefa possui abas Tarefa, Monitoramento, Equipamentos, Orcamentos e
 - Replica copia orientacoes, itens e estrutura de questionarios, mas limpa relato, respostas, fotos, assinatura, atividades e pendencias manuais.
 - Atualizacao em 10/10/2026: catalogo proprio compartilhado/versionado, padroes por tipo de tarefa e copias independentes dos modelos nas OS. Alteracoes no catalogo nao modificam respostas antigas.
 - Perguntas novas de assinatura possuem desenho e nome independentes. Assinaturas legadas preservam a compatibilidade com a assinatura geral. Impressao e relatorios resolvem fotos/assinaturas por pergunta.
-- CPF/CNPJ, data, hora, numero, check e opcoes recebem validacao de formato/digitos e referencias; isso nao certifica identidade ou validade juridica. Perguntas obrigatorias bloqueiam check-out; novas tarefas com configuracao de questionario bloqueiam finalizacao manual com pendencias, preservando a regra administrativa legada.
+- CPF/CNPJ, data, hora, numero, check e opcoes recebem validacao de formato/digitos e referencias; isso nao certifica identidade ou validade juridica. Perguntas obrigatorias bloqueiam check-out somente quando o modelo associado exige preenchimento para check-out. A opcao e definida no editor e copiada para a tarefa, sem alterar associacoes anteriores. Pendencias manuais e a exigencia de associacao por tipo permanecem obrigatorias. Novas tarefas com configuracao de questionario bloqueiam finalizacao manual com pendencias, preservando a regra administrativa legada.
+- No login do tecnico, a aba Relatorio mostra apenas os questionarios associados; sem questionario, apresenta relato, quilometragem, anexos e assinatura do relatorio padrao. Dados padrao anteriores permanecem salvos quando ocultos.
 - Envio real, GPS, notificacoes push, calculo de rotas/km, PDF de servidor e cobranca dependem de backend/provedores e nao foram implementados como controles falsos.
 
 ## Validacao desta entrega

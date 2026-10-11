@@ -330,6 +330,7 @@ function Task({ order, snapshot, busy, mutate, onDraftChange, onWorkingChange }:
         <section className="tech-panel"><h2>Valores e orçamentos</h2><p>Valor da OS: {currency(orderValues(original).total)}</p>{snapshot.payload.quotes.filter((quote) => quote.orderId === order.id).map((quote) => <p key={quote.id}>{quote.code} · {quote.status}<br />{quote.notes}</p>)}</section>
       </>}
       {tab === "report" && <fieldset disabled={blocked} className="tech-fields">
+        {draft.checklists.length === 0 && <>
         <section className="tech-panel"><h2><FileText />Relato do atendimento</h2><textarea maxLength={10000} rows={6} value={draft.report} onChange={(event) => setDraft({ ...draft, report: event.target.value })} placeholder="Descreva o atendimento realizado" />
           <label>Quilometragem (km)<input type="number" min="0" max="100000" step="0.1" value={draft.distanceKm} onChange={(event) => setDraft({ ...draft, distanceKm: Number(event.target.value) })} /></label>
         </section>
@@ -343,7 +344,9 @@ function Task({ order, snapshot, busy, mutate, onDraftChange, onWorkingChange }:
             finally { setSharingFile(false); onWorkingChange(false); }
           }}>Compartilhar: {file.name}</button> : <a href={file.data} download={file.name}>{file.name}</a>}<button className="tech-icon" aria-label={`Remover ${file.name}`} onClick={() => removeAttachment(file.id)}><X /></button></div>)}
         </section>
+        </>}
         {draft.checklists.map((list) => <section key={list.id} className="tech-panel"><h2>{list.title}</h2>
+          <p>{list.requiredForCheckout === false ? "Preenchimento opcional para check-out." : "Responda às perguntas obrigatórias para liberar o check-out."}</p>
           {list.header && <p className="tech-preserve">{list.header}</p>}
           {list.equipmentId && <p>Equipamento: {snapshot.payload.equipment.find((item) => item.id === list.equipmentId)?.name ?? list.equipmentId} · {snapshot.payload.equipment.find((item) => item.id === list.equipmentId)?.serial}</p>}
           {list.questions.map((question) => {
@@ -368,11 +371,11 @@ function Task({ order, snapshot, busy, mutate, onDraftChange, onWorkingChange }:
           question.kind === "Area de texto" ? <textarea id={`question-${list.id}-${question.id}`} rows={4} maxLength={10000} value={String(question.answer)} onChange={(event) => answer(list.id, question.id, event.target.value)} /> :
           <input id={`question-${list.id}-${question.id}`} type={question.kind === "Data" ? "date" : question.kind === "Hora" ? "time" : question.kind === "Numero" || question.kind === "Monetaria" ? "number" : "text"} step="any" maxLength={10000} value={String(question.answer)} onChange={(event) => answer(list.id, question.id, event.target.value)} />}
         </div>; })}{list.footer && <p className="tech-preserve">{list.footer}</p>}</section>)}
-        <section className="tech-panel"><h2>Assinatura do cliente</h2>{draft.signature && <><img className="tech-signature-preview" src={draft.signature.image} alt={`Assinatura de ${draft.signature.signer}`} /><p>{draft.signature.signer}</p></>}
+        {draft.checklists.length === 0 && <section className="tech-panel"><h2>Assinatura do cliente</h2>{draft.signature && <><img className="tech-signature-preview" src={draft.signature.image} alt={`Assinatura de ${draft.signature.signer}`} /><p>{draft.signature.signer}</p></>}
           <button onClick={() => setSigning("legacy")}>{draft.signature ? "Substituir assinatura" : "Coletar assinatura"}</button>
           {draft.signature && <button onClick={() => setDraft({ ...draft, signature: null })}>Remover assinatura da OS</button>}
           <small>Assinatura geral da OS, compartilhada apenas por perguntas legadas. Não substitui as assinaturas próprias das perguntas novas. Envio de link/e-mail ainda não está disponível.</small>
-        </section>
+        </section>}
       </fieldset>}
       {tab === "pending" && <section className="tech-panel"><h2>Pendências do atendimento</h2>{pending.length === 0 && <p>Tudo preenchido.</p>}{pending.map((item) => <p key={item.id}>{item.title} · {item.source}</p>)}
         {draft.pending.map((item) => <label className="tech-check" key={item.id}><input disabled={blocked} type="checkbox" checked={item.resolved} onChange={(event) => setDraft({ ...draft, pending: draft.pending.map((record) => record.id === item.id ? { ...record, resolved: event.target.checked } : record) })} />{item.title}</label>)}

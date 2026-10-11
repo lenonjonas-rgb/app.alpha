@@ -992,6 +992,7 @@ export function OrderWorkspace({
                     )}
                   </div>
                   {checklist.templateRevision && <small>Modelo v{checklist.templateRevision} · Cópia exclusiva desta tarefa</small>}
+                  <p>{checklist.requiredForCheckout === false ? "Preenchimento opcional para check-out." : "Perguntas obrigatórias bloqueiam o check-out enquanto não respondidas."}</p>
                   {checklist.header && <p className="questionnaire-text">{checklist.header}</p>}
                   {(!checklist.display || checklist.display.equipment) && <label className="field questionnaire-equipment">
                     Equipamento

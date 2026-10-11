@@ -39,6 +39,7 @@ beforeAll(async () => {
     "20261008010000_tenant_auth_and_company_data.sql", "20261009010000_android_technicians.sql",
     "20261009020000_technician_link_validation.sql", "20261009030000_user_levels.sql",
     "20261010010000_questionnaires.sql",
+    "20261011010000_questionnaire_checkout_requirement.sql",
   ]) await db.exec(await readFile(new URL(`../../supabase/migrations/${file}`, import.meta.url), "utf8"));
   await db.query("insert into auth.users values ($1,'master@example.test'),($2,'admin@example.test'),($3,'tech@example.test'),($4,'foreign@example.test')", [owner, admin, tech, foreign]);
   await db.query("insert into public.companies(id,name,created_by) values ($1,'Alpha Tec',$3),($2,'Outra',$4)", [company, otherCompany, owner, foreign]);

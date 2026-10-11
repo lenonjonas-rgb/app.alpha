@@ -29,6 +29,7 @@ export const questionnaireTemplateSchema = z.object({
   title: text,
   revision: z.number().int().positive(),
   archived: z.boolean().default(false),
+  requiredForCheckout: z.boolean().default(true),
   header: z.string().max(10000).default(""),
   footer: z.string().max(10000).default(""),
   display: questionnaireDisplaySchema,

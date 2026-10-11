@@ -40,7 +40,7 @@ beforeAll(async () => {
     grant usage on schema auth to anon,authenticated;
     grant execute on function auth.uid() to anon,authenticated;
   `);
-  for (const file of ["20261008010000_tenant_auth_and_company_data.sql", "20261009010000_android_technicians.sql", "20261009020000_technician_link_validation.sql", "20261010010000_questionnaires.sql"]) {
+  for (const file of ["20261008010000_tenant_auth_and_company_data.sql", "20261009010000_android_technicians.sql", "20261009020000_technician_link_validation.sql", "20261010010000_questionnaires.sql", "20261011010000_questionnaire_checkout_requirement.sql"]) {
     await db.exec(await readFile(new URL(`../../supabase/migrations/${file}`, import.meta.url), "utf8"));
   }
   await db.query("insert into auth.users values ($1,'owner@example.test'),($2,'tech@example.test'),($3,'other@example.test')", [owner, tech, other]);
@@ -156,6 +156,7 @@ describe("RPC Android e isolamento de dados", () => {
         (value: typeof report) => { value.checklists[0].title = "Fraude"; },
         (value: typeof report) => { value.checklists[0].templateId = "outro"; },
         (value: typeof report) => { value.checklists[0].templateRevision = 99; },
+        (value: typeof report) => { value.checklists[0].requiredForCheckout = false; },
         (value: typeof report) => { value.checklists[0].header = ""; },
         (value: typeof report) => { delete value.checklists[0].footer; },
         (value: typeof report) => { value.checklists[0].display!.columns = 4; },
@@ -182,6 +183,49 @@ describe("RPC Android e isolamento de dados", () => {
       badSignature.checklists[0].questions[0].signature = null;
       await expect(mutate("report", badSignature, current.revision)).rejects.toThrow("outro tipo");
       expect((await snapshot()).revision).toBe(current.revision);
+    });
+
+    it("permite check-out com questionário opcional vazio sem ignorar pendências manuais", async () => {
+      const report = await questionnaireFixture([{ ...structuredClone(list), requiredForCheckout: false }]);
+      let current = await snapshot();
+      expect(getOrderDetails(current.payload.orders[0]).checklists[0].requiredForCheckout).toBe(false);
+      await mutate("report", report, current.revision);
+      current = await snapshot();
+      const altered = structuredClone(report);
+      altered.checklists[0].requiredForCheckout = true;
+      await expect(mutate("report", altered, current.revision)).rejects.toThrow("alterado");
+      delete altered.checklists[0].requiredForCheckout;
+      await expect(mutate("report", altered, current.revision)).rejects.toThrow("alterado");
+      await identity(owner);
+      const raw = await db.query<{ payload: unknown }>("select payload from public.company_data where company_id=$1", [company]);
+      const full = validateDatabase(raw.rows[0].payload);
+      full.orders[0].details!.pending = [{ id: "manual", title: "Conferir funcionamento", resolved: false }];
+      await db.query("select public.save_company_data($1,$2)", [JSON.stringify(full), current.revision]);
+      await identity(tech);
+      current = await snapshot();
+      await expect(mutate("Check-out", { location: gps }, current.revision)).rejects.toThrow("pendências");
+      report.pending = [{ id: "manual", title: "Conferir funcionamento", resolved: true }];
+      await mutate("report", report, current.revision);
+      current = await snapshot();
+      await mutate("Check-out", { location: gps }, current.revision);
+      expect((await snapshot()).payload.orders[0].status).toBe("Finalizada");
+    });
+
+    it("em tarefas com vários questionários, só exige os configurados para check-out", async () => {
+      const optional = { ...structuredClone(list), id: "optional", requiredForCheckout: false };
+      const required = { ...structuredClone(list), id: "required", requiredForCheckout: true };
+      const report = await questionnaireFixture([optional, required]);
+      let current = await snapshot();
+      await expect(mutate("Check-out", { location: gps }, current.revision)).rejects.toThrow("obrigatórios");
+      await expect(mutate("Check-out", { location: gps, checklists: [optional] }, current.revision)).rejects.toThrow("obrigatórios");
+      report.checklists[1].questions[0].signature = signature;
+      report.checklists[1].questions[1].signature = signature;
+      await mutate("report", report, current.revision);
+      current = await snapshot();
+      await mutate("Check-out", { location: gps }, current.revision);
+      const finished = (await snapshot()).payload.orders[0];
+      expect(finished.status).toBe("Finalizada");
+      expect(getOrderDetails(finished).checklists[0].questions[0].signature).toBeNull();
     });
 
     it("valida tipos e conteúdo de respostas incluindo área de texto, número, data, hora, check, CPF/CNPJ e foto", async () => {
@@ -237,7 +281,7 @@ describe("RPC Android e isolamento de dados", () => {
       const raw = await db.query<{ payload: unknown }>("select payload from public.company_data where company_id=$1", [company]);
       const full = validateDatabase(raw.rows[0].payload);
       full.questionnaires = [{
-        id: "secret-catalog", title: "Catálogo privado", revision: 1, archived: false,
+        id: "secret-catalog", title: "Catálogo privado", revision: 1, archived: false, requiredForCheckout: true,
         header: "", footer: "", display: list.display,
         questions: [{ id: "q", label: "Privada", kind: "Texto", required: false, options: [] }],
       }];

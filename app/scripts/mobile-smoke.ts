@@ -15,7 +15,7 @@ try {
 } finally {
   await vite.close();
 }
-const { demoDatabase, getOrderDetails, validateDatabase } = domain;
+const { demoDatabase, getOrderDetails, localDay, validateDatabase } = domain;
 
 const db = new PGlite();
 const userId = "00000000-0000-4000-8000-000000000002";
@@ -34,6 +34,7 @@ await db.exec(await readFile(new URL("../../supabase/migrations/20261008010000_t
 await db.exec(migration);
 await db.exec(await readFile(new URL("../../supabase/migrations/20261009020000_technician_link_validation.sql", import.meta.url), "utf8"));
 await db.exec(await readFile(new URL("../../supabase/migrations/20261010010000_questionnaires.sql", import.meta.url), "utf8"));
+await db.exec(await readFile(new URL("../../supabase/migrations/20261011010000_questionnaire_checkout_requirement.sql", import.meta.url), "utf8"));
 await db.query("insert into auth.users values ($1,'admin@example.test'),($2,'tecnico@example.test')", [ownerId, userId]);
 await db.query("insert into public.companies(id,name,created_by) values ($1,'Alpha Tec Teste',$2)", [companyId, ownerId]);
 await db.query("insert into public.company_memberships(user_id,company_id,role,display_name) values ($1,$3,'owner','Admin'),($2,$3,'technician','Técnico Teste')", [ownerId, userId, companyId]);
@@ -55,6 +56,7 @@ payload.orders[0].details = {
   checklists: [{
     id: "questions", title: "Verificação", equipmentId,
     templateId: "mobile-verification-template", templateRevision: 2,
+    requiredForCheckout: true,
     header: "Registre o resultado, as assinaturas e a foto do equipamento.",
     footer: "Verificação concluída após resolver todas as pendências.",
     display: { showOnOrder: true, columns: 1, inlineAnswers: false, showUnanswered: true, equipment: true },
@@ -64,6 +66,22 @@ payload.orders[0].details = {
     { id: "customer-signature", label: "Assinatura do responsável", kind: "Assinatura", required: true, options: [], answer: "", signature: null, description: "O responsável deve assinar esta pergunta separadamente." },
     { id: "equipment-photo", label: "Foto do equipamento com GPS", kind: "Foto", required: true, options: [], answer: "", photoMetadata: true, description: "Capture uma foto com coordenadas e data/hora carimbadas na imagem." },
   ] }],
+};
+payload.orders[1] = {
+  ...payload.orders[1], technicianUserId: userId, status: "Aberta", date: localDay(),
+  title: "Questionário opcional para check-out",
+  details: {
+    ...getOrderDetails(payload.orders[1]), activities: [], pending: [], questionnaireRequired: false,
+    checklists: [{
+      ...structuredClone(payload.orders[0].details.checklists[0]),
+      id: "optional-questions", equipmentId: "", requiredForCheckout: false,
+    }],
+  },
+};
+payload.orders[2] = {
+  ...payload.orders[2], technicianUserId: userId, status: "Aberta", date: localDay(),
+  title: "Relatório padrão sem questionário",
+  details: { ...getOrderDetails(payload.orders[2]), activities: [], pending: [], checklists: [], questionnaireRequired: false },
 };
 await db.query("insert into public.company_data(company_id,payload) values ($1,$2)", [companyId, JSON.stringify(validateDatabase(payload))]);
 await db.query("select set_config('request.jwt.claim.sub',$1,false)", [userId]);
