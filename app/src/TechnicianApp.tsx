@@ -3,16 +3,17 @@ import type { Session } from "@supabase/supabase-js";
 import SignaturePad from "signature_pad";
 import { Capacitor } from "@capacitor/core";
 import { App as NativeApp } from "@capacitor/app";
-import { ArrowLeft, CalendarDays, Check, Clock3, FileText, Home, MapPin, Navigation, RefreshCw, LogOut, Camera, Pause, Play, X } from "lucide-react";
+import { ArrowLeft, CalendarDays, Check, ChevronLeft, ChevronRight, Clock3, FileText, Home, MapPin, Navigation, RefreshCw, LogOut, Camera, Pause, Play, X } from "lucide-react";
 import { supabase } from "./supabase";
-import { activityTotals, allowedActivities, currency, displayDate, getOrderDetails, localDay, orderDetailsSchema, orderPending, orderValues, validateOrderDetails } from "./domain";
+import { activityTotals, allowedActivities, currency, displayDate, getOrderDetails, localDay, orderDetailsSchema, orderPending, orderValues, shiftDay, validateOrderDetails } from "./domain";
 import type { Activity, Order, OrderDetails } from "./domain";
 import { errorMessage } from "./useDatabase";
-import { captureLocation, durationText, mobileSnapshotSchema, openRoute, prepareAttachment, shareAttachment } from "./mobile";
-import type { MobileSnapshot } from "./mobile";
+import { captureLocation, durationText, mobileSnapshotSchema, openRoute, prepareAttachment, shareAttachment, technicianAgendaOrders } from "./mobile";
+import type { MobileSnapshot, TechnicianAgendaFilter } from "./mobile";
 import "./TechnicianApp.css";
 import { loginEmail } from "./userAccess";
 import { PasswordSettings } from "./PasswordSettings";
+import { prepareQuestionnairePhoto } from "./questionnairePhoto";
 
 export default function TechnicianApp() {
   const [session, setSession] = useState<Session | null>(null);
@@ -20,6 +21,9 @@ export default function TechnicianApp() {
   const [snapshot, setSnapshot] = useState<MobileSnapshot | null>(null);
   const [selected, setSelected] = useState("");
   const [page, setPage] = useState<"home" | "agenda">("home");
+  const [agendaFilter, setAgendaFilter] = useState<TechnicianAgendaFilter>("day");
+  const [agendaDate, setAgendaDate] = useState("");
+  const [today, setToday] = useState(localDay);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [syncedAt, setSyncedAt] = useState("");
@@ -65,6 +69,10 @@ export default function TechnicianApp() {
     return () => { alive = false; data.subscription.unsubscribe(); };
   }, []);
   const userId = session?.user.id;
+  useEffect(() => {
+    const timer = setInterval(() => setToday(localDay()), 60000);
+    return () => clearInterval(timer);
+  }, []);
   useEffect(() => { if (userId) void Promise.resolve().then(sync); }, [userId, sync]);
   useEffect(() => {
     if (!Capacitor.isNativePlatform()) return;
@@ -123,14 +131,21 @@ export default function TechnicianApp() {
         <label>Senha<input name="password" type="password" autoComplete="current-password" required /></label>
         <button disabled={busy || !supabase}>{busy ? "Entrando…" : "Entrar"}</button>
       </form>
-      <small>Internet necessária. A localização só é solicitada na entrada e na saída.</small>
+      <small>Internet necessária. A localização é solicitada na entrada, saída e fotos que exigem carimbo GPS.</small>
     </main>
   );
   const orders = snapshot?.payload.orders.filter((order) => !getOrderDetails(order).archived) ?? [];
   const order = orders.find((item) => item.id === selected);
-  const today = localDay();
-  const todayOrders = orders.filter((item) => item.date === today);
-  const current = orders.filter((item) => item.status === "Em atendimento" || item.status === "Pausada");
+  const day = agendaDate || today;
+  const todayOrders = technicianAgendaOrders(orders, "day", today, today);
+  const overdue = technicianAgendaOrders(orders, "overdue", today, today);
+  const current = technicianAgendaOrders(orders, "running", today, today);
+  const visibleOrders = page === "home" ? todayOrders : technicianAgendaOrders(orders, agendaFilter, day, today);
+  function openAgenda(filter: TechnicianAgendaFilter = "day") {
+    setAgendaFilter(filter);
+    setAgendaDate("");
+    setPage("agenda");
+  }
   return (
     <main className="tech-app">
       <header className="tech-header">
@@ -158,20 +173,28 @@ export default function TechnicianApp() {
           <h1>Olá, {snapshot.name.split(" ")[0]}!</h1>
           <p className="tech-muted">Bom trabalho! Sincronizado às {syncedAt}</p>
           <div className="tech-summary">
-            <button onClick={() => setPage("agenda")}><CalendarDays /><strong>{todayOrders.length}</strong><span>Tarefas hoje</span></button>
-            <button onClick={() => setPage("agenda")}><Clock3 /><strong>{orders.filter((item) => item.date < today && item.status !== "Finalizada").length}</strong><span>Atrasadas</span></button>
-            <button onClick={() => setPage("agenda")}><Play /><strong>{current.length}</strong><span>Em execução</span></button>
-            <button onClick={() => setPage("agenda")}><Check /><strong>{todayOrders.filter((item) => item.status === "Finalizada").length}</strong><span>Concluídas hoje</span></button>
+            <button aria-pressed={page === "agenda" && agendaFilter === "day" && day === today} onClick={() => openAgenda()}><CalendarDays /><strong>{todayOrders.length}</strong><span>Tarefas hoje</span></button>
+            <button aria-pressed={page === "agenda" && agendaFilter === "overdue"} onClick={() => openAgenda("overdue")}><Clock3 /><strong>{overdue.length}</strong><span>Atrasadas</span></button>
+            <button aria-pressed={page === "agenda" && agendaFilter === "running"} onClick={() => openAgenda("running")}><Play /><strong>{current.length}</strong><span>Em execução</span></button>
           </div>
-          <h2>{page === "home" ? "Sua agenda de hoje" : "Todas as suas tarefas"}</h2>
-          <div className="tech-list">{(page === "home" ? todayOrders : orders).toSorted((a, b) => `${a.date}${a.time}`.localeCompare(`${b.date}${b.time}`)).map((item) => (
+          {page === "agenda" && agendaFilter === "day" && <nav className="tech-day-navigation" aria-label="Navegação por dia">
+            <button className="tech-icon" aria-label="Dia anterior" onClick={() => setAgendaDate(shiftDay(day, -1))}><ChevronLeft /></button>
+            <strong aria-live="polite">{displayDate(day)}</strong>
+            <button className="tech-icon" aria-label="Próximo dia" disabled={day >= today} onClick={() => {
+              const next = shiftDay(day, 1);
+              setAgendaDate(next === today ? "" : next);
+            }}><ChevronRight /></button>
+            <button disabled={day === today} onClick={() => setAgendaDate("")}>Hoje</button>
+          </nav>}
+          <h2>{page === "home" ? "Sua agenda de hoje" : agendaFilter === "overdue" ? "Tarefas atrasadas" : agendaFilter === "running" ? "Em execução e pausadas" : day === today ? "Sua agenda de hoje" : `Agenda de ${displayDate(day)}`}</h2>
+          <div className="tech-list">{visibleOrders.map((item) => (
             <button className="tech-task-card" key={item.id} onClick={() => setSelected(item.id)}>
               <span className="tech-status">{item.status}</span><strong>{snapshot.payload.clients.find((client) => client.id === item.clientId)?.name}</strong>
               <span>{item.code} · {item.title}</span><small>{displayDate(item.date)} às {item.time}</small>
             </button>
           ))}</div>
-          {(page === "home" ? todayOrders : orders).length === 0 && <p>Nenhuma tarefa neste período.</p>}
-          <nav className="tech-bottom"><button onClick={() => setPage("home")} className={page === "home" ? "active" : ""}><Home />Início</button><button onClick={() => setPage("agenda")} className={page === "agenda" ? "active" : ""}><CalendarDays />Agenda</button></nav>
+          {visibleOrders.length === 0 && <p>{page === "agenda" && agendaFilter === "overdue" ? "Nenhuma tarefa atrasada." : page === "agenda" && agendaFilter === "running" ? "Nenhum atendimento em execução ou pausado." : "Nenhuma tarefa neste dia."}</p>}
+          <nav className="tech-bottom"><button onClick={() => setPage("home")} className={page === "home" ? "active" : ""}><Home />Início</button><button onClick={() => openAgenda()} className={page === "agenda" ? "active" : ""}><CalendarDays />Agenda</button></nav>
         </>
       )}
     </main>
@@ -194,7 +217,7 @@ function Task({ order, snapshot, busy, mutate, onDraftChange, onWorkingChange }:
   const [now, setNow] = useState(() => Date.now());
   const [locating, setLocating] = useState(false);
   const [routes, setRoutes] = useState(false);
-  const [signing, setSigning] = useState(false);
+  const [signing, setSigning] = useState<{ checklistId: string; questionId: string } | "legacy" | null>(null);
   const [preparingFile, setPreparingFile] = useState(false);
   const [sharingFile, setSharingFile] = useState(false);
   const dirty = JSON.stringify(draft) !== JSON.stringify(original);
@@ -243,16 +266,19 @@ function Task({ order, snapshot, busy, mutate, onDraftChange, onWorkingChange }:
       setError(`Não foi possível confirmar o registro: ${errorMessage(cause)}${kind === "Check-in" || kind === "Check-out" ? " Verifique a permissão de localização e a conexão; sincronize antes de tentar novamente." : ""}`);
     } finally { setLocating(false); onWorkingChange(false); }
   }
-  async function files(input: HTMLInputElement) {
+  async function files(input: HTMLInputElement, target?: { checklistId: string; questionId: string; photoMetadata?: boolean }) {
     setError("");
     setPreparingFile(true);
     onWorkingChange(true);
     try {
       const file = input.files?.[0];
       if (!file) return;
-      const attachment = await prepareAttachment(file);
+      const attachment = target ? await prepareQuestionnairePhoto(file, Boolean(target.photoMetadata)) : await prepareAttachment(file);
       const details = orderDetailsSchema.parse({
         ...draft, attachments: [...draft.attachments, attachment],
+        ...(target ? { checklists: draft.checklists.map((list) => list.id === target.checklistId ? {
+          ...list, questions: list.questions.map((question) => question.id === target.questionId ? { ...question, answer: attachment.id } : question),
+        } : list) } : {}),
       });
       setDraft(details);
     } catch (cause) { setError(errorMessage(cause)); }
@@ -264,6 +290,21 @@ function Task({ order, snapshot, busy, mutate, onDraftChange, onWorkingChange }:
       ...details, checklists: details.checklists.map((list) => list.id === checklistId ? {
         ...list, questions: list.questions.map((question) => question.id === questionId ? { ...question, answer: value } : question),
       } : list),
+    }));
+  }
+  function questionSignature(checklistId: string, questionId: string, signature: OrderDetails["signature"]) {
+    setDraft((details) => ({
+      ...details, checklists: details.checklists.map((list) => list.id === checklistId ? {
+        ...list, questions: list.questions.map((question) => question.id === questionId ? { ...question, signature } : question),
+      } : list),
+    }));
+  }
+  function removeAttachment(id: string) {
+    setDraft((details) => ({
+      ...details, attachments: details.attachments.filter((file) => file.id !== id),
+      checklists: details.checklists.map((list) => ({
+        ...list, questions: list.questions.map((question) => question.kind === "Foto" && question.answer === id ? { ...question, answer: "" } : question),
+      })),
     }));
   }
   return (
@@ -300,18 +341,37 @@ function Task({ order, snapshot, busy, mutate, onDraftChange, onWorkingChange }:
             try { await shareAttachment(file); }
             catch (cause) { setError(errorMessage(cause)); }
             finally { setSharingFile(false); onWorkingChange(false); }
-          }}>Compartilhar: {file.name}</button> : <a href={file.data} download={file.name}>{file.name}</a>}<button className="tech-icon" aria-label={`Remover ${file.name}`} onClick={() => setDraft({ ...draft, attachments: draft.attachments.filter((item) => item.id !== file.id) })}><X /></button></div>)}
+          }}>Compartilhar: {file.name}</button> : <a href={file.data} download={file.name}>{file.name}</a>}<button className="tech-icon" aria-label={`Remover ${file.name}`} onClick={() => removeAttachment(file.id)}><X /></button></div>)}
         </section>
-        {draft.checklists.map((list) => <section key={list.id} className="tech-panel"><h2>{list.title}</h2>{list.questions.map((question) => <label key={question.id}>{question.label}{question.required ? " *" : ""}
-          {question.kind === "Assinatura" ? <button onClick={() => setSigning(true)}>{draft.signature ? "Assinatura coletada" : "Coletar assinatura"}</button> :
-          question.kind === "Foto" ? <select value={String(question.answer)} onChange={(event) => answer(list.id, question.id, event.target.value)}><option value="">Selecione uma foto adicionada</option>{draft.attachments.filter((file) => file.mime.startsWith("image/")).map((file) => <option key={file.id} value={file.id}>{file.name}</option>)}</select> :
+        {draft.checklists.map((list) => <section key={list.id} className="tech-panel"><h2>{list.title}</h2>
+          {list.header && <p className="tech-preserve">{list.header}</p>}
+          {list.equipmentId && <p>Equipamento: {snapshot.payload.equipment.find((item) => item.id === list.equipmentId)?.name ?? list.equipmentId} · {snapshot.payload.equipment.find((item) => item.id === list.equipmentId)?.serial}</p>}
+          {list.questions.map((question) => {
+            const signature = question.signature === undefined ? draft.signature : question.signature;
+            const photo = question.kind === "Foto" ? draft.attachments.find((file) => file.id === question.answer) : undefined;
+            return <div key={question.id} className="tech-question"><label htmlFor={`question-${list.id}-${question.id}`}>{question.label}{question.required ? " *" : ""}</label>
+          {question.description && <p className="tech-preserve tech-question-description">{question.description}</p>}
+          {question.kind === "Assinatura" ? <div>
+            {signature && <><img className="tech-signature-preview" src={signature.image} alt={`Assinatura de ${signature.signer} em ${question.label}`} /><p>{signature.signer}</p></>}
+            {question.signature === undefined && signature && <small>Assinatura compartilhada de um questionário legado. Substituir ou remover afeta somente esta pergunta.</small>}
+            <div className="tech-actions"><button onClick={() => setSigning({ checklistId: list.id, questionId: question.id })}>{signature ? "Substituir assinatura" : "Coletar assinatura"}</button>
+              {signature && <button onClick={() => questionSignature(list.id, question.id, null)}>Remover assinatura</button>}</div>
+          </div> :
+          question.kind === "Foto" ? <div>
+            {question.photoMetadata && <small>Esta foto exige coordenadas GPS e data/hora carimbadas na imagem. Autorize a localização para capturar.</small>}
+            <label className="tech-upload">Capturar foto<input id={`question-${list.id}-${question.id}`} type="file" accept="image/png,image/jpeg,image/webp" capture="environment" onChange={(event) => void files(event.currentTarget, { checklistId: list.id, questionId: question.id, photoMetadata: question.photoMetadata })} /></label>
+            {!question.photoMetadata && <select aria-label={`Foto de ${question.label}`} value={String(question.answer)} onChange={(event) => answer(list.id, question.id, event.target.value)}><option value="">Selecione uma foto adicionada</option>{draft.attachments.filter((file) => file.mime.startsWith("image/")).map((file) => <option key={file.id} value={file.id}>{file.name}</option>)}</select>}
+            {photo && <><img className="tech-question-photo" src={photo.data} alt={question.label} /><button onClick={() => answer(list.id, question.id, "")}>Remover resposta de foto</button></>}
+          </div> :
           question.kind === "Multipla escolha" ? <div className="tech-options">{question.options.map((option) => <label key={option}><input type="checkbox" checked={Array.isArray(question.answer) && question.answer.includes(option)} onChange={(event) => answer(list.id, question.id, event.target.checked ? [...(Array.isArray(question.answer) ? question.answer : []), option] : (Array.isArray(question.answer) ? question.answer : []).filter((item) => item !== option))} />{option}</label>)}</div> :
-          question.kind === "Escolha" || question.kind === "Check" ? <select value={String(question.answer)} onChange={(event) => answer(list.id, question.id, event.target.value)}><option value="">Selecione</option>{(question.kind === "Check" ? ["Sim", "Nao"] : question.options).map((option) => <option key={option}>{option}</option>)}</select> :
-          <input type={question.kind === "Data" ? "date" : question.kind === "Hora" ? "time" : question.kind === "Numero" || question.kind === "Monetaria" ? "number" : "text"} step="any" maxLength={10000} value={String(question.answer)} onChange={(event) => answer(list.id, question.id, event.target.value)} />}
-        </label>)}</section>)}
+          question.kind === "Escolha" || question.kind === "Check" ? <select id={`question-${list.id}-${question.id}`} value={String(question.answer)} onChange={(event) => answer(list.id, question.id, event.target.value)}><option value="">Selecione</option>{(question.kind === "Check" ? ["Sim", "Nao", ...(question.answer === "Não" ? ["Não"] : [])] : question.options).map((option) => <option key={option} value={option}>{option === "Nao" ? "Não" : option}</option>)}</select> :
+          question.kind === "Area de texto" ? <textarea id={`question-${list.id}-${question.id}`} rows={4} maxLength={10000} value={String(question.answer)} onChange={(event) => answer(list.id, question.id, event.target.value)} /> :
+          <input id={`question-${list.id}-${question.id}`} type={question.kind === "Data" ? "date" : question.kind === "Hora" ? "time" : question.kind === "Numero" || question.kind === "Monetaria" ? "number" : "text"} step="any" maxLength={10000} value={String(question.answer)} onChange={(event) => answer(list.id, question.id, event.target.value)} />}
+        </div>; })}{list.footer && <p className="tech-preserve">{list.footer}</p>}</section>)}
         <section className="tech-panel"><h2>Assinatura do cliente</h2>{draft.signature && <><img className="tech-signature-preview" src={draft.signature.image} alt={`Assinatura de ${draft.signature.signer}`} /><p>{draft.signature.signer}</p></>}
-          <button onClick={() => setSigning(true)}>{draft.signature ? "Substituir assinatura" : "Coletar assinatura"}</button>
-          <small>A assinatura é salva na OS. Envio de link/e-mail ao cliente ainda não está disponível.</small>
+          <button onClick={() => setSigning("legacy")}>{draft.signature ? "Substituir assinatura" : "Coletar assinatura"}</button>
+          {draft.signature && <button onClick={() => setDraft({ ...draft, signature: null })}>Remover assinatura da OS</button>}
+          <small>Assinatura geral da OS, compartilhada apenas por perguntas legadas. Não substitui as assinaturas próprias das perguntas novas. Envio de link/e-mail ainda não está disponível.</small>
         </section>
       </fieldset>}
       {tab === "pending" && <section className="tech-panel"><h2>Pendências do atendimento</h2>{pending.length === 0 && <p>Tudo preenchido.</p>}{pending.map((item) => <p key={item.id}>{item.title} · {item.source}</p>)}
@@ -320,16 +380,20 @@ function Task({ order, snapshot, busy, mutate, onDraftChange, onWorkingChange }:
       {dirty && <button disabled={blocked} onClick={() => void save()}><Check />Salvar alterações antes de continuar</button>}
       <section className="tech-panel"><h2>Controle do atendimento</h2>
         {order.status !== "Finalizada" && allowedActivities(original.activities).includes("Pausa") && <label>Motivo da pausa<input disabled={blocked} value={reason} onChange={(event) => setReason(event.target.value)} maxLength={1000} /></label>}
-        <div className="tech-actions">{order.status !== "Finalizada" && allowedActivities(original.activities).filter((kind) => kind !== "Deslocamento").map((kind) => <button key={kind} disabled={blocked || dirty || (kind === "Pausa" && !reason.trim()) || (kind === "Check-out" && pending.length > 0)} onClick={() => void activity(kind)}>{kind === "Pausa" ? <Pause /> : kind === "Check-out" ? <Check /> : <Play />}{locating ? "Registrando…" : kind}</button>)}</div>
-        <small>Entrada e saída exigem GPS e internet. O tempo exibido exclui as pausas.</small>
+        <div className="tech-actions">{order.status !== "Finalizada" && allowedActivities(original.activities).filter((kind) => kind !== "Deslocamento").map((kind) => <button key={kind} disabled={blocked || dirty || (kind === "Pausa" && !reason.trim()) || (kind === "Check-out" && pending.length > 0)} onClick={() => void activity(kind)}>{kind === "Pausa" ? <Pause /> : kind === "Check-out" ? <Check /> : <Play />}{locating ? "Registrando…" : kind === "Check-in" ? "Check-in · Iniciar tarefa" : kind === "Check-out" ? "Check-out · Finalizar tarefa" : kind}</button>)}</div>
+        <small>O check-in inicia a tarefa e o check-out a finaliza. Ambos exigem GPS e internet. O tempo exibido exclui as pausas.</small>
         {original.activities.map((item) => <p key={item.id}><b>{item.kind}</b> · {new Date(item.at).toLocaleString("pt-BR")}<br />{item.reason}{item.location && <small>GPS: {item.location.latitude.toFixed(5)}, {item.location.longitude.toFixed(5)} · precisão {Math.round(item.location.accuracy)} m</small>}</p>)}
       </section>
-      {signing && <Signature onClose={() => setSigning(false)} onApply={(signature) => { setDraft({ ...draft, signature }); setSigning(false); }} />}
+      {signing && <Signature title={signing === "legacy" ? "Assinatura do cliente" : draft.checklists.find((list) => list.id === signing.checklistId)?.questions.find((question) => question.id === signing.questionId)?.label ?? "Assinatura"} onClose={() => setSigning(null)} onApply={(signature) => {
+        if (signing === "legacy") setDraft({ ...draft, signature });
+        else questionSignature(signing.checklistId, signing.questionId, signature);
+        setSigning(null);
+      }} />}
     </article>
   );
 }
 
-function Signature({ onClose, onApply }: { onClose: () => void; onApply: (signature: NonNullable<OrderDetails["signature"]>) => void }) {
+function Signature({ title, onClose, onApply }: { title: string; onClose: () => void; onApply: (signature: NonNullable<OrderDetails["signature"]>) => void }) {
   const canvas = useRef<HTMLCanvasElement>(null);
   const pad = useRef<SignaturePad | null>(null);
   const [error, setError] = useState("");
@@ -342,9 +406,11 @@ function Signature({ onClose, onApply }: { onClose: () => void; onApply: (signat
     pad.current = new SignaturePad(element);
     return () => pad.current?.off();
   }, []);
-  return <div className="tech-dialog" role="dialog" aria-modal="true" aria-label="Assinatura do cliente"><form onSubmit={(event) => {
+  return <div className="tech-dialog" role="dialog" aria-modal="true" aria-label={title}><form onSubmit={(event) => {
     event.preventDefault();
     if (!pad.current || pad.current.isEmpty()) { setError("Desenhe a assinatura."); return; }
-    onApply({ signer: String(new FormData(event.currentTarget).get("signer")).trim(), image: pad.current.toDataURL("image/png"), at: new Date().toISOString() });
-  }}><h2>Assinatura do cliente</h2>{error && <p role="alert">{error}</p>}<label>Nome de quem assina<input name="signer" required maxLength={120} /></label><canvas ref={canvas} /><div className="tech-actions"><button type="button" onClick={() => pad.current?.clear()}>Limpar</button><button type="button" onClick={onClose}>Cancelar</button><button>Aplicar</button></div></form></div>;
+    const signer = String(new FormData(event.currentTarget).get("signer")).trim();
+    if (!signer) { setError("Informe o nome de quem assina."); return; }
+    onApply({ signer, image: pad.current.toDataURL("image/png"), at: new Date().toISOString() });
+  }}><h2>{title}</h2>{error && <p role="alert">{error}</p>}<label>Nome de quem assina<input name="signer" required maxLength={120} /></label><canvas ref={canvas} /><div className="tech-actions"><button type="button" onClick={() => pad.current?.clear()}>Limpar</button><button type="button" onClick={onClose}>Cancelar</button><button>Aplicar</button></div></form></div>;
 }

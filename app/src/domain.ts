@@ -1,5 +1,10 @@
 import { z } from "zod";
 import type { CompanyRegistration } from "./cnpj";
+import { isValidCnpj, normalizeCnpj } from "./cnpj";
+import { isValidCpf } from "./cpf";
+import { orderTypeQuestionnaireSchema, questionnaireDisplaySchema, questionnaireTemplateSchema, questionDefinitionSchema, signatureSchema } from "./questionnaireSchema";
+import type { QuestionnaireTemplate } from "./questionnaireSchema";
+export type { QuestionnaireTemplate, QuestionDefinition } from "./questionnaireSchema";
 
 const id = z.string().min(1);
 const text = z.string().trim().min(1, "Preencha este campo.").max(1000);
@@ -50,10 +55,6 @@ const lineSchema = z.object({
   price: money,
 });
 const eventSchema = z.object({ id, at: z.iso.datetime(), description: text });
-const imageData = z
-  .string()
-  .max(800_000)
-  .regex(/^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/);
 export const attachmentSchema = z
   .object({
     id,
@@ -75,24 +76,8 @@ export const attachmentSchema = z
       /^[A-Za-z0-9+/=]+$/.test(value.data.split(",")[1] ?? ""),
     "Arquivo invalido.",
   );
-const questionSchema = z.object({
-  id,
-  label: text,
-  kind: z.enum([
-    "Texto",
-    "Numero",
-    "Escolha",
-    "Multipla escolha",
-    "Check",
-    "Data",
-    "Hora",
-    "Monetaria",
-    "CPF/CNPJ",
-    "Foto",
-    "Assinatura",
-  ]),
-  required: z.boolean(),
-  options: z.array(text).default([]),
+const questionSchema = questionDefinitionSchema.extend({
+  signature: signatureSchema.nullable().optional(),
   answer: z
     .union([z.string().max(10000), z.array(z.string().max(1000))])
     .default(""),
@@ -102,6 +87,11 @@ const checklistSchema = z.object({
   title: text,
   equipmentId: z.string().default(""),
   questions: z.array(questionSchema).min(1),
+  templateId: z.string().optional(),
+  templateRevision: z.number().int().positive().optional(),
+  header: z.string().max(10000).optional(),
+  footer: z.string().max(10000).optional(),
+  display: questionnaireDisplaySchema.optional(),
 });
 const activitySchema = z.object({
   id,
@@ -131,14 +121,12 @@ export const orderDetailsSchema = z.object({
   equipmentIds: z.array(id).default([]),
   attachments: z.array(attachmentSchema).default([]),
   checklists: z.array(checklistSchema).default([]),
+  questionnaireRequired: z.boolean().optional(),
   pending: z
     .array(z.object({ id, title: text, resolved: z.boolean() }))
     .default([]),
   activities: z.array(activitySchema).default([]),
-  signature: z
-    .object({ signer: text, image: imageData, at: z.iso.datetime() })
-    .nullable()
-    .default(null),
+  signature: signatureSchema.nullable().default(null),
   items: z.array(lineSchema.extend({ discount: money.default(0) })).default([]),
   costs: z.array(z.object({ id, name: text, value: money })).default([]),
   discount: z.number().nonnegative().default(0),
@@ -213,6 +201,8 @@ export const databaseSchema = z.object({
   quotes: z.array(quoteSchema),
   movements: z.array(movementSchema),
   expenses: z.array(expenseSchema).default([]),
+  questionnaires: z.array(questionnaireTemplateSchema).default([]),
+  orderTypeQuestionnaires: z.array(orderTypeQuestionnaireSchema).default([]),
   settings: z.object({
     company: text,
     technician: text,
@@ -251,11 +241,47 @@ export type OrderDetails = z.infer<typeof orderDetailsSchema>;
 export type Activity = z.infer<typeof activitySchema>;
 export type Checklist = z.infer<typeof checklistSchema>;
 export type Attachment = z.infer<typeof attachmentSchema>;
+export function instantiateQuestionnaire(template: QuestionnaireTemplate, equipmentId = ""): Checklist {
+  const parsed = questionnaireTemplateSchema.parse(template);
+  if (parsed.archived) throw new Error("Questionário arquivado não pode ser adicionado.");
+  validateQuestionDefinitions(parsed.questions);
+  if (equipmentId && !parsed.display.equipment) throw new Error("Este questionário não permite resposta por equipamento.");
+  return {
+    id: makeId(), title: parsed.title, equipmentId,
+    templateId: parsed.id, templateRevision: parsed.revision,
+    header: parsed.header, footer: parsed.footer, display: { ...parsed.display },
+    questions: parsed.questions.map((question) => ({
+      ...question, options: [...question.options],
+      answer: question.kind === "Multipla escolha" ? [] : "",
+      ...(question.kind === "Assinatura" ? { signature: null } : {}),
+    })),
+  };
+}
+export function defaultQuestionnaires(data: Database, type: Order["type"]) {
+  const setting = data.orderTypeQuestionnaires.find((item) => item.type === type);
+  const template = data.questionnaires.find((item) => item.id === setting?.questionnaireId && !item.archived);
+  return {
+    questionnaireRequired: setting?.required ?? false,
+    checklists: template ? [instantiateQuestionnaire(template)] : [],
+  };
+}
+export function validateQuestionDefinitions(questions: z.infer<typeof questionDefinitionSchema>[], requireOptions = true) {
+  if (new Set(questions.map((question) => question.id)).size !== questions.length)
+    throw new Error("Identificadores duplicados nas perguntas.");
+  for (const question of questions) {
+    if (requireOptions && ["Escolha", "Multipla escolha"].includes(question.kind) &&
+      (question.options.length < 2 || new Set(question.options).size !== question.options.length))
+      throw new Error("Cadastre opcoes distintas para a pergunta de escolha.");
+  }
+}
 export const getOrderDetails = (order: Order): OrderDetails =>
   orderDetailsSchema.parse(order.details ?? {});
 export const orderPending = (order: Order) => {
   const details = getOrderDetails(order);
   return [
+    ...(details.questionnaireRequired && details.checklists.length === 0
+      ? [{ id: "questionnaire-required", title: "Adicionar questionário obrigatório", source: "Tipo de tarefa" }]
+      : []),
     ...details.pending
       .filter((item) => !item.resolved)
       .map((item) => ({
@@ -269,13 +295,13 @@ export const orderPending = (order: Order) => {
           (question) =>
             question.required &&
             (question.kind === "Assinatura"
-              ? !details.signature
+              ? !(question.signature === undefined ? details.signature : question.signature)
               : Array.isArray(question.answer)
                 ? !question.answer.length
                 : !question.answer.trim()),
         )
         .map((question) => ({
-          id: question.id,
+          id: `${checklist.id}:${question.id}`,
           title: question.label,
           source: checklist.title,
         })),
@@ -363,7 +389,8 @@ export function validateOrderDetails(order: Order, data: Database) {
     if (new Set(collection.map((item) => item.id)).size !== collection.length)
       throw new Error("Identificadores duplicados nos detalhes da OS.");
   }
-  details.checklists.forEach((checklist) =>
+  details.checklists.forEach((checklist) => {
+    validateQuestionDefinitions(checklist.questions, Boolean(checklist.templateId));
     checklist.questions.forEach((question) => {
       const answers = Array.isArray(question.answer)
         ? question.answer
@@ -385,8 +412,26 @@ export function validateOrderDetails(order: Order, data: Database) {
         )
       )
         throw new Error("Foto de questionario nao encontrada.");
-    }),
-  );
+      if (question.kind !== "Multipla escolha" && Array.isArray(question.answer))
+        throw new Error("Resposta deve conter um unico valor.");
+      if (question.kind === "Multipla escolha" && question.answer !== "" && !Array.isArray(question.answer))
+        throw new Error("Resposta de multipla escolha deve ser uma lista.");
+      if (question.kind !== "Assinatura" && question.signature)
+        throw new Error("Assinatura em pergunta de outro tipo.");
+      const answer = typeof question.answer === "string" ? question.answer.trim() : "";
+      if (answer && ["Numero", "Monetaria"].includes(question.kind) &&
+        (!/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/.test(answer) || !Number.isFinite(Number(answer))))
+        throw new Error("Resposta numerica invalida.");
+      if (answer && question.kind === "Check" && !["Sim", "Nao", "Não"].includes(answer))
+        throw new Error("Resposta de check invalida.");
+      if (answer && question.kind === "Data" && !day.safeParse(answer).success)
+        throw new Error("Data de resposta invalida.");
+      if (answer && question.kind === "Hora" && !/^([01]\d|2[0-3]):[0-5]\d$/.test(answer))
+        throw new Error("Hora de resposta invalida.");
+      if (answer && question.kind === "CPF/CNPJ" && !isValidCpf(answer) && !isValidCnpj(normalizeCnpj(answer)))
+        throw new Error("CPF/CNPJ de resposta invalido.");
+    });
+  });
   details.activities.forEach((activity, index) => {
     const previous = details.activities.slice(0, index);
     if (!allowedActivities(previous).includes(activity.kind))
@@ -426,6 +471,9 @@ export function appendActivity(
   orderId: string,
   activity: Activity,
 ): Database {
+  const order = data.orders.find((item) => item.id === orderId);
+  if (activity.kind === "Check-out" && order && orderPending(order).length)
+    throw new Error("Resolva as pendencias antes do check-out.");
   const updated = updateOrderDetails(
     data,
     orderId,
@@ -501,6 +549,7 @@ export function replicateOrder(
       id: makeId(),
       questions: checklist.questions.map((question) => ({
         ...question,
+        ...(question.signature !== undefined ? { signature: null } : {}),
         id: makeId(),
         answer: "",
       })),
@@ -597,12 +646,18 @@ export function validateDatabase(input: unknown): Database {
     data.quotes,
     data.movements,
     data.expenses,
+    data.questionnaires,
   ]) {
     if (
       new Set(collection.map((record) => record.id)).size !== collection.length
     )
       throw new Error("Identificadores duplicados no arquivo.");
   }
+  data.questionnaires.forEach((template) => validateQuestionDefinitions(template.questions));
+  if (new Set(data.orderTypeQuestionnaires.map((item) => item.type)).size !== data.orderTypeQuestionnaires.length)
+    throw new Error("Tipo de tarefa com configuracao duplicada.");
+  if (data.orderTypeQuestionnaires.some((item) => item.questionnaireId && !data.questionnaires.some((template) => template.id === item.questionnaireId && !template.archived)))
+    throw new Error("Questionario padrao indisponivel.");
   const hasClient = (clientId: string) =>
     data.clients.some((client) => client.id === clientId);
   data.orders.forEach((order) => validateOrderDetails(order, data));
@@ -695,7 +750,10 @@ export function changeOrderStatus(
 ): Database {
   const order = data.orders.find((record) => record.id === orderId);
   if (!order) throw new Error("OS nao encontrada.");
-  const lastActivity = getOrderDetails(order).activities.at(-1);
+  const details = getOrderDetails(order);
+  if (next === "Finalizada" && (details.questionnaireRequired !== undefined || details.checklists.some((item) => item.templateId)) && orderPending(order).length)
+    throw new Error("Resolva as pendencias antes de finalizar a tarefa.");
+  const lastActivity = details.activities.at(-1);
   if (
     next === "Finalizada" &&
     lastActivity &&
@@ -761,7 +819,7 @@ export function convertQuote(data: Database, quoteId: string): Database {
     type: "Corretiva",
     priority: "Media",
     status: "Aberta",
-    details: orderDetailsSchema.parse({ createdAt: new Date().toISOString() }),
+    details: orderDetailsSchema.parse({ createdAt: new Date().toISOString(), ...defaultQuestionnaires(data, "Corretiva") }),
     notes: `${quote.notes}\n\n${quote.items.map((item) => `${item.quantity} x ${item.name}: ${currency(item.price)}`).join("\n")}\nTotal: ${currency(total(quote))}`,
     history: [
       {

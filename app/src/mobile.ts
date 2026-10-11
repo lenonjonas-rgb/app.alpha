@@ -4,8 +4,8 @@ import { AppLauncher } from "@capacitor/app-launcher";
 import { Directory, Filesystem } from "@capacitor/filesystem";
 import { Share } from "@capacitor/share";
 import { z } from "zod";
-import { attachmentSchema, databaseSchema, makeId, validateDatabase } from "./domain";
-import type { Attachment } from "./domain";
+import { attachmentSchema, databaseSchema, getOrderDetails, makeId, validateDatabase } from "./domain";
+import type { Attachment, Order } from "./domain";
 
 export const mobileSnapshotSchema = z.object({
   revision: z.number().int().nonnegative(),
@@ -14,6 +14,17 @@ export const mobileSnapshotSchema = z.object({
   payload: databaseSchema,
 }).transform((value) => ({ ...value, payload: validateDatabase(value.payload) }));
 export type MobileSnapshot = z.infer<typeof mobileSnapshotSchema>;
+
+export type TechnicianAgendaFilter = "day" | "overdue" | "running";
+
+export function technicianAgendaOrders(orders: Order[], filter: TechnicianAgendaFilter, date: string, today: string) {
+  return orders.filter((order) => {
+    if (getOrderDetails(order).archived) return false;
+    if (filter === "overdue") return order.date < today && order.status !== "Finalizada";
+    if (filter === "running") return order.status === "Em atendimento" || order.status === "Pausada";
+    return order.date === date;
+  }).toSorted((a, b) => `${a.date}${a.time}`.localeCompare(`${b.date}${b.time}`));
+}
 
 function routeQuery(address: string) {
   if (!address.trim()) throw new Error("O cliente não possui endereço cadastrado.");

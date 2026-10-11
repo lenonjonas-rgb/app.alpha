@@ -7,6 +7,8 @@ import {
   makeId,
   nextCode,
   orderDetailsSchema,
+  getOrderDetails,
+  instantiateQuestionnaire,
   shiftDay,
   subtotal,
 } from "./domain";
@@ -33,6 +35,7 @@ import {
   normalizeCnpj,
 } from "./cnpj";
 import { formatCpf, isValidCpf } from "./cpf";
+import { orderTypes, orderTypeQuestionnaireSchema } from "./questionnaireSchema";
 
 export type FormKind =
   | "client"
@@ -312,6 +315,8 @@ export function EditorModal({
       100,
   );
   const [catalogId, setCatalogId] = useState("");
+  const [orderType, setOrderType] = useState<Order["type"]>(() => data.orders.find((record) => record.id === editor.id)?.type ?? "Corretiva");
+  const [questionnaireId, setQuestionnaireId] = useState(() => editor.id ? "" : data.orderTypeQuestionnaires.find((item) => item.type === "Corretiva")?.questionnaireId ?? "");
   const client = data.clients.find((record) => record.id === editor.id);
   const equipment = data.equipment.find((record) => record.id === editor.id);
   const product = data.products.find((record) => record.id === editor.id);
@@ -458,6 +463,14 @@ export function EditorModal({
               throw new Error(
                 "Este técnico já possui uma OS neste horário. Ajuste o horário ou o técnico.",
               );
+            const template = current.questionnaires.find((item) => item.id === questionnaireId && !item.archived);
+            if (questionnaireId && !template) throw new Error("Questionário indisponível. Selecione um modelo ativo.");
+            const previousDetails = existing ? getOrderDetails(existing) : orderDetailsSchema.parse({ createdAt: new Date().toISOString() });
+            const details = {
+              ...previousDetails,
+              ...(existing ? {} : { questionnaireRequired: current.orderTypeQuestionnaires.find((item) => item.type === orderType)?.required ?? false }),
+              checklists: [...previousDetails.checklists, ...(template ? [instantiateQuestionnaire(template)] : [])],
+            };
             const record: Order = {
               id: recordId,
               code: existing?.code ?? nextCode(current.orders, "OS"),
@@ -469,15 +482,11 @@ export function EditorModal({
               date,
               time,
               duration,
-              type: getText(form, "type") as Order["type"],
+              type: orderType,
               priority: getText(form, "priority") as Order["priority"],
               status: existing?.status ?? "Aberta",
               notes: getText(form, "notes"),
-              details: existing
-                ? existing.details
-                : orderDetailsSchema.parse({
-                    createdAt: new Date().toISOString(),
-                  }),
+              details,
               history: [
                 ...(existing?.history ?? []),
                 {
@@ -830,12 +839,21 @@ export function EditorModal({
                 </label>
                 <label className="field">
                   Tipo
-                  <select name="type" defaultValue={order?.type ?? "Corretiva"}>
-                    <option>Corretiva</option>
-                    <option>Preventiva</option>
-                    <option>Instalacao</option>
-                    <option>Visita tecnica</option>
+                  <select name="type" value={orderType} onChange={(event) => {
+                    const type = orderTypeQuestionnaireSchema.shape.type.parse(event.target.value);
+                    setOrderType(type);
+                    if (!order) setQuestionnaireId(data.orderTypeQuestionnaires.find((item) => item.type === type)?.questionnaireId ?? "");
+                  }}>
+                    {orderTypes.map((type) => <option key={type}>{type}</option>)}
                   </select>
+                </label>
+                <label className="field full">
+                  {order ? "Adicionar questionário à tarefa" : "Questionário"}
+                  <select aria-label={order ? "Adicionar questionário à tarefa" : "Questionário"} value={questionnaireId} onChange={(event) => setQuestionnaireId(event.target.value)}>
+                    <option value="">{order ? "Preservar questionários atuais, sem adicionar" : "Sem questionário"}</option>
+                    {data.questionnaires.filter((item) => !item.archived).map((item) => <option key={item.id} value={item.id}>{item.title} · v{item.revision}</option>)}
+                  </select>
+                  <small>{order ? "Os questionários e respostas existentes não são substituídos. Gerencie-os em Mais informações." : "O padrão do tipo é selecionado automaticamente e pode ser substituído. As respostas são exclusivas desta tarefa."}</small>
                 </label>
                 <label className="field">
                   Prioridade

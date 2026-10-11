@@ -32,6 +32,7 @@ import {
   currency,
   displayDate,
   getOrderDetails,
+  instantiateQuestionnaire,
   localDay,
   makeId,
   orderPending,
@@ -53,6 +54,9 @@ import { Badge, Empty, Modal } from "./components";
 import { EditorModal } from "./Forms";
 import type { Editor } from "./Forms";
 import { downloadFile, errorMessage } from "./useDatabase";
+import { questionKinds } from "./questionnaireSchema";
+import { prepareQuestionnairePhoto } from "./questionnairePhoto";
+import { questionAnswerText, questionSignature } from "./questionnaireAnswers";
 import "./OrderWorkspace.css";
 
 const tabs = [
@@ -75,69 +79,6 @@ const localDateTime = () => {
   const date = new Date();
   return `${localDay(date)}T${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}:${String(date.getSeconds()).padStart(2, "0")}`;
 };
-const templateQuestions = (type: string): Checklist["questions"] =>
-  type === "Preventiva"
-    ? [
-        {
-          id: makeId(),
-          label: "Condição de funcionamento",
-          kind: "Escolha",
-          required: true,
-          options: ["Normal", "Com defeito", "Fora de operação"],
-          answer: "",
-        },
-        {
-          id: makeId(),
-          label: "Inspeções realizadas",
-          kind: "Multipla escolha",
-          required: true,
-          options: ["Limpeza", "Lubrificação", "Ajustes", "Teste de segurança"],
-          answer: [],
-        },
-        {
-          id: makeId(),
-          label: "Peças que precisam de atenção",
-          kind: "Texto",
-          required: false,
-          options: [],
-          answer: "",
-        },
-        {
-          id: makeId(),
-          label: "Registro fotográfico",
-          kind: "Foto",
-          required: true,
-          options: [],
-          answer: "",
-        },
-      ]
-    : [
-        {
-          id: makeId(),
-          label: "Diagnóstico técnico",
-          kind: "Texto",
-          required: true,
-          options: [],
-          answer: "",
-        },
-        {
-          id: makeId(),
-          label: "Teste de funcionamento",
-          kind: "Escolha",
-          required: true,
-          options: ["Aprovado", "Reprovado", "Não executado"],
-          answer: "",
-        },
-        {
-          id: makeId(),
-          label: "Observações",
-          kind: "Texto",
-          required: false,
-          options: [],
-          answer: "",
-        },
-      ];
-
 async function readAttachment(file: File): Promise<Attachment> {
   const allowed = [
     "image/png",
@@ -207,6 +148,8 @@ export function OrderWorkspace({
     | null
   >(null);
   const [catalog, setCatalog] = useState("");
+  const [questionnaireTemplateId, setQuestionnaireTemplateId] = useState("");
+  const [signatureQuestion, setSignatureQuestion] = useState<{ checklistId: string; questionId: string } | null>(null);
   const [quoteId, setQuoteId] = useState("");
   const [clock, setClock] = useState(() => Date.now());
   useEffect(() => {
@@ -317,7 +260,10 @@ export function OrderWorkspace({
     setBusy(true);
     try {
       const attachments = await Promise.all(
-        Array.from(files).map(readAttachment),
+        Array.from(files).map((file) => {
+          const definition = question ? draft.checklists.find((item) => item.id === question.checklistId)?.questions.find((item) => item.id === question.questionId) : undefined;
+          return definition ? prepareQuestionnairePhoto(file, definition.photoMetadata ?? false) : readAttachment(file);
+        }),
       );
       setDraft((previous) => ({
         ...previous,
@@ -1045,7 +991,9 @@ export function OrderWorkspace({
                       </button>
                     )}
                   </div>
-                  <label className="field questionnaire-equipment">
+                  {checklist.templateRevision && <small>Modelo v{checklist.templateRevision} · Cópia exclusiva desta tarefa</small>}
+                  {checklist.header && <p className="questionnaire-text">{checklist.header}</p>}
+                  {(!checklist.display || checklist.display.equipment) && <label className="field questionnaire-equipment">
                     Equipamento
                     <select
                       disabled={!editing}
@@ -1069,7 +1017,7 @@ export function OrderWorkspace({
                           </option>
                         ))}
                     </select>
-                  </label>
+                  </label>}
                   <div className="form-grid">
                     {checklist.questions.map((question, index) => (
                       <div
@@ -1110,6 +1058,7 @@ export function OrderWorkspace({
                             </button>
                           )}
                         </div>
+                        {question.description && <p className="questionnaire-text">{question.description}</p>}
                         {question.kind === "Multipla escolha" ? (
                           <div className="question-options">
                             {question.options.map((option) => (
@@ -1158,7 +1107,7 @@ export function OrderWorkspace({
                           >
                             <option value="">Selecione</option>
                             {(question.kind === "Check"
-                              ? ["Sim", "Não"]
+                              ? ["Sim", "Nao"]
                               : question.options
                             ).map((option) => (
                               <option key={option}>{option}</option>
@@ -1168,7 +1117,7 @@ export function OrderWorkspace({
                           <div className="inline-add">
                             <select
                               aria-label={question.label}
-                              disabled={!editing}
+                              disabled={!editing || question.photoMetadata}
                               value={String(question.answer)}
                               onChange={(event) =>
                                 answer(
@@ -1185,6 +1134,8 @@ export function OrderWorkspace({
                                 </option>
                               ))}
                             </select>
+                            {question.photoMetadata && <small>Envie uma foto para gravar localização, data e hora na imagem.</small>}
+                            {editing && question.photoMetadata && question.answer && <button className="text-button" onClick={() => answer(checklist.id, question.id, "")}>Limpar resposta da foto</button>}
                             {editing && (
                               <label className="button secondary">
                                 <ImagePlus size={16} />
@@ -1210,19 +1161,24 @@ export function OrderWorkspace({
                           <div>
                             <Badge
                               value={
-                                details.signature ? "Coletada" : "Não coletada"
+                                (question.signature === undefined ? details.signature : question.signature) ? "Coletada" : "Não coletada"
                               }
                             />
+                            {(question.signature === undefined ? details.signature : question.signature) && <div className="question-signature">
+                              <img src={(question.signature === undefined ? details.signature : question.signature)!.image} alt={`Assinatura para ${question.label}`} />
+                              <small>{(question.signature === undefined ? details.signature : question.signature)!.signer}</small>
+                            </div>}
                             {editing && (
                               <button
                                 className="text-button"
-                                onClick={() => setDialog("signature")}
+                                onClick={() => { setSignatureQuestion({ checklistId: checklist.id, questionId: question.id }); setDialog("signature"); }}
                               >
                                 Coletar assinatura
                               </button>
                             )}
+                            {editing && question.signature && <button className="text-button" onClick={() => patch({ checklists: details.checklists.map((item) => item.id === checklist.id ? { ...item, questions: item.questions.map((record) => record.id === question.id ? { ...record, signature: null } : record) } : item) })}>Remover assinatura desta pergunta</button>}
                           </div>
-                        ) : question.kind === "Texto" ? (
+                        ) : question.kind === "Texto" || question.kind === "Area de texto" ? (
                           <textarea
                             rows={3}
                             aria-label={question.label}
@@ -1265,6 +1221,7 @@ export function OrderWorkspace({
                       </div>
                     ))}
                   </div>
+                  {checklist.footer && <p className="questionnaire-text">{checklist.footer}</p>}
                 </section>
               ))}
               {!details.checklists.length && (
@@ -1857,9 +1814,12 @@ export function OrderWorkspace({
       {dialog === "signature" && (
         <SignatureEditor
           signer={details.signature?.signer ?? client.name}
-          onClose={() => setDialog(null)}
+          onClose={() => { setDialog(null); setSignatureQuestion(null); }}
           onApply={(signature) => {
-            patch({ signature });
+            if (signatureQuestion) {
+              patch({ checklists: details.checklists.map((item) => item.id === signatureQuestion.checklistId ? { ...item, questions: item.questions.map((question) => question.id === signatureQuestion.questionId ? { ...question, signature } : question) } : item) });
+            } else patch({ signature });
+            setSignatureQuestion(null);
             setDialog(null);
           }}
         />
@@ -1870,35 +1830,27 @@ export function OrderWorkspace({
             onSubmit={(event) => {
               event.preventDefault();
               const form = new FormData(event.currentTarget);
-              const type = String(form.get("type"));
-              patch({
-                checklists: [
-                  ...details.checklists,
-                  {
-                    id: makeId(),
-                    title:
-                      type === "Preventiva"
-                        ? "Inspeção preventiva"
-                        : "Checklist técnico",
-                    equipmentId: String(form.get("equipmentId")),
-                    questions: templateQuestions(type),
-                  },
-                ],
-              });
-              setDialog(null);
+              try {
+                const template = data.questionnaires.find((item) => item.id === questionnaireTemplateId && !item.archived);
+                if (!template) throw new Error("Selecione um questionário ativo no catálogo.");
+                patch({ checklists: [...details.checklists, instantiateQuestionnaire(template, String(form.get("equipmentId") ?? ""))] });
+                setDialog(null); setQuestionnaireTemplateId(""); setError("");
+              } catch (cause) { setError(errorMessage(cause)); }
             }}
           >
             <div className="modal-body form-grid">
+              {error && <p role="alert" className="error-message full">{error}</p>}
               <label className="field full">
                 Modelo
-                <select name="type">
-                  <option>Preventiva</option>
-                  <option>Checklist técnico</option>
+                <select name="type" required value={questionnaireTemplateId} onChange={(event) => setQuestionnaireTemplateId(event.target.value)}>
+                  <option value="">Selecione um questionário</option>
+                  {data.questionnaires.filter((item) => !item.archived).map((item) => <option key={item.id} value={item.id}>{item.title} · v{item.revision}</option>)}
                 </select>
+                {!data.questionnaires.some((item) => !item.archived) && <small>Cadastre um modelo em Cadastros → Questionários. Perguntas avulsas continuam disponíveis em Nova pergunta.</small>}
               </label>
               <label className="field full">
                 Equipamento
-                <select name="equipmentId">
+                <select name="equipmentId" key={questionnaireTemplateId} disabled={!data.questionnaires.find((item) => item.id === questionnaireTemplateId)?.display.equipment}>
                   <option value="">Questionário da tarefa</option>
                   {data.equipment
                     .filter((item) => linkedEquipment.includes(item.id))
@@ -2192,6 +2144,8 @@ function QuestionEditor({
               required: form.get("required") === "on",
               options,
               answer: kind === "Multipla escolha" ? [] : "",
+              description: String(form.get("description") ?? "").trim(),
+              ...(kind === "Assinatura" ? { signature: null } : {}),
             },
             String(form.get("checklist") ?? ""),
           );
@@ -2217,25 +2171,14 @@ function QuestionEditor({
           <label className="field full">
             Pergunta *<input name="label" required maxLength={200} />
           </label>
+          <label className="field full">Descrição da pergunta<textarea name="description" rows={2} maxLength={3000} /></label>
           <label className="field">
             Tipo de resposta
             <select
               value={kind}
               onChange={(event) => setKind(event.target.value as typeof kind)}
             >
-              {[
-                "Texto",
-                "Numero",
-                "Escolha",
-                "Multipla escolha",
-                "Check",
-                "Data",
-                "Hora",
-                "Monetaria",
-                "CPF/CNPJ",
-                "Foto",
-                "Assinatura",
-              ].map((value) => (
+              {questionKinds.map((value) => (
                 <option key={value}>{value}</option>
               ))}
             </select>
@@ -2418,23 +2361,26 @@ function OrderPrintable({
       )}
       <h2>Questionários</h2>
       {details.checklists.length ? (
-        details.checklists.map((checklist) => (
+        details.checklists.filter((checklist) => checklist.display?.showOnOrder !== false).map((checklist) => (
           <section key={checklist.id}>
             <h3>{checklist.title}</h3>
-            {checklist.questions.map((question) => (
-              <p key={question.id}>
-                <strong>{question.label}: </strong>
-                {question.kind === "Assinatura"
-                  ? (details.signature?.signer ?? "Não coletada")
-                  : question.kind === "Foto"
-                    ? (details.attachments.find(
-                        (file) => file.id === question.answer,
-                      )?.name ?? "Não anexada")
-                    : Array.isArray(question.answer)
-                      ? question.answer.join(", ") || "Não respondida"
-                      : question.answer || "Não respondida"}
-              </p>
-            ))}
+            {checklist.templateRevision && <p>Versão do modelo: {checklist.templateRevision}</p>}
+            {checklist.equipmentId && <p>Equipamento: {data.equipment.find((item) => item.id === checklist.equipmentId)?.name}</p>}
+            {checklist.header && <p>{checklist.header}</p>}
+            <div className={`print-question-grid columns-${checklist.display?.columns ?? 1} ${checklist.display?.inlineAnswers ? "inline-answers" : ""}`}>
+              {checklist.questions.filter((question) => checklist.display?.showUnanswered !== false || questionAnswerText(question, details).trim()).map((question) => {
+                const signature = question.kind === "Assinatura" ? questionSignature(question, details) : null;
+                const photo = question.kind === "Foto" ? details.attachments.find((item) => item.id === question.answer) : undefined;
+                return <div className="print-question" key={question.id}>
+                  <strong>{question.label}{question.required ? " *" : ""}: </strong>
+                  <span>{questionAnswerText(question, details) || "Não respondida"}</span>
+                  {question.description && <p>{question.description}</p>}
+                  {signature && <img src={signature.image} alt={`Assinatura para ${question.label}`} />}
+                  {photo && <img src={photo.data} alt={question.label} />}
+                </div>;
+              })}
+            </div>
+            {checklist.footer && <p>{checklist.footer}</p>}
           </section>
         ))
       ) : (

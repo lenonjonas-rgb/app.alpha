@@ -57,6 +57,7 @@ import { CloudAccess } from "./CloudAccess";
 import { OrderWorkspace } from "./OrderWorkspace";
 import { UserSettings } from "./UserSettings";
 import { PasswordSettings } from "./PasswordSettings";
+import { QuestionnaireCatalog } from "./QuestionnaireCatalog";
 import { roleLabels } from "./userAccess";
 import type { CompanyRole } from "./userAccess";
 import "./App.css";
@@ -73,6 +74,7 @@ type View =
   | "stock"
   | "quotes"
   | "reports"
+  | "questionnaires"
   | "settings";
 const navigation: {
   id: View;
@@ -91,6 +93,7 @@ const navigation: {
   { id: "reports", label: "Relatórios", icon: BarChart3, group: "GESTÃO" },
   { id: "clients", label: "Clientes", icon: Users, group: "CADASTROS" },
   { id: "equipment", label: "Equipamentos", icon: Wrench, group: "CADASTROS" },
+  { id: "questionnaires", label: "Questionários", icon: FileText, group: "CADASTROS" },
   {
     id: "stock",
     label: "Estoque e serviços",
@@ -714,7 +717,7 @@ export default function App() {
                               : database.settings.company}
               </p>
             </div>
-            {view !== "settings" && view !== "reports" && (
+            {view !== "settings" && view !== "reports" && view !== "questionnaires" && (
               <button
                 className="button primary"
                 onClick={() => openEditor(newKind)}
@@ -758,7 +761,7 @@ export default function App() {
               ))}
             </section>
           )}
-          {view !== "settings" && view !== "reports" && (
+          {view !== "settings" && view !== "reports" && view !== "questionnaires" && (
             <section className="module-section">
               <div className="module-toolbar">
                 <label className="search-field">
@@ -1610,6 +1613,7 @@ export default function App() {
               />
             </Suspense>
           )}
+          {view === "questionnaires" && <QuestionnaireCatalog data={database} commit={commit} onSuccess={setNotice} />}
           {view === "settings" && (
             <SettingsPanel
               data={database}
@@ -2251,6 +2255,8 @@ function SettingsPanel({
                   quotes: [],
                   movements: [],
                   expenses: [],
+                  questionnaires: [],
+                  orderTypeQuestionnaires: [],
                   settings: data.settings,
                 });
                 onSuccess("Base vazia criada.");

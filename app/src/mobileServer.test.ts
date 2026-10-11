@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import { PGlite } from "@electric-sql/pglite";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { demoDatabase, getOrderDetails, validateDatabase } from "./domain";
-import { mobileSnapshotSchema } from "./mobile";
+import { mobileSnapshotSchema, technicianAgendaOrders } from "./mobile";
 
 const owner = "00000000-0000-4000-8000-000000000001";
 const tech = "00000000-0000-4000-8000-000000000002";
@@ -40,7 +40,7 @@ beforeAll(async () => {
     grant usage on schema auth to anon,authenticated;
     grant execute on function auth.uid() to anon,authenticated;
   `);
-  for (const file of ["20261008010000_tenant_auth_and_company_data.sql", "20261009010000_android_technicians.sql", "20261009020000_technician_link_validation.sql"]) {
+  for (const file of ["20261008010000_tenant_auth_and_company_data.sql", "20261009010000_android_technicians.sql", "20261009020000_technician_link_validation.sql", "20261010010000_questionnaires.sql"]) {
     await db.exec(await readFile(new URL(`../../supabase/migrations/${file}`, import.meta.url), "utf8"));
   }
   await db.query("insert into auth.users values ($1,'owner@example.test'),($2,'tech@example.test'),($3,'other@example.test')", [owner, tech, other]);
@@ -63,6 +63,236 @@ describe("RPC Android e isolamento de dados", () => {
     await expect(db.query("select public.save_company_data($1,0)", [JSON.stringify(payload)])).rejects.toThrow();
     await expect(mutate("Check-in", { location: gps }, 0, payload.orders[1].id)).rejects.toThrow("Tarefa não atribuída");
   });
+
+  async function questionnaireFixture(checklists: ReturnType<typeof getOrderDetails>["checklists"], required = true) {
+    await identity(owner);
+    const current = await snapshot();
+    const raw = await db.query<{ payload: unknown }>("select payload from public.company_data where company_id=$1", [company]);
+    const full = validateDatabase(raw.rows[0].payload);
+    full.orders[0].status = "Aberta";
+    full.orders[0].details = {
+      ...getOrderDetails(full.orders[0]), activities: [], attachments: [],
+      signature: null, pending: [], checklists, questionnaireRequired: required,
+    };
+    await db.query("select public.save_company_data($1,$2)", [JSON.stringify(full), current.revision]);
+    await identity(tech);
+    const data = await snapshot();
+    await mutate("Check-in", { location: gps }, data.revision);
+    const details = getOrderDetails((await snapshot()).payload.orders[0]);
+    return {
+      report: details.report, distanceKm: details.distanceKm, attachments: details.attachments,
+      checklists: details.checklists, signature: details.signature, pending: details.pending,
+    };
+  }
+
+  describe("Snapshots dos questionários e assinaturas por pergunta no servidor", () => {
+    let baseline: { payload: unknown; revision: number };
+    beforeAll(async () => {
+      await db.exec("reset role");
+      const saved = await db.query<{ payload: unknown; revision: number }>("select payload,revision from public.company_data where company_id=$1", [company]);
+      baseline = saved.rows[0];
+      await identity(tech);
+    });
+    afterAll(async () => {
+      await db.exec("reset role");
+      await db.query("update public.company_data set payload=$1,revision=$2 where company_id=$3", [JSON.stringify(baseline.payload), baseline.revision, company]);
+      await identity(tech);
+    });
+    const signature = { signer: "Cliente", image: "data:image/png;base64,YWJj", at: "1900-01-01T00:00:00.000Z" };
+    const list = {
+      id: "snapshot", title: "Inspeção vinculada", equipmentId: "",
+      templateId: "template", templateRevision: 2, header: "Cabeçalho", footer: "Rodapé",
+      display: { showOnOrder: true, columns: 2, inlineAnswers: false, showUnanswered: true, equipment: true },
+      questions: [
+        { id: "sign-1", label: "Técnico", kind: "Assinatura" as const, required: true, options: [], answer: "", signature: null },
+        { id: "sign-2", label: "Cliente", kind: "Assinatura" as const, required: true, options: [], answer: "", signature: null },
+        { id: "text", label: "Observações", kind: "Area de texto" as const, required: false, options: [], answer: "", description: "Informe detalhes", photoMetadata: false },
+      ],
+    };
+
+    it("exige duas assinaturas independentes; carimba no servidor e preserva o horário ao salvar novamente", async () => {
+      const report = await questionnaireFixture([structuredClone(list)]);
+      let current = await snapshot();
+      report.signature = signature;
+      await mutate("report", report, current.revision);
+      current = await snapshot();
+      await expect(mutate("Check-out", { location: gps }, current.revision)).rejects.toThrow("obrigatórios");
+      report.checklists[0].questions[0].signature = { ...signature, signer: "Técnico" };
+      await mutate("report", report, current.revision);
+      current = await snapshot();
+      const saved = getOrderDetails(current.payload.orders[0]).checklists[0].questions[0].signature!;
+      expect(saved.signer).toBe("Técnico");
+      expect(Date.parse(saved.at)).toBeGreaterThan(Date.now() - 60000);
+      expect(getOrderDetails(current.payload.orders[0]).checklists[0].questions[1].signature).toBeNull();
+      await expect(mutate("Check-out", { location: gps }, current.revision)).rejects.toThrow("obrigatórios");
+      report.checklists[0].questions[0].signature = { ...saved, at: "2099-01-01T00:00:00.000Z" };
+      report.checklists[0].questions[1].signature = signature;
+      await mutate("report", report, current.revision);
+      current = await snapshot();
+      let questions = getOrderDetails(current.payload.orders[0]).checklists[0].questions;
+      expect(questions[0].signature?.at).toBe(saved.at);
+      expect(questions[1].signature?.at).not.toBe(signature.at);
+      const withoutOwn = structuredClone(report);
+      delete withoutOwn.checklists[0].questions[1].signature;
+      await expect(mutate("report", withoutOwn, current.revision)).rejects.toThrow("Estrutura");
+      report.checklists[0].questions[1].signature = null;
+      await mutate("report", report, current.revision);
+      current = await snapshot();
+      questions = getOrderDetails(current.payload.orders[0]).checklists[0].questions;
+      expect(questions[0].signature?.at).toBe(saved.at);
+      expect(questions[1].signature).toBeNull();
+      await expect(mutate("Check-out", { location: gps }, current.revision)).rejects.toThrow("obrigatórios");
+      report.checklists[0].questions[1].signature = signature;
+      await mutate("report", report, current.revision);
+      current = await snapshot();
+      await mutate("Check-out", { location: gps }, current.revision);
+      expect((await snapshot()).payload.orders[0].status).toBe("Finalizada");
+    });
+
+    it("não permite modificar estrutura, opções, descrição, carimbo nem metadados de exibição/revisão", async () => {
+      const report = await questionnaireFixture([structuredClone(list)]);
+      const current = await snapshot();
+      for (const change of [
+        (value: typeof report) => { value.checklists[0].title = "Fraude"; },
+        (value: typeof report) => { value.checklists[0].templateId = "outro"; },
+        (value: typeof report) => { value.checklists[0].templateRevision = 99; },
+        (value: typeof report) => { value.checklists[0].header = ""; },
+        (value: typeof report) => { delete value.checklists[0].footer; },
+        (value: typeof report) => { value.checklists[0].display!.columns = 4; },
+        (value: typeof report) => { value.checklists[0].equipmentId = "outro"; },
+        (value: typeof report) => { value.checklists[0].questions[0].required = false; },
+        (value: typeof report) => { value.checklists[0].questions[0].kind = "Texto"; },
+        (value: typeof report) => { value.checklists[0].questions[0].options = ["A", "B"]; },
+        (value: typeof report) => { value.checklists[0].questions[2].description = "Outra descrição"; },
+        (value: typeof report) => { value.checklists[0].questions[2].photoMetadata = true; },
+        (value: typeof report) => { value.checklists[0].questions[2].label = "Outra pergunta"; },
+        (value: typeof report) => { value.checklists[0].questions.reverse(); },
+      ]) {
+        const altered = structuredClone(report);
+        change(altered);
+        await expect(mutate("report", altered, current.revision)).rejects.toThrow(/alterado|Estrutura/);
+      }
+      const duplicate = structuredClone(report);
+      duplicate.checklists[0].questions[1] = structuredClone(duplicate.checklists[0].questions[0]);
+      await expect(mutate("report", duplicate, current.revision)).rejects.toThrow("duplicados");
+      const badSignature = structuredClone(report);
+      badSignature.checklists[0].questions[0].signature = { ...signature, signer: " " };
+      await expect(mutate("report", badSignature, current.revision)).rejects.toThrow("Assinatura inválida");
+      badSignature.checklists[0].questions[2].signature = signature;
+      badSignature.checklists[0].questions[0].signature = null;
+      await expect(mutate("report", badSignature, current.revision)).rejects.toThrow("outro tipo");
+      expect((await snapshot()).revision).toBe(current.revision);
+    });
+
+    it("valida tipos e conteúdo de respostas incluindo área de texto, número, data, hora, check, CPF/CNPJ e foto", async () => {
+      const kinds = ["Area de texto", "Numero", "Monetaria", "Data", "Hora", "Check", "CPF/CNPJ", "Escolha", "Multipla escolha", "Foto"] as const;
+      const report = await questionnaireFixture([{
+        id: "types", title: "Tipos", equipmentId: "",
+        questions: kinds.map((kind) => ({
+          id: kind, label: kind, kind, required: false,
+          options: ["Escolha", "Multipla escolha"].includes(kind) ? ["A", "B"] : [],
+          answer: kind === "Multipla escolha" ? [] : "",
+        })),
+      }]);
+      const current = await snapshot();
+      for (const [index, value, message] of [
+        [0, ["texto"], "inválida"], [1, "NaN", "numérica"], [2, "Infinity", "numérica"],
+        [3, "2026-02-30", "Data"], [4, "25:60", "Hora"], [5, "Talvez", "check"],
+        [6, "111.111.111-11", "CPF/CNPJ"], [7, "C", "Opção"], [8, ["A", "C"], "Opções"],
+        [8, ["A", "A"], "Opções"], [9, "ausente", "Foto"],
+      ] as [number, string | string[], string][]) {
+        const altered = structuredClone(report);
+        altered.checklists[0].questions[index].answer = value;
+        await expect(mutate("report", altered, current.revision)).rejects.toThrow(message);
+      }
+      const file = { id: "photo", name: "foto.jpg", mime: "image/jpeg" as const, size: 3, data: "data:image/jpeg;base64,YWJj", at: signature.at };
+      report.attachments = [file];
+      ["Linha 1\nLinha 2", "-1.25", "1.2e3", "2024-02-29", "23:59", "Nao", "529.982.247-25", "A", ["A", "B"], "photo"].forEach((value, index) => {
+        report.checklists[0].questions[index].answer = value;
+      });
+      await mutate("report", report, current.revision);
+      let saved = await snapshot();
+      expect(getOrderDetails(saved.payload.orders[0]).checklists[0].questions[0].answer).toBe("Linha 1\nLinha 2");
+      report.checklists[0].questions[5].answer = "Não";
+      report.checklists[0].questions[6].answer = "12.345.678/0001-95";
+      const legacyCheck = await mutate("report", report, saved.revision);
+      const rawCheck = (legacyCheck.rows[0] as { data: unknown }).data as { revision: number; payload: { orders: { details: { checklists: { questions: { answer: unknown }[] }[] } }[] } };
+      expect(rawCheck.payload.orders[0].details.checklists[0].questions[5].answer).toBe("Não");
+      report.checklists[0].questions[5].answer = "Nao";
+      await mutate("report", report, rawCheck.revision);
+      saved = await snapshot();
+      report.checklists[0].questions[6].answer = "12.ABC.345/01DE-35";
+      await mutate("report", report, saved.revision);
+      saved = await snapshot();
+      await expect(mutate("report", { ...report, attachments: [] }, saved.revision)).rejects.toThrow("Foto");
+      await mutate("Check-out", { location: gps }, saved.revision);
+    });
+
+    it("bloqueia checkout sem snapshot obrigatório e ignora catálogo/mapeamentos na projeção mobile", async () => {
+      await questionnaireFixture([]);
+      let current = await snapshot();
+      await expect(mutate("Check-out", { location: gps }, current.revision)).rejects.toThrow("Questionário obrigatório");
+      await expect(mutate("Check-out", { location: gps, questionnaireRequired: false, checklists: [] }, current.revision)).rejects.toThrow("Questionário obrigatório");
+      await identity(owner);
+      const raw = await db.query<{ payload: unknown }>("select payload from public.company_data where company_id=$1", [company]);
+      const full = validateDatabase(raw.rows[0].payload);
+      full.questionnaires = [{
+        id: "secret-catalog", title: "Catálogo privado", revision: 1, archived: false,
+        header: "", footer: "", display: list.display,
+        questions: [{ id: "q", label: "Privada", kind: "Texto", required: false, options: [] }],
+      }];
+      full.orderTypeQuestionnaires = [{ type: "Corretiva", questionnaireId: "secret-catalog", required: false }];
+      await db.query("select public.save_company_data($1,$2)", [JSON.stringify(full), current.revision]);
+      await identity(tech);
+      const projected = await db.query<{ data: { payload: Record<string, unknown> } }>("select public.mobile_company_data() as data");
+      expect(projected.rows[0].data.payload).not.toHaveProperty("questionnaires");
+      expect(projected.rows[0].data.payload).not.toHaveProperty("orderTypeQuestionnaires");
+      current = await snapshot();
+      expect(getOrderDetails(current.payload.orders[0]).questionnaireRequired).toBe(true);
+      await expect(mutate("Check-out", { location: gps }, current.revision)).rejects.toThrow("Questionário obrigatório");
+    });
+
+    it("restaura backups legados com defaults ausentes e assinatura compartilhada sem migrar silenciosamente", async () => {
+      const report = await questionnaireFixture([{
+        id: "legacy", title: "Backup", equipmentId: "",
+        questions: [
+          { id: "legacy-1", label: "Primeira", kind: "Assinatura", required: true, options: [], answer: "" },
+          { id: "legacy-2", label: "Segunda", kind: "Assinatura", required: true, options: [], answer: "" },
+        ],
+      }]);
+      await identity(owner);
+      let current = await snapshot();
+      const raw = await db.query<{ payload: unknown }>("select payload from public.company_data where company_id=$1", [company]);
+      const backup = validateDatabase(raw.rows[0].payload);
+      const details = getOrderDetails(backup.orders[0]);
+      delete (details.checklists[0] as unknown as Record<string, unknown>).equipmentId;
+      for (const question of details.checklists[0].questions) {
+        delete (question as unknown as Record<string, unknown>).options;
+        delete (question as unknown as Record<string, unknown>).answer;
+      }
+      backup.orders[0].details = details;
+      await db.query("select public.save_company_data($1,$2)", [JSON.stringify(backup), current.revision]);
+      await identity(tech);
+      current = await snapshot();
+      report.signature = signature;
+      await mutate("report", report, current.revision);
+      current = await snapshot();
+      const saved = getOrderDetails(current.payload.orders[0]);
+      expect(saved.checklists[0].questions.every((question) => question.signature === undefined)).toBe(true);
+      expect(saved.signature?.signer).toBe("Cliente");
+      report.signature = saved.signature;
+      report.checklists[0].questions[0].signature = null;
+      await mutate("report", report, current.revision);
+      current = await snapshot();
+      await expect(mutate("Check-out", { location: gps }, current.revision)).rejects.toThrow("obrigatórios");
+      report.checklists[0].questions[0].signature = { ...signature, signer: "Primeira própria" };
+      await mutate("report", report, current.revision);
+      current = await snapshot();
+      expect(getOrderDetails(current.payload.orders[0]).checklists[0].questions[1].signature).toBeUndefined();
+      expect(getOrderDetails(current.payload.orders[0]).signature?.at).toBe(saved.signature?.at);
+      await mutate("Check-out", { location: gps }, current.revision);
+    });
+  });
   it("nega acesso anônimo e vinculação por técnicos", async () => {
     await expect(db.query("select public.link_company_technician('other@example.test','Outro')")).rejects.toThrow();
     await identity("", "anon");
@@ -75,6 +305,8 @@ describe("RPC Android e isolamento de dados", () => {
     await expect(mutate("Check-out", { location: gps }, 0)).rejects.toThrow("Sequência");
     await mutate("Check-in", { location: gps, at: "1900-01-01", technician: "Impostor" }, 0);
     let data = await snapshot();
+    expect(data.payload.orders[0].status).toBe("Em atendimento");
+    expect(technicianAgendaOrders(data.payload.orders, "running", "2026-10-10", "2026-10-10")).toHaveLength(1);
     const first = getOrderDetails(data.payload.orders[0]).activities[0];
     expect(first.technician).toBe("Técnico");
     expect(Date.parse(first.at)).toBeGreaterThan(Date.now() - 60000);
@@ -84,12 +316,17 @@ describe("RPC Android e isolamento de dados", () => {
     await expect(mutate("Pausa", {}, data.revision)).rejects.toThrow("motivo");
     await mutate("Pausa", { reason: "Intervalo" }, data.revision);
     data = await snapshot();
+    expect(data.payload.orders[0].status).toBe("Pausada");
+    expect(technicianAgendaOrders(data.payload.orders, "running", "2026-10-10", "2026-10-10")).toHaveLength(1);
     await expect(mutate("Check-out", { location: gps }, data.revision)).rejects.toThrow("Sequência");
     await mutate("Retorno", {}, data.revision);
     data = await snapshot();
+    expect(data.payload.orders[0].status).toBe("Em atendimento");
     await mutate("Check-out", { location: gps }, data.revision);
     data = await snapshot();
     expect(data.payload.orders[0].status).toBe("Finalizada");
+    expect(technicianAgendaOrders(data.payload.orders, "running", "2026-10-10", "2026-10-10")).toEqual([]);
+    expect(technicianAgendaOrders(data.payload.orders, "overdue", "2099-01-01", "2099-01-01")).toEqual([]);
     expect(getOrderDetails(data.payload.orders[0]).activities).toHaveLength(4);
     await expect(mutate("Check-in", { location: gps }, data.revision)).rejects.toThrow("finalizada");
   });

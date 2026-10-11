@@ -62,8 +62,9 @@ O resumo da tarefa possui abas Tarefa, Monitoramento, Equipamentos, Orcamentos e
 - Assinatura local nao verifica identidade, nao envia codigo por email e nao fornece certificacao juridica.
 - Anexos locais pequenos consomem a cota de localStorage; nao ha armazenamento remoto. Exportar backup e usar dados ficticios permanece necessario.
 - Replica copia orientacoes, itens e estrutura de questionarios, mas limpa relato, respostas, fotos, assinatura, atividades e pendencias manuais.
-- Modelos de questionarios sao proprios desta versao; nao ha catalogo compartilhado/versionado de modelos ainda.
-- A selecao de CPF/CNPJ, data e numero como tipo de resposta nao equivale a validacao documental completa. A validacao avancada dos tipos e formatos segue pendente.
+- Atualizacao em 10/10/2026: catalogo proprio compartilhado/versionado, padroes por tipo de tarefa e copias independentes dos modelos nas OS. Alteracoes no catalogo nao modificam respostas antigas.
+- Perguntas novas de assinatura possuem desenho e nome independentes. Assinaturas legadas preservam a compatibilidade com a assinatura geral. Impressao e relatorios resolvem fotos/assinaturas por pergunta.
+- CPF/CNPJ, data, hora, numero, check e opcoes recebem validacao de formato/digitos e referencias; isso nao certifica identidade ou validade juridica. Perguntas obrigatorias bloqueiam check-out; novas tarefas com configuracao de questionario bloqueiam finalizacao manual com pendencias, preservando a regra administrativa legada.
 - Envio real, GPS, notificacoes push, calculo de rotas/km, PDF de servidor e cobranca dependem de backend/provedores e nao foram implementados como controles falsos.
 
 ## Validacao desta entrega

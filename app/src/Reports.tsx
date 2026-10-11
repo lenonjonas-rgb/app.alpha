@@ -331,6 +331,8 @@ export function ReportsPanel({
             "Cliente",
             "Colaborador",
             "Questionário",
+            "Equipamento",
+            "Versão do modelo",
             "Pergunta",
             "Resposta",
             "Obrigatória",
@@ -341,6 +343,8 @@ export function ReportsPanel({
             row.client,
             row.technician,
             row.questionnaire,
+            row.equipment,
+            row.templateRevision,
             row.question,
             row.answer,
             row.required ? "Sim" : "Não",
@@ -755,6 +759,8 @@ export function ReportsPanel({
                   <th>Cliente</th>
                   <th>Colaborador</th>
                   <th>Questionário</th>
+                  <th>Equipamento</th>
+                  <th>Versão</th>
                   <th>Pergunta</th>
                   <th>Resposta</th>
                   <th>Obrigatória</th>
@@ -768,6 +774,8 @@ export function ReportsPanel({
                     <td>{row.client}</td>
                     <td>{row.technician}</td>
                     <td>{row.questionnaire}</td>
+                    <td>{row.equipment || "Tarefa"}</td>
+                    <td>{row.templateRevision || "Avulso"}</td>
                     <td>{row.question}</td>
                     <td>{row.answer || "Sem resposta"}</td>
                     <td>{row.required ? "Sim" : "Não"}</td>

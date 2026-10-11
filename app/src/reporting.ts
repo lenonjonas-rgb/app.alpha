@@ -5,6 +5,7 @@ import {
   orderValues,
 } from "./domain";
 import type { Database, Expense, Order } from "./domain";
+import { questionAnswerText } from "./questionnaireAnswers";
 
 export type ReportFilters = {
   from: string;
@@ -24,6 +25,8 @@ export type QuestionnaireReportRow = {
   question: string;
   answer: string;
   required: boolean;
+  equipment: string;
+  templateRevision: string;
 };
 
 export const defaultReportFilters = (): ReportFilters => ({
@@ -104,18 +107,19 @@ export function questionnaireRows(
   return orders.flatMap((order) => {
     const client =
       data.clients.find((item) => item.id === order.clientId)?.name ?? "";
-    return getOrderDetails(order).checklists.flatMap((checklist) =>
-      checklist.questions.map((question) => ({
+    const details = getOrderDetails(order);
+    return details.checklists.flatMap((checklist) =>
+      checklist.questions.filter((question) => checklist.display?.showUnanswered !== false || questionAnswerText(question, details).trim()).map((question) => ({
         date: order.date,
         orderCode: order.code,
         client,
         technician: order.technician,
         questionnaire: checklist.title,
         question: question.label,
-        answer: Array.isArray(question.answer)
-          ? question.answer.join("; ")
-          : question.answer,
+        answer: questionAnswerText(question, details),
         required: question.required,
+        equipment: data.equipment.find((item) => item.id === checklist.equipmentId)?.name ?? "",
+        templateRevision: checklist.templateRevision ? String(checklist.templateRevision) : "",
       })),
     );
   });

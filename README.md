@@ -31,6 +31,7 @@ npm --prefix app run build
 - Clientes: cadastro e edicao; ao informar um CNPJ valido, consulta automatica dos dados publicos disponiveis (nome, telefone, e-mail e endereco). CPF recebe validacao de digitos; consulta de dados pessoais exige um provedor autorizado e nao e feita por uma API publica aberta.
 - Equipamentos: cadastro e edicao com associacoes validadas.
 - OS: cadastro, edicao, agendamento, prioridade, tecnico, status, relato e historico.
+- Questionarios: catalogo reutilizavel/versionado, padrao por tipo de tarefa, perguntas e respostas independentes por OS, fotos e assinaturas por pergunta.
 - Na criacao/edicao de OS, o campo Cliente oferece sugestoes enquanto voce digita partes do nome, CPF ou CNPJ, ignorando acentos e pontuacao. Selecione por clique ou com setas e Enter; somente um cliente cadastrado selecionado pode ser salvo, e os equipamentos acompanham o cliente escolhido.
 - Conflitos de horario do mesmo tecnico bloqueados no formulario de OS.
 - Produtos e servicos: cadastro, edicao, precos, custos e alerta de estoque minimo.
@@ -77,6 +78,25 @@ Esta e uma versao local de validacao, nao um sistema pronto para producao.
 Os dados ficam no `localStorage` do navegador, na chave `alpha-tec.database.v1`. Nao ha servidor, conta de usuario, sincronizacao entre dispositivos, criptografia ou backup remoto. Limpar os dados do navegador pode apagar os registros. Portas, navegadores e origens diferentes possuem bases diferentes. Use apenas dados ficticios nesta etapa e exporte backups antes de testar substituicoes da base.
 
 Os relatorios de satisfacao nao possuem respostas ate existir um fluxo de convite e resposta. Monitoramento GPS, bateria e conectividade nao e coletado. A tela nao cria esses dados ficticiamente. A Central de downloads gera CSV local, sem fila de processamento no servidor.
+
+## Questionarios reutilizaveis
+
+1. Abra **Cadastros > Questionarios > Novo questionario**. Informe titulo, cabecalho/rodape em texto simples e de 1 a 200 perguntas. Cada pergunta possui enunciado, descricao, tipo e obrigatoriedade.
+2. Tipos: Texto, Area de texto, Numero, Escolha, Multipla escolha, Check, Data, Hora, Monetaria, CPF/CNPJ, Foto e Assinatura. Escolhas exigem pelo menos duas opcoes distintas, uma por linha. Perguntas podem ser reordenadas, duplicadas e excluidas.
+3. Configure apresentacao na OS: visibilidade, 1 a 4 perguntas por linha, pergunta/resposta na mesma linha, perguntas sem resposta e habilitacao de resposta por equipamento. Cabecalhos e rodapes nao aceitam HTML; nao ha Central do Cliente nesta versao.
+4. No catalogo, defina o questionario padrao e a obrigatoriedade para cada tipo de tarefa. Na **Nova OS**, selecionar o tipo preenche o modelo, permitindo substitui-lo. OS criadas por conversao de orcamento tambem recebem o padrao de Corretiva.
+5. Em **Mais informacoes > Editar informacoes > Questionarios**, adicione outros modelos, inclusive instancias para equipamentos associados. Perguntas avulsas continuam disponiveis. Editar dados basicos da OS preserva as respostas existentes; selecionar um modelo nessa edicao adiciona uma nova instancia, sem substituir as antigas.
+6. O tecnico preenche as perguntas em **Relatorio**, salva e sincroniza antes de registrar atividades. Cada pergunta de assinatura nova coleta seu proprio desenho e nome; a assinatura geral da OS nao responde automaticamente a essas perguntas. Fotos sao vinculadas individualmente a perguntas.
+
+Cada vinculo armazena uma copia do modelo e de sua versao dentro da tarefa. Edicao, duplicacao, arquivamento ou restauracao do catalogo nao altera tarefas existentes. Arquivar remove o modelo dos padroes por tipo, mantendo a obrigatoriedade e o historico; a tarefa pode receber outro modelo. Replica de OS limpa respostas, fotos e assinaturas, preservando a estrutura. Backup JSON inclui catalogo e padroes; backups antigos sem esses campos continuam abrindo. Assinaturas de questionarios legados preservam o vinculo anterior com a assinatura geral.
+
+Respostas numericas, datas, horas, CPF/CNPJ, opcoes, referencias de fotos e assinaturas sao validadas. Salvar rascunhos incompletos e permitido; perguntas obrigatorias geram pendencias. O check-out e bloqueado enquanto houver pendencias. Novas tarefas com configuracao de questionario tambem bloqueiam finalizacao manual com pendencias; a regra antiga de finalizacao administrativa de tarefas legadas e preservada.
+
+A opcao de carimbo na foto exige GPS no momento do upload e grava coordenadas, precisao, data/hora da captura no desenho da imagem. Nao permite substituir a resposta por um anexo sem passar pelo preparo da foto. Trata-se de localizacao informada pelo dispositivo no momento do upload, nao de certificacao de presenca ou da data original da fotografia. Os limites de 500 KB por anexo e 5 MB por empresa continuam aplicando-se.
+
+Relatorios/CSV identificam equipamento e versao do modelo, mostram nome do arquivo de foto e assinante em vez de IDs internos. A impressao da OS inclui cabecalho, rodape, fotos e assinaturas por pergunta, respeitando a apresentacao copiada para a tarefa.
+
+**Publicacao:** aplique `supabase/migrations/20261010010000_questionnaires.sql` antes de publicar o frontend atualizado. A RPC valida as respostas e impede o tecnico de modificar a estrutura definida pelo gestor; horarios de assinaturas novas sao definidos pelo servidor. O catalogo completo nao e projetado para o tecnico, somente os questionarios das tarefas atribuidas. A migracao nao copia modelos ou dados do Auvo.
 
 ## Fundacao de nuvem
 
@@ -143,10 +163,11 @@ No editor do dashboard, publique `handler.ts` e `index.ts` da pasta `supabase/fu
 
 ### Recursos
 
-- Dashboard, agenda, tarefas de hoje, atrasadas, em execucao e finalizadas.
+- Dashboard com atalhos que filtram a agenda: tarefas de hoje, atrasadas (dias anteriores ainda nao finalizadas) e em execucao (atendimentos iniciados e pausados, independentemente da data). Sem atalho separado de concluidas.
+- Inicio e agenda abrem somente com tarefas do dia atual. Na agenda por dia, use Dia anterior, Proximo dia e Hoje para consultar datas passadas e retornar ao dia atual; nao ha navegacao para datas futuras. Tarefas finalizadas continuam consultaveis na data agendada, mas nao aparecem em atrasadas ou em execucao.
 - Detalhes do cliente, telefone, orientacoes, data, prioridade, equipamentos, tags, valores da OS e orcamentos associados.
 - Navegacao por deep link no Google Maps ou Waze instalado, com fallback para a rota HTTPS no navegador; endereco ausente impede abrir a rota.
-- Check-in/check-out solicitam localizacao apenas naquele momento. Pausas exigem motivo; retorno retoma a contagem. Nao ha permissao de localizacao em segundo plano ou rastreamento continuo.
+- Check-in inicia a tarefa (Em atendimento) e check-out a finaliza (Finalizada), com confirmacao do servidor; ambos solicitam localizacao apenas naquele momento. Pausas exigem motivo; retorno retoma a contagem antes do check-out. Nao ha permissao de localizacao em segundo plano ou rastreamento continuo.
 - Horario de registro definido pelo servidor; coordenadas e precisao associadas ao evento. O GPS fornecido pelo dispositivo nao certifica presenca fisica e pode sofrer imprecisao.
 - Cronometro calculado a partir dos eventos persistidos, excluindo pausas; continua correto ao reabrir o app e nao cresce apos o check-out.
 - Relato, km, respostas dos questionarios definidos no painel, resolucao de pendencias, fotos/anexos e assinatura desenhada. Pendencias e respostas obrigatorias bloqueiam o check-out.
