@@ -35,6 +35,7 @@ await db.exec(migration);
 await db.exec(await readFile(new URL("../../supabase/migrations/20261009020000_technician_link_validation.sql", import.meta.url), "utf8"));
 await db.exec(await readFile(new URL("../../supabase/migrations/20261010010000_questionnaires.sql", import.meta.url), "utf8"));
 await db.exec(await readFile(new URL("../../supabase/migrations/20261011010000_questionnaire_checkout_requirement.sql", import.meta.url), "utf8"));
+await db.exec(await readFile(new URL("../../supabase/migrations/20261011020000_yes_no_question_justification.sql", import.meta.url), "utf8"));
 await db.query("insert into auth.users values ($1,'admin@example.test'),($2,'tecnico@example.test')", [ownerId, userId]);
 await db.query("insert into public.companies(id,name,created_by) values ($1,'Alpha Tec Teste',$2)", [companyId, ownerId]);
 await db.query("insert into public.company_memberships(user_id,company_id,role,display_name) values ($1,$3,'owner','Admin'),($2,$3,'technician','Técnico Teste')", [ownerId, userId, companyId]);
@@ -82,6 +83,20 @@ payload.orders[2] = {
   ...payload.orders[2], technicianUserId: userId, status: "Aberta", date: localDay(),
   title: "Relatório padrão sem questionário",
   details: { ...getOrderDetails(payload.orders[2]), activities: [], pending: [], checklists: [], questionnaireRequired: false },
+};
+payload.orders[3] = {
+  ...payload.orders[3], technicianUserId: userId, status: "Aberta", date: localDay(),
+  title: "Sim ou Não com justificativa",
+  details: {
+    ...getOrderDetails(payload.orders[3]), activities: [], pending: [], questionnaireRequired: false,
+    checklists: [{
+      id: "yes-no", title: "Verificação Sim ou Não", equipmentId: "", requiredForCheckout: true,
+      questions: [
+        { id: "motor", label: "Motor funcionando?", kind: "Sim ou Não", required: true, options: [], answer: "", justificationOn: "Nao", justification: "", justificationPhotoId: "" },
+        { id: "adjustment", label: "Foi necessário ajuste?", kind: "Sim ou Não", required: true, options: [], answer: "", justificationOn: "Sim", justification: "", justificationPhotoId: "" },
+      ],
+    }],
+  },
 };
 await db.query("insert into public.company_data(company_id,payload) values ($1,$2)", [companyId, JSON.stringify(validateDatabase(payload))]);
 await db.query("select set_config('request.jwt.claim.sub',$1,false)", [userId]);

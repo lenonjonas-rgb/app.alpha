@@ -2,7 +2,7 @@ import { z } from "zod";
 import type { CompanyRegistration } from "./cnpj";
 import { isValidCnpj, normalizeCnpj } from "./cnpj";
 import { isValidCpf } from "./cpf";
-import { orderTypeQuestionnaireSchema, questionnaireDisplaySchema, questionnaireTemplateSchema, questionDefinitionSchema, signatureSchema } from "./questionnaireSchema";
+import { orderTypeQuestionnaireSchema, questionnaireDisplaySchema, questionnaireTemplateSchema, questionDefinitionSchema, requiresJustification, signatureSchema } from "./questionnaireSchema";
 import type { QuestionnaireTemplate } from "./questionnaireSchema";
 export type { QuestionnaireTemplate, QuestionDefinition } from "./questionnaireSchema";
 
@@ -77,6 +77,8 @@ export const attachmentSchema = z
     "Arquivo invalido.",
   );
 const questionSchema = questionDefinitionSchema.extend({
+  justification: z.string().max(10000).optional(),
+  justificationPhotoId: z.string().optional(),
   signature: signatureSchema.nullable().optional(),
   answer: z
     .union([z.string().max(10000), z.array(z.string().max(1000))])
@@ -256,6 +258,7 @@ export function instantiateQuestionnaire(template: QuestionnaireTemplate, equipm
       ...question, options: [...question.options],
       answer: question.kind === "Multipla escolha" ? [] : "",
       ...(question.kind === "Assinatura" ? { signature: null } : {}),
+      ...(question.kind === "Sim ou Não" ? { justification: "", justificationPhotoId: "" } : {}),
     })),
   };
 }
@@ -271,6 +274,10 @@ export function validateQuestionDefinitions(questions: z.infer<typeof questionDe
   if (new Set(questions.map((question) => question.id)).size !== questions.length)
     throw new Error("Identificadores duplicados nas perguntas.");
   for (const question of questions) {
+    if (question.kind === "Sim ou Não" && !question.justificationOn)
+      throw new Error("Selecione a resposta que exige justificativa.");
+    if (question.kind !== "Sim ou Não" && question.justificationOn)
+      throw new Error("Justificativa condicional em tipo de pergunta invalido.");
     if (requireOptions && ["Escolha", "Multipla escolha"].includes(question.kind) &&
       (question.options.length < 2 || new Set(question.options).size !== question.options.length))
       throw new Error("Cadastre opcoes distintas para a pergunta de escolha.");
@@ -295,16 +302,17 @@ export const orderPending = (order: Order) => {
       checklist.questions
         .filter(
           (question) =>
-            question.required &&
+            (question.required &&
             (question.kind === "Assinatura"
               ? !(question.signature === undefined ? details.signature : question.signature)
               : Array.isArray(question.answer)
                 ? !question.answer.length
-                : !question.answer.trim()),
+                : !question.answer.trim())) ||
+            (requiresJustification(question) && !question.justification?.trim()),
         )
         .map((question) => ({
           id: `${checklist.id}:${question.id}`,
-          title: question.label,
+          title: requiresJustification(question) && !question.justification?.trim() ? `${question.label} · Justificativa` : question.label,
           source: checklist.title,
         })),
     ),
@@ -420,12 +428,18 @@ export function validateOrderDetails(order: Order, data: Database) {
         throw new Error("Resposta de multipla escolha deve ser uma lista.");
       if (question.kind !== "Assinatura" && question.signature)
         throw new Error("Assinatura em pergunta de outro tipo.");
+      if (!requiresJustification(question) && (question.justification?.trim() || question.justificationPhotoId))
+        throw new Error("Justificativa sem resposta correspondente.");
+      if (question.justificationPhotoId && !details.attachments.some((file) => file.id === question.justificationPhotoId && file.mime.startsWith("image/")))
+        throw new Error("Foto de justificativa nao encontrada.");
       const answer = typeof question.answer === "string" ? question.answer.trim() : "";
       if (answer && ["Numero", "Monetaria"].includes(question.kind) &&
         (!/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/.test(answer) || !Number.isFinite(Number(answer))))
         throw new Error("Resposta numerica invalida.");
       if (answer && question.kind === "Check" && !["Sim", "Nao", "Não"].includes(answer))
         throw new Error("Resposta de check invalida.");
+      if (answer && question.kind === "Sim ou Não" && !["Sim", "Nao"].includes(answer))
+        throw new Error("Resposta de sim ou nao invalida.");
       if (answer && question.kind === "Data" && !day.safeParse(answer).success)
         throw new Error("Data de resposta invalida.");
       if (answer && question.kind === "Hora" && !/^([01]\d|2[0-3]):[0-5]\d$/.test(answer))
@@ -552,6 +566,7 @@ export function replicateOrder(
       questions: checklist.questions.map((question) => ({
         ...question,
         ...(question.signature !== undefined ? { signature: null } : {}),
+        ...(question.kind === "Sim ou Não" ? { justification: "", justificationPhotoId: "" } : {}),
         id: makeId(),
         answer: "",
       })),

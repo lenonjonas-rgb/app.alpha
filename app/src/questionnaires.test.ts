@@ -7,6 +7,7 @@ import type { Database, Order, QuestionnaireTemplate } from "./domain";
 import { archiveQuestionnaire, saveQuestionnaire } from "./questionnaires";
 import { questionnaireDisplaySchema } from "./questionnaireSchema";
 import { questionnaireRows } from "./reporting";
+import { questionAnswerText, withQuestionAnswer } from "./questionnaireAnswers";
 
 function template(): QuestionnaireTemplate {
   return {
@@ -94,6 +95,8 @@ describe("catálogo e snapshots de questionários", () => {
     expect(() => saveQuestionnaire(data, { ...template(), questions: [template().questions[0], template().questions[0]] })).toThrow("duplicados");
     expect(() => saveQuestionnaire(data, { ...template(), questions: [{ ...template().questions[1], options: ["Motor", "Motor"] }] })).toThrow("distintas");
     expect(() => validateDatabase({ ...data, orderTypeQuestionnaires: [{ type: "Corretiva", questionnaireId: "missing", required: false }] })).toThrow("indisponivel");
+    expect(() => saveQuestionnaire(data, { ...template(), questions: [{ ...template().questions[0], kind: "Sim ou Não" }] })).toThrow("justificativa");
+    expect(() => saveQuestionnaire(data, { ...template(), questions: [{ ...template().questions[0], justificationOn: "Sim" }] })).toThrow("tipo");
   });
   it("respeita habilitação e associação de equipamento", () => {
     const model = template();
@@ -179,6 +182,57 @@ describe("catálogo e snapshots de questionários", () => {
     expect(rows.find((row) => row.question === "Assinatura do técnico")?.answer).toContain("Técnico");
     order.details.checklists[0].display!.showUnanswered = false;
     expect(questionnaireRows(data, [order])).toHaveLength(2);
+  });
+  it.each(["Sim", "Nao"] as const)("exige texto somente na resposta %s e permite rascunho sem foto", (justificationOn) => {
+    const data = demoDatabase();
+    const model = { ...template(), questions: [{ ...template().questions[0], kind: "Sim ou Não" as const, required: false, justificationOn }] };
+    const checklist = instantiateQuestionnaire(model);
+    const order = { ...data.orders[0], details: { ...getOrderDetails(data.orders[0]), checklists: [checklist] } };
+    const q = checklist.questions[0];
+    expect(orderPending(order)).toEqual([]);
+    q.answer = justificationOn;
+    expect(orderPending(order)[0].title).toContain("Justificativa");
+    q.justification = "   ";
+    expect(orderPending(order)).toHaveLength(1);
+    expect(() => validateOrderDetails(order, data)).not.toThrow();
+    q.justification = "Ajuste necessário";
+    expect(orderPending(order)).toEqual([]);
+    expect(() => validateOrderDetails(order, data)).not.toThrow();
+    q.answer = justificationOn === "Sim" ? "Nao" : "Sim";
+    expect(() => validateOrderDetails(order, data)).toThrow("sem resposta");
+    checklist.questions[0] = withQuestionAnswer(q, q.answer);
+    expect(checklist.questions[0]).toMatchObject({ justification: "", justificationPhotoId: "" });
+    expect(orderPending(order)).toEqual([]);
+  });
+  it("valida foto opcional, reporta justificativa e limpa execução ao replicar", () => {
+    const { data, order } = fixture();
+    order.details.checklists = [instantiateQuestionnaire({ ...template(), questions: [{
+      ...template().questions[0], kind: "Sim ou Não", justificationOn: "Nao",
+    }] })];
+    const q = order.details.checklists[0].questions[0];
+    q.answer = "Nao"; q.justification = "Motor parado."; q.justificationPhotoId = "photo";
+    expect(() => validateOrderDetails(order, data)).toThrow("Foto de justificativa");
+    order.details.attachments = [{ id: "photo", name: "motor.png", mime: "image/png", size: 3, data: "data:image/png;base64,YWJj", at: signature.at }];
+    expect(() => validateOrderDetails(order, data)).not.toThrow();
+    expect(questionAnswerText(q, order.details)).toBe("Não · Justificativa: Motor parado. · Foto: motor.png");
+    expect(questionnaireRows(data, [order])[0].answer).toContain("Motor parado.");
+    const replicated = getOrderDetails(replicateOrder(data, order.id, "2026-10-20", "09:00").orders.at(-1)!);
+    expect(replicated.checklists[0].questions[0]).toMatchObject({ answer: "", justification: "", justificationPhotoId: "", justificationOn: "Nao" });
+    order.details.attachments[0].mime = "text/plain";
+    order.details.attachments[0].data = "data:text/plain;base64,YWJj";
+    expect(() => validateOrderDetails(order, data)).toThrow("Foto de justificativa");
+  });
+  it("questionário opcional não exige justificativa no checkout, mas mantém validação das respostas", () => {
+    const { data, order } = fixture();
+    order.details.checklists = [instantiateQuestionnaire({ ...template(), requiredForCheckout: false, questions: [{
+      ...template().questions[0], kind: "Sim ou Não", justificationOn: "Sim",
+    }] })];
+    const q = order.details.checklists[0].questions[0];
+    q.answer = "Sim";
+    expect(orderPending(order)).toEqual([]);
+    expect(changeOrderStatus(data, order.id, "Finalizada").orders[0].status).toBe("Finalizada");
+    q.answer = "Talvez";
+    expect(() => validateOrderDetails(order, data)).toThrow("sim ou nao");
   });
   it.each([
     ["Numero", "abc"], ["Numero", "0x10"], ["Monetaria", "Infinity"], ["Data", "2026-02-31"], ["Hora", "25:00"], ["Check", "talvez"], ["CPF/CNPJ", "123"], ["Foto", "missing"],

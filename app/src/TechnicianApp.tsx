@@ -14,6 +14,8 @@ import "./TechnicianApp.css";
 import { loginEmail } from "./userAccess";
 import { PasswordSettings } from "./PasswordSettings";
 import { prepareQuestionnairePhoto } from "./questionnairePhoto";
+import { requiresJustification } from "./questionnaireSchema";
+import { withQuestionAnswer } from "./questionnaireAnswers";
 
 export default function TechnicianApp() {
   const [session, setSession] = useState<Session | null>(null);
@@ -266,7 +268,7 @@ function Task({ order, snapshot, busy, mutate, onDraftChange, onWorkingChange }:
       setError(`Não foi possível confirmar o registro: ${errorMessage(cause)}${kind === "Check-in" || kind === "Check-out" ? " Verifique a permissão de localização e a conexão; sincronize antes de tentar novamente." : ""}`);
     } finally { setLocating(false); onWorkingChange(false); }
   }
-  async function files(input: HTMLInputElement, target?: { checklistId: string; questionId: string; photoMetadata?: boolean }) {
+  async function files(input: HTMLInputElement, target?: { checklistId: string; questionId: string; photoMetadata?: boolean; justificationPhoto?: boolean }) {
     setError("");
     setPreparingFile(true);
     onWorkingChange(true);
@@ -277,7 +279,7 @@ function Task({ order, snapshot, busy, mutate, onDraftChange, onWorkingChange }:
       const details = orderDetailsSchema.parse({
         ...draft, attachments: [...draft.attachments, attachment],
         ...(target ? { checklists: draft.checklists.map((list) => list.id === target.checklistId ? {
-          ...list, questions: list.questions.map((question) => question.id === target.questionId ? { ...question, answer: attachment.id } : question),
+          ...list, questions: list.questions.map((question) => question.id === target.questionId ? target.justificationPhoto ? { ...question, justificationPhotoId: attachment.id } : { ...question, answer: attachment.id } : question),
         } : list) } : {}),
       });
       setDraft(details);
@@ -288,7 +290,14 @@ function Task({ order, snapshot, busy, mutate, onDraftChange, onWorkingChange }:
   function answer(checklistId: string, questionId: string, value: string | string[]) {
     setDraft((details) => ({
       ...details, checklists: details.checklists.map((list) => list.id === checklistId ? {
-        ...list, questions: list.questions.map((question) => question.id === questionId ? { ...question, answer: value } : question),
+        ...list, questions: list.questions.map((question) => question.id === questionId ? withQuestionAnswer(question, value) : question),
+      } : list),
+    }));
+  }
+  function justification(checklistId: string, questionId: string, change: { justification?: string; justificationPhotoId?: string }) {
+    setDraft((details) => ({
+      ...details, checklists: details.checklists.map((list) => list.id === checklistId ? {
+        ...list, questions: list.questions.map((question) => question.id === questionId ? { ...question, ...change } : question),
       } : list),
     }));
   }
@@ -303,7 +312,11 @@ function Task({ order, snapshot, busy, mutate, onDraftChange, onWorkingChange }:
     setDraft((details) => ({
       ...details, attachments: details.attachments.filter((file) => file.id !== id),
       checklists: details.checklists.map((list) => ({
-        ...list, questions: list.questions.map((question) => question.kind === "Foto" && question.answer === id ? { ...question, answer: "" } : question),
+        ...list, questions: list.questions.map((question) => ({
+          ...question,
+          ...(question.kind === "Foto" && question.answer === id ? { answer: "" } : {}),
+          ...(question.justificationPhotoId === id ? { justificationPhotoId: "" } : {}),
+        })),
       })),
     }));
   }
@@ -351,7 +364,7 @@ function Task({ order, snapshot, busy, mutate, onDraftChange, onWorkingChange }:
           {list.equipmentId && <p>Equipamento: {snapshot.payload.equipment.find((item) => item.id === list.equipmentId)?.name ?? list.equipmentId} · {snapshot.payload.equipment.find((item) => item.id === list.equipmentId)?.serial}</p>}
           {list.questions.map((question) => {
             const signature = question.signature === undefined ? draft.signature : question.signature;
-            const photo = question.kind === "Foto" ? draft.attachments.find((file) => file.id === question.answer) : undefined;
+            const photo = draft.attachments.find((file) => file.id === (question.kind === "Foto" ? question.answer : question.justificationPhotoId));
             return <details key={question.id} className="tech-question"><summary id={`question-title-${list.id}-${question.id}`}>{question.label}{question.required ? " *" : ""}</summary>
           {question.description && <p className="tech-preserve tech-question-description">{question.description}</p>}
           {question.kind === "Assinatura" ? <div>
@@ -365,6 +378,16 @@ function Task({ order, snapshot, busy, mutate, onDraftChange, onWorkingChange }:
             <label className="tech-upload">Capturar foto<input id={`question-${list.id}-${question.id}`} type="file" accept="image/png,image/jpeg,image/webp" capture="environment" onChange={(event) => void files(event.currentTarget, { checklistId: list.id, questionId: question.id, photoMetadata: question.photoMetadata })} /></label>
             {!question.photoMetadata && <select aria-label={`Foto de ${question.label}`} value={String(question.answer)} onChange={(event) => answer(list.id, question.id, event.target.value)}><option value="">Selecione uma foto adicionada</option>{draft.attachments.filter((file) => file.mime.startsWith("image/")).map((file) => <option key={file.id} value={file.id}>{file.name}</option>)}</select>}
             {photo && <><img className="tech-question-photo" src={photo.data} alt={question.label} /><button onClick={() => answer(list.id, question.id, "")}>Remover resposta de foto</button></>}
+          </div> :
+          question.kind === "Sim ou Não" ? <div>
+            <select aria-labelledby={`question-title-${list.id}-${question.id}`} value={String(question.answer)} onChange={(event) => answer(list.id, question.id, event.target.value)}><option value="">Selecione</option><option value="Sim">Sim</option><option value="Nao">Não</option></select>
+            {requiresJustification(question) && <div>
+              <label>Justificativa de {question.label} *<textarea rows={3} maxLength={10000} value={question.justification ?? ""} onChange={(event) => justification(list.id, question.id, { justification: event.target.value })} /></label>
+              <small>Justificativa obrigatória. Foto opcional.</small>
+              <label className="tech-upload">Tirar foto para {question.label}<input type="file" accept="image/png,image/jpeg,image/webp" capture="environment" onChange={(event) => void files(event.currentTarget, { checklistId: list.id, questionId: question.id, justificationPhoto: true })} /></label>
+              <label className="tech-upload">Enviar imagem para {question.label}<input type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => void files(event.currentTarget, { checklistId: list.id, questionId: question.id, justificationPhoto: true })} /></label>
+              {photo && <><img className="tech-question-photo" src={photo.data} alt={`Foto da justificativa de ${question.label}`} /><button onClick={() => justification(list.id, question.id, { justificationPhotoId: "" })}>Remover foto da justificativa de {question.label}</button></>}
+            </div>}
           </div> :
           question.kind === "Multipla escolha" ? <div className="tech-options">{question.options.map((option) => <label key={option}><input type="checkbox" checked={Array.isArray(question.answer) && question.answer.includes(option)} onChange={(event) => answer(list.id, question.id, event.target.checked ? [...(Array.isArray(question.answer) ? question.answer : []), option] : (Array.isArray(question.answer) ? question.answer : []).filter((item) => item !== option))} />{option}</label>)}</div> :
           question.kind === "Escolha" || question.kind === "Check" ? <select id={`question-${list.id}-${question.id}`} aria-labelledby={`question-title-${list.id}-${question.id}`} value={String(question.answer)} onChange={(event) => answer(list.id, question.id, event.target.value)}><option value="">Selecione</option>{(question.kind === "Check" ? ["Sim", "Nao", ...(question.answer === "Não" ? ["Não"] : [])] : question.options).map((option) => <option key={option} value={option}>{option === "Nao" ? "Não" : option}</option>)}</select> :

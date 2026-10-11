@@ -634,6 +634,7 @@
   }
 }
 .questionnaire-text{white-space:pre-wrap;overflow-wrap:anywhere}.question-signature img{max-width:100%;width:240px;height:100px;object-fit:contain}
+.question-justification-photo{display:block;max-width:100%;max-height:300px;margin:12px 0;object-fit:contain}
 @media print {
   .print-question-grid{display:grid;gap:12px}.print-question-grid.columns-2{grid-template-columns:repeat(2,minmax(0,1fr))}.print-question-grid.columns-3{grid-template-columns:repeat(3,minmax(0,1fr))}.print-question-grid.columns-4{grid-template-columns:repeat(4,minmax(0,1fr))}.print-question{font-size:12px;break-inside:avoid;overflow-wrap:anywhere;white-space:pre-wrap}.print-question-grid:not(.inline-answers) .print-question>strong{display:block}.print-question img{display:block;max-width:100%;max-height:160px;object-fit:contain;margin:8px 0}
   .order-topbar,

@@ -40,7 +40,7 @@ beforeAll(async () => {
     grant usage on schema auth to anon,authenticated;
     grant execute on function auth.uid() to anon,authenticated;
   `);
-  for (const file of ["20261008010000_tenant_auth_and_company_data.sql", "20261009010000_android_technicians.sql", "20261009020000_technician_link_validation.sql", "20261010010000_questionnaires.sql", "20261011010000_questionnaire_checkout_requirement.sql"]) {
+  for (const file of ["20261008010000_tenant_auth_and_company_data.sql", "20261009010000_android_technicians.sql", "20261009020000_technician_link_validation.sql", "20261010010000_questionnaires.sql", "20261011010000_questionnaire_checkout_requirement.sql", "20261011020000_yes_no_question_justification.sql"]) {
     await db.exec(await readFile(new URL(`../../supabase/migrations/${file}`, import.meta.url), "utf8"));
   }
   await db.query("insert into auth.users values ($1,'owner@example.test'),($2,'tech@example.test'),($3,'other@example.test')", [owner, tech, other]);
@@ -226,6 +226,77 @@ describe("RPC Android e isolamento de dados", () => {
       const finished = (await snapshot()).payload.orders[0];
       expect(finished.status).toBe("Finalizada");
       expect(getOrderDetails(finished).checklists[0].questions[0].signature).toBeNull();
+    });
+
+    it.each(["Sim", "Nao"] as const)("exige justificativa na resposta %s, mas nunca exige foto", async (justificationOn) => {
+      const report = await questionnaireFixture([{
+        ...structuredClone(list), questions: [{
+          id: "yes-no", label: "Funcionando?", kind: "Sim ou Não", required: false, options: [],
+          justificationOn, answer: "", justification: "", justificationPhotoId: "",
+        }],
+      }]);
+      let current = await snapshot();
+      const altered = structuredClone(report);
+      altered.checklists[0].questions[0].justificationOn = justificationOn === "Sim" ? "Nao" : "Sim";
+      await expect(mutate("report", altered, current.revision)).rejects.toThrow("Estrutura");
+      report.checklists[0].questions[0].answer = justificationOn;
+      report.checklists[0].questions[0].justification = "   ";
+      await mutate("report", report, current.revision);
+      current = await snapshot();
+      await expect(mutate("Check-out", { location: gps }, current.revision)).rejects.toThrow("justificativa");
+      await expect(mutate("Check-out", { location: gps, justification: "Ignorar" }, current.revision)).rejects.toThrow("justificativa");
+      report.checklists[0].questions[0].justification = "Equipamento precisa de ajuste.";
+      await mutate("report", report, current.revision);
+      current = await snapshot();
+      expect(getOrderDetails(current.payload.orders[0]).checklists[0].questions[0].justification).toBe("Equipamento precisa de ajuste.");
+      await mutate("Check-out", { location: gps }, current.revision);
+      expect((await snapshot()).payload.orders[0].status).toBe("Finalizada");
+    });
+
+    it("aceita foto opcional e troca de resposta sem justificativa fora da condição", async () => {
+      const report = await questionnaireFixture([{
+        ...structuredClone(list), questions: [{
+          id: "yes-no", label: "Funcionando?", kind: "Sim ou Não", required: true, options: [],
+          justificationOn: "Nao", answer: "", justification: "", justificationPhotoId: "",
+        }],
+      }]);
+      let current = await snapshot();
+      const q = report.checklists[0].questions[0];
+      q.answer = "Nao"; q.justification = "Motor parado."; q.justificationPhotoId = "photo";
+      await expect(mutate("report", report, current.revision)).rejects.toThrow("Foto da justificativa");
+      report.attachments = [{ id: "photo", name: "foto.png", mime: "image/png", size: 3, data: "data:image/png;base64,YWJj", at: signature.at }];
+      await mutate("report", report, current.revision);
+      current = await snapshot();
+      expect(getOrderDetails(current.payload.orders[0]).checklists[0].questions[0].justificationPhotoId).toBe("photo");
+      q.answer = "Sim";
+      await expect(mutate("report", report, current.revision)).rejects.toThrow("sem resposta correspondente");
+      q.justification = ""; q.justificationPhotoId = "";
+      await mutate("report", report, current.revision);
+      current = await snapshot();
+      await mutate("Check-out", { location: gps }, current.revision);
+      expect((await snapshot()).payload.orders[0].status).toBe("Finalizada");
+    });
+
+    it("valida formatos da justificativa e preserva a regra de questionário opcional", async () => {
+      const report = await questionnaireFixture([{
+        ...structuredClone(list), requiredForCheckout: false, questions: [{
+          id: "yes-no", label: "Funcionando?", kind: "Sim ou Não", required: true, options: [],
+          justificationOn: "Sim", answer: "Sim", justification: "", justificationPhotoId: "",
+        }],
+      }], false);
+      let current = await snapshot();
+      for (const change of [
+        { answer: "Talvez" }, { justification: 42 }, { justification: "x".repeat(10001) },
+        { justificationPhotoId: 42 }, { justificationPhotoId: "missing" },
+      ]) {
+        const invalid = structuredClone(report);
+        Object.assign(invalid.checklists[0].questions[0], change);
+        await expect(mutate("report", invalid, current.revision)).rejects.toThrow();
+      }
+      await mutate("report", report, current.revision);
+      current = await snapshot();
+      await mutate("Check-out", { location: gps }, current.revision);
+      expect((await snapshot()).payload.orders[0].status).toBe("Finalizada");
     });
 
     it("valida tipos e conteúdo de respostas incluindo área de texto, número, data, hora, check, CPF/CNPJ e foto", async () => {

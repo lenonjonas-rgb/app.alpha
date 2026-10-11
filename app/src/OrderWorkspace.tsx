@@ -54,9 +54,9 @@ import { Badge, Empty, Modal } from "./components";
 import { EditorModal } from "./Forms";
 import type { Editor } from "./Forms";
 import { downloadFile, errorMessage } from "./useDatabase";
-import { questionKinds } from "./questionnaireSchema";
+import { questionDefinitionSchema, questionKinds, requiresJustification } from "./questionnaireSchema";
 import { prepareQuestionnairePhoto } from "./questionnairePhoto";
-import { questionAnswerText, questionSignature } from "./questionnaireAnswers";
+import { questionAnswerText, questionSignature, withQuestionAnswer } from "./questionnaireAnswers";
 import "./OrderWorkspace.css";
 
 const tabs = [
@@ -244,7 +244,7 @@ export function OrderWorkspace({
               ...checklist,
               questions: checklist.questions.map((question) =>
                 question.id === questionId
-                  ? { ...question, answer: value }
+                  ? withQuestionAnswer(question, value)
                   : question,
               ),
             }
@@ -254,7 +254,7 @@ export function OrderWorkspace({
   }
   async function upload(
     files: FileList | null,
-    question?: { checklistId: string; questionId: string },
+    question?: { checklistId: string; questionId: string; justificationPhoto?: boolean },
   ) {
     if (!files?.length) return;
     setBusy(true);
@@ -262,7 +262,7 @@ export function OrderWorkspace({
       const attachments = await Promise.all(
         Array.from(files).map((file) => {
           const definition = question ? draft.checklists.find((item) => item.id === question.checklistId)?.questions.find((item) => item.id === question.questionId) : undefined;
-          return definition ? prepareQuestionnairePhoto(file, definition.photoMetadata ?? false) : readAttachment(file);
+          return definition ? prepareQuestionnairePhoto(file, !question?.justificationPhoto && (definition.photoMetadata ?? false)) : readAttachment(file);
         }),
       );
       setDraft((previous) => ({
@@ -275,7 +275,7 @@ export function OrderWorkspace({
                     ...checklist,
                     questions: checklist.questions.map((item) =>
                       item.id === question.questionId
-                        ? { ...item, answer: attachments[0].id }
+                        ? question.justificationPhoto ? { ...item, justificationPhotoId: attachments[0].id } : { ...item, answer: attachments[0].id }
                         : item,
                     ),
                   }
@@ -297,9 +297,11 @@ export function OrderWorkspace({
       checklists: previous.checklists.map((checklist) => ({
         ...checklist,
         questions: checklist.questions.map((question) =>
-          question.kind === "Foto" && question.answer === id
-            ? { ...question, answer: "" }
-            : question,
+          ({
+            ...question,
+            ...(question.kind === "Foto" && question.answer === id ? { answer: "" } : {}),
+            ...(question.justificationPhotoId === id ? { justificationPhotoId: "" } : {}),
+          }),
         ),
       })),
     }));
@@ -1060,7 +1062,21 @@ export function OrderWorkspace({
                           )}
                         </div>
                         {question.description && <p className="questionnaire-text">{question.description}</p>}
-                        {question.kind === "Multipla escolha" ? (
+                        {question.kind === "Sim ou Não" ? <div>
+                          <select aria-label={question.label} disabled={!editing || busy} value={String(question.answer)} onChange={(event) => answer(checklist.id, question.id, event.target.value)}><option value="">Selecione</option><option value="Sim">Sim</option><option value="Nao">Não</option></select>
+                          {requiresJustification(question) && <div>
+                            <label className="field">Justificativa de {question.label} *<textarea disabled={!editing || busy} rows={3} maxLength={10000} value={question.justification ?? ""} onChange={(event) => patch({ checklists: details.checklists.map((item) => item.id === checklist.id ? { ...item, questions: item.questions.map((record) => record.id === question.id ? { ...record, justification: event.target.value } : record) } : item) })} /></label>
+                            <small>Justificativa obrigatória. Foto opcional.</small>
+                            {editing && <div className="row-actions">{[true, false].map((capture) => <label key={String(capture)} className="button secondary">
+                              {capture ? "Tirar foto" : "Enviar imagem"}
+                              <input className="file-input" aria-label={`${capture ? "Tirar foto" : "Enviar imagem"} para ${question.label}`} type="file" accept="image/png,image/jpeg,image/webp" capture={capture ? "environment" : undefined} disabled={busy} onChange={(event) => { void upload(event.target.files, { checklistId: checklist.id, questionId: question.id, justificationPhoto: true }); event.target.value = ""; }} />
+                            </label>)}</div>}
+                            {question.justificationPhotoId && <div>
+                              <img className="question-justification-photo" src={details.attachments.find((file) => file.id === question.justificationPhotoId)?.data} alt={`Foto da justificativa de ${question.label}`} />
+                              {editing && <button disabled={busy} className="text-button" onClick={() => patch({ checklists: details.checklists.map((item) => item.id === checklist.id ? { ...item, questions: item.questions.map((record) => record.id === question.id ? { ...record, justificationPhotoId: "" } : record) } : item) })}>Remover foto da justificativa</button>}
+                            </div>}
+                          </div>}
+                        </div> : question.kind === "Multipla escolha" ? (
                           <div className="question-options">
                             {question.options.map((option) => (
                               <label key={option}>
@@ -2147,6 +2163,7 @@ function QuestionEditor({
               answer: kind === "Multipla escolha" ? [] : "",
               description: String(form.get("description") ?? "").trim(),
               ...(kind === "Assinatura" ? { signature: null } : {}),
+              ...(kind === "Sim ou Não" ? { justificationOn: questionDefinitionSchema.shape.justificationOn.parse(form.get("justificationOn")), justification: "", justificationPhotoId: "" } : {}),
             },
             String(form.get("checklist") ?? ""),
           );
@@ -2177,7 +2194,7 @@ function QuestionEditor({
             Tipo de resposta
             <select
               value={kind}
-              onChange={(event) => setKind(event.target.value as typeof kind)}
+              onChange={(event) => setKind(questionDefinitionSchema.shape.kind.parse(event.target.value))}
             >
               {questionKinds.map((value) => (
                 <option key={value}>{value}</option>
@@ -2194,6 +2211,7 @@ function QuestionEditor({
               <textarea name="options" rows={4} maxLength={3000} required />
             </label>
           )}
+          {kind === "Sim ou Não" && <label className="field full">Exigir justificativa quando responder<select name="justificationOn" defaultValue="Nao"><option value="Sim">Sim</option><option value="Nao">Não</option></select><small>Texto obrigatório para a resposta selecionada. Foto opcional.</small></label>}
         </div>
         <footer className="modal-footer">
           <button className="button primary">
@@ -2371,7 +2389,7 @@ function OrderPrintable({
             <div className={`print-question-grid columns-${checklist.display?.columns ?? 1} ${checklist.display?.inlineAnswers ? "inline-answers" : ""}`}>
               {checklist.questions.filter((question) => checklist.display?.showUnanswered !== false || questionAnswerText(question, details).trim()).map((question) => {
                 const signature = question.kind === "Assinatura" ? questionSignature(question, details) : null;
-                const photo = question.kind === "Foto" ? details.attachments.find((item) => item.id === question.answer) : undefined;
+                const photo = details.attachments.find((item) => item.id === (question.kind === "Foto" ? question.answer : requiresJustification(question) ? question.justificationPhotoId : undefined));
                 return <div className="print-question" key={question.id}>
                   <strong>{question.label}{question.required ? " *" : ""}: </strong>
                   <span>{questionAnswerText(question, details) || "Não respondida"}</span>
