@@ -321,28 +321,17 @@ export function OrderWorkspace({
     }
   }
   function exportDocument() {
-    const text = [
-      data.settings.company,
-      order.code,
-      order.title,
-      client.name,
-      `Endereço de atendimento: ${orderServiceAddress(order, client)}`,
-      `Responsável: ${details.responsibleName || "Não informado"} · Telefone: ${details.responsiblePhone || "Não informado"}`,
-      `${displayDate(order.date)} ${order.time}`,
-      `Técnico: ${order.technician}`,
-      `Orientações: ${order.notes}`,
-      `Relato: ${details.report}`,
-      ...data.equipment.filter((item) => item.clientId === order.clientId && linkedEquipment.includes(item.id)).map((item) => `Equipamento: ${item.name} · ${item.assetCode ?? item.serial}`),
-      ...details.equipmentModels.map((item) => `${item.quantity} x ${item.brand}${item.line ? ` · ${item.line}` : ""} · ${item.name} · ${item.purpose}`),
-      ...details.items.map(
-        (item) => `${item.quantity} x ${item.name}: ${currency(item.price)}`,
-      ),
-      `Total: ${currency(values.total)}`,
-      `Pendências: ${pending.length}`,
-      details.signature
-        ? `Assinado localmente por ${details.signature.signer}`
-        : "Sem assinatura",
-    ].join("\n");
+    const report = document.querySelector(".order-page .order-print-only");
+    if (!report) {
+      setError("Não foi possível preparar o relatório. Reabra a tarefa e tente novamente.");
+      return;
+    }
+    const content = document.createElement("div");
+    content.append(report.cloneNode(true));
+    content.querySelector(".report-watermark")?.remove();
+    content.querySelectorAll("h1, h2, h3, p, section, tr, .print-question").forEach((element) => element.append("\n"));
+    content.querySelectorAll("td, th").forEach((element) => element.append("\t"));
+    const text = (content.textContent ?? "").replace(/\n{3,}/g, "\n\n").trim();
     downloadFile(`${order.code}.txt`, text, "text/plain;charset=utf-8");
     act(
       (current) =>
@@ -2342,14 +2331,16 @@ function ActivityEditor({
   );
 }
 
-function OrderPrintable({
+export function OrderPrintable({
   order,
   data,
   details,
+  preview = false,
 }: {
   order: Order;
   data: Database;
   details: OrderDetails;
+  preview?: boolean;
 }) {
   const client = data.clients.find((item) => item.id === order.clientId)!;
   const values = orderValues(details);
@@ -2359,37 +2350,71 @@ function OrderPrintable({
   const equipment = data.equipment.filter((item) =>
     equipmentIds.includes(item.id),
   );
+  const config = data.settings.reportSettings;
+  const show = config.sections;
+  const taskRows = [
+    ...(show.client ? [
+      ["Cliente", client.name],
+      ["CPF/CNPJ", client.document || "Não informado"],
+      ["Endereço de atendimento", orderServiceAddress(order, client)],
+      ["Endereço cadastrado", client.address],
+      ["Responsável pelo atendimento", `${details.responsibleName || "Não informado"} · Telefone: ${details.responsiblePhone || "Não informado"}`],
+      ["Contato do cliente", `${client.phone} ${client.email}`.trim() || "Não informado"],
+    ] : []),
+    ...(show.schedule ? [
+      ["Agendamento", `${displayDate(order.date)} às ${order.time} · ${order.duration} minutos`],
+      ["Técnico", order.technician],
+      ["Tipo / prioridade", `${order.type} · ${order.priority}`],
+      ["Código externo", details.externalCode || "—"],
+      ["Km informado", String(details.distanceKm)],
+    ] : []),
+  ];
+  const checklists = details.checklists.filter((item) => item.display?.showOnOrder !== false);
+  if (config.questionnaireOrder !== "task") checklists.sort((a, b) => {
+    const equipmentLabel = (id: string) => {
+      const item = data.equipment.find((unit) => unit.id === id);
+      return item?.assetCode ?? item?.serial ?? "";
+    };
+    const first = config.questionnaireOrder === "name" ? a.title : equipmentLabel(a.equipmentId);
+    const second = config.questionnaireOrder === "name" ? b.title : equipmentLabel(b.equipmentId);
+    return first.localeCompare(second, "pt-BR", { numeric: true }) || a.title.localeCompare(b.title, "pt-BR");
+  });
   return (
-    <article className="order-print-only">
+    <article className={`${preview ? "order-report-preview" : "order-print-only"} order-report layout-${config.layout} font-${config.fontSize}`}>
+      {config.layout === "watermark" && show.company && <div className="report-watermark" aria-hidden="true">
+        {data.settings.logo ? <img src={data.settings.logo} alt="" /> : <span>{data.settings.company}</span>}
+      </div>}
       <header className="print-brand">
-        {data.settings.logo && (
+        {show.company && data.settings.logo && (
           <img src={data.settings.logo} alt={data.settings.company} />
         )}
         <div>
-          <h2>{data.settings.company}</h2>
+          <h1>{config.title}</h1>
+          {show.company && <><h2>{data.settings.company}</h2><p>{[
+            data.settings.cnpj && `CNPJ: ${data.settings.cnpj}`, data.settings.address,
+            data.settings.phone, data.settings.email,
+          ].filter(Boolean).join(" · ")}</p></>}
           <p>
-            {order.code} · {order.status}
-            {pending.length ? " com pendências" : ""}
+            {order.code} · {order.title} · {order.status}
+            {show.pending && pending.length ? " com pendências" : ""}
           </p>
         </div>
       </header>
+      {(show.client || show.schedule) && <section>
       <h2>Dados da tarefa</h2>
-      <p>
-        {[
-          client.name,
-          `Endereço de atendimento: ${orderServiceAddress(order, client)}`,
-          `Endereço cadastrado: ${client.address}`,
-          `Responsável: ${details.responsibleName || "Não informado"} · Telefone: ${details.responsiblePhone || "Não informado"}`,
-          `${client.phone} ${client.email}`,
-          `${displayDate(order.date)} às ${order.time} · ${order.technician}`,
-          `${order.type} · Prioridade ${order.priority}`,
-          `Código externo: ${details.externalCode || "—"} · Km informado: ${details.distanceKm}`,
-        ].join("\n")}
-      </p>
+      {config.layout === "classic" ? <table className="report-task-table"><tbody>
+        {taskRows.map(([label, value]) => <tr key={label}><th scope="row">{label}</th><td>{value || "Não informado"}</td></tr>)}
+      </tbody></table> : <p>{taskRows.map(([label, value]) => `${label}: ${value || "Não informado"}`).join("\n")}</p>}
+      </section>}
+      {show.instructions && <section>
       <h2>Orientações</h2>
       <p>{order.notes || "Não informadas."}</p>
+      </section>}
+      {show.report && <section>
       <h2>Relato técnico</h2>
       <p>{details.report || "Não registrado."}</p>
+      </section>}
+      {show.equipment && <section>
       <h2>Equipamentos</h2>
       <EquipmentSelectionSummary value={details.equipmentModels} />
       {equipment.length ? (
@@ -2403,15 +2428,21 @@ function OrderPrintable({
       ) : (
         <p>Nenhuma unidade física associada.</p>
       )}
+      </section>}
+      {show.questionnaires && <section>
       <h2>Questionários</h2>
-      {details.checklists.length ? (
-        details.checklists.filter((checklist) => checklist.display?.showOnOrder !== false).map((checklist) => (
+      {checklists.length ? (
+        checklists.map((checklist) => (
           <section key={checklist.id}>
             <h3>{checklist.title}</h3>
-            {checklist.equipmentId && <p>Equipamento: {data.equipment.find((item) => item.id === checklist.equipmentId)?.name}</p>}
+            {show.equipment && checklist.equipmentId && <p>Equipamento: {(() => {
+              const unit = data.equipment.find((item) => item.id === checklist.equipmentId);
+              return unit ? `${unit.name} · ${unit.assetCode ?? unit.serial}` : "Não encontrado";
+            })()}</p>}
             {checklist.header && <p>{checklist.header}</p>}
             <div className={`print-question-grid columns-${checklist.display?.columns ?? 1} ${checklist.display?.inlineAnswers ? "inline-answers" : ""}`}>
-              {checklist.questions.filter((question) => checklist.display?.showUnanswered !== false || questionAnswerText(question, details).trim()).map((question) => {
+              {checklist.questions.filter((question) => (show.photos || question.kind !== "Foto") && (show.signature || question.kind !== "Assinatura") &&
+                (checklist.display?.showUnanswered !== false || questionAnswerText(question, details).trim())).map((question) => {
                 const signature = question.kind === "Assinatura" ? questionSignature(question, details) : null;
                 const photo = details.attachments.find((item) => item.id === (question.kind === "Foto" ? question.answer : requiresJustification(question) ? question.justificationPhotoId : undefined));
                 return <div className="print-question" key={question.id}>
@@ -2419,7 +2450,7 @@ function OrderPrintable({
                   <span>{questionAnswerText(question, details) || "Não respondida"}</span>
                   {question.description && <p>{question.description}</p>}
                   {signature && <img src={signature.image} alt={`Assinatura para ${question.label}`} />}
-                  {photo && <img src={photo.data} alt={question.label} />}
+                  {show.photos && photo && <img src={photo.data} alt={question.label} />}
                 </div>;
               })}
             </div>
@@ -2429,6 +2460,8 @@ function OrderPrintable({
       ) : (
         <p>Não associados.</p>
       )}
+      </section>}
+      {show.pending && <section>
       <h2>Pendências</h2>
       {pending.length ? (
         pending.map((item) => (
@@ -2439,6 +2472,8 @@ function OrderPrintable({
       ) : (
         <p>Nenhuma pendência em aberto.</p>
       )}
+      </section>}
+      {show.hours && <section>
       <h2>Controle de horas</h2>
       <p>
         Deslocamento: {timeText(totals.travel)} · Pausas:{" "}
@@ -2453,6 +2488,8 @@ function OrderPrintable({
           {item.location ? ` · GPS: ${item.location.latitude.toFixed(5)}, ${item.location.longitude.toFixed(5)} (precisão ${Math.round(item.location.accuracy)} m)` : ""}
         </p>
       ))}
+      </section>}
+      {show.values && <section>
       <h2>Valores</h2>
       <table>
         <thead>
@@ -2486,16 +2523,20 @@ function OrderPrintable({
         </p>
       ))}
       <p>{`Desconto geral: ${currency(values.discount)}\nTotal da OS: ${currency(values.total)}`}</p>
+      </section>}
+      {show.quotes && <section>
       <h2>Orçamentos vinculados</h2>
       {data.quotes
         .filter((quote) => quote.orderId === order.id)
         .map((quote) => (
           <p key={quote.id}>
-            {quote.code} · {quote.status} · {currency(total(quote))}
+            {quote.code} · {quote.status}{show.values ? ` · ${currency(total(quote))}` : ""}
           </p>
         ))}
+      </section>}
+      {(show.photos || show.attachments) && <section>
       <h2>Anexos e fotos</h2>
-      {details.attachments.map((file) =>
+      {details.attachments.filter((file) => file.mime.startsWith("image/") ? show.photos : show.attachments).map((file) =>
         file.mime.startsWith("image/") ? (
           <figure key={file.id}>
             <img src={file.data} alt={file.name} />
@@ -2507,6 +2548,8 @@ function OrderPrintable({
           </p>
         ),
       )}
+      </section>}
+      {show.signature && <section>
       <h2>Assinatura</h2>
       {details.signature ? (
         <div className="print-signature">
@@ -2519,6 +2562,7 @@ function OrderPrintable({
       ) : (
         <p>Não coletada.</p>
       )}
+      </section>}
     </article>
   );
 }

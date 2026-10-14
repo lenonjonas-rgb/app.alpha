@@ -4,6 +4,7 @@ import { isValidCnpj, normalizeCnpj } from "./cnpj";
 import { isValidCpf } from "./cpf";
 import { orderTypeQuestionnaireSchema, questionnaireDisplaySchema, questionnaireTemplateSchema, questionDefinitionSchema, requiresJustification, signatureSchema } from "./questionnaireSchema";
 import type { QuestionnaireTemplate } from "./questionnaireSchema";
+import { reportSettingsSchema } from "./reportSettings";
 export type { QuestionnaireTemplate, QuestionDefinition } from "./questionnaireSchema";
 
 const id = z.string().min(1);
@@ -252,6 +253,7 @@ export const databaseSchema = z.object({
   questionnaires: z.array(questionnaireTemplateSchema).default([]),
   orderTypeQuestionnaires: z.array(orderTypeQuestionnaireSchema).default([]),
   settings: z.object({
+    reportSettings: reportSettingsSchema.prefault({}),
     company: text,
     technician: text,
     kilometerRate: money.default(0),

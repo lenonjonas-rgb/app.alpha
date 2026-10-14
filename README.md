@@ -119,6 +119,16 @@ Na criacao da OS, ao escolher um cliente com unidades cadastradas, o botao **Equ
 - As selecoes aparecem nos documentos/impressao da OS e do orcamento, na exportacao textual da OS e nos detalhes do app tecnico. Nome/marca/categoria ficam registrados como uma copia no vinculo para preservar o historico; editar o catalogo nao renomeia automaticamente unidades ou documentos ja criados. Para substituir um modelo selecionado, remova-o e inclua o novo.
 - As novas colecoes e selecoes iniciam vazias em bases antigas e fazem parte do backup JSON e do payload da empresa. Nao e necessaria migracao SQL: o tecnico recebe os dados dos modelos vinculados nas tarefas/unidades, sem acesso ao catalogo completo. A selecao de modelo nao cria nem altera automaticamente o cadastro do cliente.
 
+## Modelos de relatorio de atendimento
+
+Em **Configuracoes > Relatorios de atendimento**, escolha um dos tres estilos proprios: **Tabelado**, **Limpo** ou **Marca-d'agua**. A marca-d'agua utiliza a logo da identidade da empresa; sem logo, utiliza o nome da empresa. Configure titulo, tamanho do texto, ordem dos questionarios (tarefa, nome ou codigo do equipamento) e as secoes visiveis. A pre-visualizacao usa uma OS existente e reflete as alteracoes ainda nao salvas. Clique em **Salvar configuracoes de relatorio** para aplicar.
+
+O mesmo conteudo configurado e utilizado na impressao da OS resumida, na impressao em **Mais informacoes** e na exportacao textual em **Envios**. Para gerar PDF, utilize **Imprimir > Salvar como PDF** no navegador. A exportacao TXT inclui apenas texto; nao incorpora imagens. Orcamentos e relatorios gerenciais (dashboard, CSV etc.) continuam com suas apresentacoes e filtros independentes.
+
+E possivel ocultar dados da empresa, dados do cliente/endereco, agendamento/tecnico, orientacoes, relato, equipamentos, questionarios, pendencias, horas/localizacao, valores, orcamentos, fotos, outros anexos e assinaturas. As secoes ocultas nao sao renderizadas no documento; fotos e assinaturas tambem sao omitidas dos questionarios quando desabilitadas. Ocultar valores remove os totais dos orcamentos vinculados. Textos livres, nomes de arquivos e anexos podem conter informacoes digitadas manualmente: revise o documento antes de compartilhar. Estas opcoes nao sao permissoes de acesso e nao ocultam os dados das telas operacionais.
+
+Configuracoes antigas recebem o modelo Limpo e todas as secoes habilitadas, preservando os dados das OS. As preferencias fazem parte do backup e do payload sincronizado da empresa; nao exigem migracao SQL. Alterar o modelo nao altera respostas, assinaturas ou fotos e nao faz envio de email nem cria links publicos. Nenhum recurso comercial, imagem ou arquivo do Auvo foi copiado.
+
 ## Endereco e responsavel pelo atendimento
 
 Na criacao e edicao da OS, selecionar o cliente exibe seu endereco cadastrado. A caixa **Atendimento no endereco cadastrado do cliente** vem marcada; desmarque para informar outro local. Digitar os oito digitos do CEP consulta o ViaCEP e preenche logradouro, bairro, cidade e UF. Informe o numero (ou S/N) e o complemento, se houver. CEPS gerais podem nao trazer logradouro; os campos permanecem editaveis e falhas da consulta sao exibidas, com opcao de tentar novamente ou preencher manualmente.

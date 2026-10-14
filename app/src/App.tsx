@@ -55,7 +55,8 @@ import { Badge, Empty, Modal } from "./components";
 import { EditorModal, MovementModal } from "./Forms";
 import type { Editor, FormKind } from "./Forms";
 import { CloudAccess } from "./CloudAccess";
-import { OrderWorkspace } from "./OrderWorkspace";
+import { OrderPrintable, OrderWorkspace } from "./OrderWorkspace";
+import { ReportSettingsPanel } from "./ReportSettingsPanel";
 import { UserSettings } from "./UserSettings";
 import { PasswordSettings } from "./PasswordSettings";
 import { QuestionnaireCatalog } from "./QuestionnaireCatalog";
@@ -1761,7 +1762,7 @@ function OrderDetail({
   );
   return (
     <Modal title={order.code} onClose={onClose} wide>
-      <div className="modal-body document-body">
+      <div className="modal-body document-body order-detail-screen">
         {error && (
           <div role="alert" className="error-message document-controls">
             {error}
@@ -1862,6 +1863,7 @@ function OrderDetail({
           )}
         </div>
       </div>
+      <OrderPrintable order={order} data={data} details={details} />
       <footer className="modal-footer document-controls">
         <button className="button secondary" onClick={onMore}>
           <FileText size={17} />
@@ -2051,6 +2053,7 @@ function SettingsPanel({
     <div className="settings-page">
       {cloud && role === "owner" && <UserSettings />}
       {cloud && <PasswordSettings />}
+      <ReportSettingsPanel key={JSON.stringify(data.settings.reportSettings)} data={data} commit={commit} onSuccess={onSuccess} onError={onError} />
       <section className="settings-section">
         <div className="section-heading">
           <h2>Identidade da empresa</h2>
