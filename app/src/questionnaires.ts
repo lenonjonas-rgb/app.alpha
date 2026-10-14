@@ -29,7 +29,24 @@ export function addQuestionnaire(checklists: Checklist[], template: Questionnair
   return [...checklists, instantiateQuestionnaire(template, equipmentId)];
 }
 
-export type OrderEquipmentSelection = { equipmentId: string; questionnaireId: string };
+export function replaceOrderQuestionnaire(
+  checklists: Checklist[], template: QuestionnaireTemplate, equipmentId = "", checklistId = "",
+): Checklist[] {
+  const linked = checklists.filter((item) => item.equipmentId === equipmentId);
+  const previous = checklistId
+    ? linked.find((item) => item.id === checklistId)
+    : linked.length === 1 ? linked[0] : undefined;
+  if (checklistId && !previous) throw new Error("O questionário a substituir não está mais disponível. Reabra a tarefa.");
+  if (!previous && linked.length > 1) throw new Error("Selecione qual questionário deseja substituir.");
+  if (previous?.templateId === template.id) return checklists;
+  if (!previous) return addQuestionnaire(checklists, template, equipmentId);
+  if (linked.some((item) => item.id !== previous.id && item.templateId === template.id))
+    throw new Error("O modelo escolhido já está vinculado a este equipamento/tarefa. Selecione outro modelo.");
+  const replacement = instantiateQuestionnaire(template, equipmentId);
+  return checklists.map((item) => item.id === previous.id ? replacement : item);
+}
+
+export type OrderEquipmentSelection = { equipmentId: string; questionnaireId: string; checklistId?: string };
 
 export function orderEquipmentQuestionnaires(
   data: Database, clientId: string, selections: OrderEquipmentSelection[], checklists: Checklist[], previousEquipmentIds: string[] = [],
@@ -49,7 +66,7 @@ export function orderEquipmentQuestionnaires(
     }
     const template = data.questionnaires.find((item) => item.id === selection.questionnaireId && !item.archived);
     if (!template) throw new Error("Questionário indisponível. Selecione um modelo ativo.");
-    result = addQuestionnaire(result, template, selection.equipmentId);
+    result = replaceOrderQuestionnaire(result, template, selection.equipmentId, selection.checklistId);
   }
   return { equipmentId: ids[0] ?? "", equipmentIds: ids.slice(1), checklists: result };
 }

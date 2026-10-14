@@ -4,7 +4,7 @@ import {
   orderPending, replicateOrder, validateDatabase, validateOrderDetails,
 } from "./domain";
 import type { Database, Order, QuestionnaireTemplate } from "./domain";
-import { addQuestionnaire, archiveQuestionnaire, orderEquipmentQuestionnaires, saveQuestionnaire } from "./questionnaires";
+import { addQuestionnaire, archiveQuestionnaire, orderEquipmentQuestionnaires, replaceOrderQuestionnaire, saveQuestionnaire } from "./questionnaires";
 import { questionnaireDisplaySchema } from "./questionnaireSchema";
 import { questionnaireRows } from "./reporting";
 import { questionAnswerText, withQuestionAnswer } from "./questionnaireAnswers";
@@ -94,8 +94,71 @@ describe("equipamentos e questionários na criação da OS", () => {
     const result = orderEquipmentQuestionnaires(data, first.clientId, [{ ...picks[0], questionnaireId: "" }, picks[1]], [existing]);
     expect(result.checklists[0]).toEqual(existing);
     expect(result.checklists).toHaveLength(2);
-    expect(() => orderEquipmentQuestionnaires(data, first.clientId, picks, [existing])).toThrow("já está vinculado");
+    expect(orderEquipmentQuestionnaires(data, first.clientId, picks, [existing]).checklists[0]).toEqual(existing);
     expect(() => orderEquipmentQuestionnaires(data, first.clientId, [picks[1]], [existing])).toThrow("desmarcado");
+  });
+});
+
+describe("substituição do questionário na edição da tarefa", () => {
+  it("troca apenas o vínculo escolhido e inicia respostas e assinaturas vazias", () => {
+    const old = instantiateQuestionnaire(template(), "unit-a");
+    old.questions[0].answer = "Relato anterior";
+    old.questions[2].signature = signature;
+    const other = instantiateQuestionnaire(template(), "unit-b");
+    other.questions[0].answer = "Preservar";
+    const general = instantiateQuestionnaire(template());
+    const input = [old, other, general];
+    const before = structuredClone(input);
+    const result = replaceOrderQuestionnaire(input, { ...template(), id: "replacement", title: "Nova inspeção" }, "unit-a");
+    expect(result).toHaveLength(3);
+    expect(result[0]).toMatchObject({ templateId: "replacement", equipmentId: "unit-a", title: "Nova inspeção" });
+    expect(result[0].id).not.toBe(old.id);
+    expect(result[0].questions[0].answer).toBe("");
+    expect(result[0].questions[2].signature).toBeNull();
+    expect(result[1]).toEqual(other);
+    expect(result[2]).toEqual(general);
+    expect(input).toEqual(before);
+  });
+  it("selecionar o mesmo modelo é uma operação sem alteração e preserva respostas", () => {
+    const checklist = instantiateQuestionnaire(template());
+    checklist.questions[0].answer = "Não apagar";
+    const input = [checklist];
+    expect(replaceOrderQuestionnaire(input, template())).toBe(input);
+  });
+  it("exige um alvo explícito quando há múltiplos vínculos e não substitui todos", () => {
+    const first = instantiateQuestionnaire(template(), "unit");
+    const second = instantiateQuestionnaire({ ...template(), id: "second" }, "unit");
+    const third = { ...template(), id: "third" };
+    expect(() => replaceOrderQuestionnaire([first, second], third, "unit")).toThrow("qual questionário");
+    const result = replaceOrderQuestionnaire([first, second], third, "unit", second.id);
+    expect(result[0]).toEqual(first);
+    expect(result[1].templateId).toBe("third");
+    expect(() => replaceOrderQuestionnaire([first, second], third, "unit", "missing")).toThrow("Reabra");
+    expect(() => replaceOrderQuestionnaire([first, second], template(), "unit", second.id)).toThrow("já está vinculado");
+  });
+  it("troca questionário geral sem alterar equipamentos e permite adicionar o primeiro vínculo", () => {
+    const general = instantiateQuestionnaire(template());
+    const unit = instantiateQuestionnaire(template(), "unit");
+    const next = { ...template(), id: "new" };
+    const result = replaceOrderQuestionnaire([general, unit], next);
+    expect(result[0].templateId).toBe("new");
+    expect(result[1]).toEqual(unit);
+    expect(replaceOrderQuestionnaire([], next)[0].templateId).toBe("new");
+  });
+  it("a seleção de equipamento aplica substituição e mantém os outros questionários", () => {
+    const data = demoDatabase();
+    const unit = data.equipment[0];
+    const old = instantiateQuestionnaire(template(), unit.id);
+    const next = { ...template(), id: "new" };
+    data.questionnaires = [template(), next];
+    const result = orderEquipmentQuestionnaires(data, unit.clientId, [{ equipmentId: unit.id, questionnaireId: next.id }], [old], [unit.id]);
+    expect(result.checklists).toHaveLength(1);
+    expect(result.checklists[0]).toMatchObject({ templateId: next.id, equipmentId: unit.id });
+  });
+  it("continua impedindo substituição por modelo arquivado ou incompatível", () => {
+    const old = instantiateQuestionnaire(template(), "unit");
+    expect(() => replaceOrderQuestionnaire([old], { ...template(), id: "new", archived: true }, "unit")).toThrow("arquivado");
+    expect(() => replaceOrderQuestionnaire([old], { ...template(), id: "new", display: { ...template().display, equipment: false } }, "unit")).toThrow("não permite");
   });
 });
 

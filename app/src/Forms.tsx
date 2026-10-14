@@ -37,7 +37,7 @@ import {
 } from "./cnpj";
 import { formatCpf, isValidCpf } from "./cpf";
 import { orderTypes, orderTypeQuestionnaireSchema } from "./questionnaireSchema";
-import { addQuestionnaire, orderEquipmentQuestionnaires } from "./questionnaires";
+import { orderEquipmentQuestionnaires, replaceOrderQuestionnaire } from "./questionnaires";
 import type { OrderEquipmentSelection } from "./questionnaires";
 import { ServiceLocationFields } from "./ServiceLocationFields";
 import { EquipmentModelPicker, EquipmentSelections } from "./EquipmentModelPicker";
@@ -333,6 +333,8 @@ export function EditorModal({
   const service = data.services.find((record) => record.id === editor.id);
   const order = data.orders.find((record) => record.id === editor.id);
   const quote = data.quotes.find((record) => record.id === editor.id);
+  const generalChecklists = order ? getOrderDetails(order).checklists.filter((item) => !item.equipmentId) : [];
+  const [generalChecklistId, setGeneralChecklistId] = useState("");
   const [equipmentOpen, setEquipmentOpen] = useState(false);
   const [orderEquipment, setOrderEquipment] = useState<OrderEquipmentSelection[]>(() => {
     const ids = order ? [order.equipmentId, ...getOrderDetails(order).equipmentIds] : [editor.equipmentId ?? ""];
@@ -366,6 +368,20 @@ export function EditorModal({
     const form = new FormData(event.currentTarget);
     setError("");
     try {
+      if (editor.kind === "order" && order) {
+        const checklists = getOrderDetails(order).checklists;
+        const changes = [
+          ...orderEquipment,
+          { equipmentId: "", questionnaireId, checklistId: generalChecklistId },
+        ].filter((selection) => {
+          if (!selection.questionnaireId) return false;
+          const linked = checklists.filter((item) => item.equipmentId === selection.equipmentId);
+          const previous = selection.checklistId ? linked.find((item) => item.id === selection.checklistId)
+            : linked.length === 1 ? linked[0] : undefined;
+          return previous && previous.templateId !== selection.questionnaireId;
+        });
+        if (changes.length && !window.confirm("Substituir os questionários selecionados? As respostas e assinaturas desses questionários serão descartadas e os novos começarão sem respostas. Os demais questionários e os arquivos anexados serão preservados.")) return;
+      }
       commit((current) => {
         const recordId = editor.id ?? makeId();
         const upsert = <RecordType extends { id: string }>(
@@ -520,7 +536,8 @@ export function EditorModal({
               responsibleName: getText(form, "responsibleName"),
               responsiblePhone: getText(form, "responsiblePhone"),
               ...(existing ? {} : { questionnaireRequired: current.orderTypeQuestionnaires.find((item) => item.type === orderType)?.required ?? false }),
-              checklists: template && (existing || orderEquipment.length === 0) ? addQuestionnaire(equipmentLinks.checklists, template) : equipmentLinks.checklists,
+              checklists: template && (existing || orderEquipment.length === 0)
+                ? replaceOrderQuestionnaire(equipmentLinks.checklists, template, "", generalChecklistId) : equipmentLinks.checklists,
             };
             const record: Order = {
               id: recordId,
@@ -872,17 +889,26 @@ export function EditorModal({
                             ? [...orderEquipment, equipmentSelection(item.id)] : orderEquipment.filter((entry) => entry.equipmentId !== item.id))} />
                           <span>{item.name} · {item.assetCode ?? item.serial}{item.model && <small>{item.model.brand} · {item.model.line || "Sem linha cadastrada"}</small>}</span>
                         </label>
-                        {selection && <label className="field">
+                        {selection && <>
+                        {existingChecklists.length > 1 && <label className="field">
+                          Questionário atual a substituir
+                          <select aria-label={`Questionário a substituir no equipamento ${item.assetCode ?? item.serial}`}
+                            value={selection.checklistId ?? ""} required={Boolean(selection.questionnaireId)}
+                            onChange={(event) => setOrderEquipment(orderEquipment.map((entry) => entry.equipmentId === item.id ? { ...entry, checklistId: event.target.value } : entry))}>
+                            <option value="">Selecione o vínculo atual</option>
+                            {existingChecklists.map((checklist) => <option key={checklist.id} value={checklist.id}>{checklist.title}</option>)}
+                          </select>
+                        </label>}
+                        <label className="field">
                           Questionário para {item.name} · {item.assetCode ?? item.serial}
                           <select aria-label={`Questionário do equipamento ${item.assetCode ?? item.serial}`} value={selection.questionnaireId}
                             required={existingChecklists.length === 0 && !previousEquipmentIds.includes(item.id)}
                             onChange={(event) => setOrderEquipment(orderEquipment.map((entry) => entry.equipmentId === item.id ? { ...entry, questionnaireId: event.target.value } : entry))}>
                             <option value="">{previousEquipmentIds.includes(item.id) ? "Preservar vínculo atual, sem adicionar questionário" : "Selecione um questionário"}</option>
-                            {equipmentQuestionnaires.filter((template) => !existingChecklists.some((checklist) => checklist.templateId === template.id))
-                              .map((template) => <option key={template.id} value={template.id}>{template.title}</option>)}
+                            {equipmentQuestionnaires.map((template) => <option key={template.id} value={template.id}>{template.title}</option>)}
                           </select>
-                          {existingChecklists.length > 0 && <small>Vinculados: {existingChecklists.map((checklist) => checklist.title).join(", ")}. As respostas serão preservadas.</small>}
-                        </label>}
+                          {existingChecklists.length > 0 && <small>Vinculados: {existingChecklists.map((checklist) => checklist.title).join(", ")}. Escolher outro modelo substitui o vínculo selecionado e inicia novas respostas, após confirmação. Manter o mesmo modelo preserva as respostas.</small>}
+                        </label></>}
                       </div>;
                     })}
                     {equipmentQuestionnaires.length === 0 && <p role="alert">Não há questionários ativos com resposta por equipamento. Habilite essa opção no cadastro do questionário.</p>}
@@ -949,12 +975,19 @@ export function EditorModal({
                   </select>
                 </label>
                 {(order || orderEquipment.length === 0) && <label className="field full">
-                  {order ? "Adicionar questionário à tarefa" : "Questionário"}
-                  <select aria-label={order ? "Adicionar questionário à tarefa" : "Questionário"} value={questionnaireId} onChange={(event) => setQuestionnaireId(event.target.value)}>
+                  {order ? "Questionário geral da tarefa" : "Questionário"}
+                  <select aria-label={order ? "Questionário geral da tarefa" : "Questionário"} value={questionnaireId} onChange={(event) => setQuestionnaireId(event.target.value)}>
                     <option value="">{order ? "Preservar questionários atuais, sem adicionar" : "Sem questionário"}</option>
                     {data.questionnaires.filter((item) => !item.archived).map((item) => <option key={item.id} value={item.id}>{item.title}</option>)}
                   </select>
-                  <small>{order ? "Os questionários vinculados são atualizados automaticamente enquanto a tarefa não estiver finalizada ou arquivada. Não é necessário adicioná-los novamente." : "O padrão do tipo é selecionado automaticamente e pode ser substituído. As respostas são exclusivas desta tarefa."}</small>
+                  <small>{order ? "Sem seleção, os vínculos atuais são preservados. Outro modelo substitui o questionário geral escolhido, após confirmação; o mesmo modelo mantém as respostas. Os questionários dos equipamentos são alterados na lista Equipamentos." : "O padrão do tipo é selecionado automaticamente e pode ser substituído. As respostas são exclusivas desta tarefa."}</small>
+                </label>}
+                {order && generalChecklists.length > 1 && <label className="field full">
+                  Questionário geral a substituir
+                  <select value={generalChecklistId} required={Boolean(questionnaireId)} onChange={(event) => setGeneralChecklistId(event.target.value)}>
+                    <option value="">Selecione o vínculo atual</option>
+                    {generalChecklists.map((checklist) => <option key={checklist.id} value={checklist.id}>{checklist.title}</option>)}
+                  </select>
                 </label>}
                 <label className="field">
                   Prioridade
