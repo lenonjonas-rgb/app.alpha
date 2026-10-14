@@ -4,7 +4,7 @@ import {
   orderPending, replicateOrder, validateDatabase, validateOrderDetails,
 } from "./domain";
 import type { Database, Order, QuestionnaireTemplate } from "./domain";
-import { addQuestionnaire, archiveQuestionnaire, orderEquipmentQuestionnaires, replaceOrderQuestionnaire, saveQuestionnaire } from "./questionnaires";
+import { addQuestionnaire, archiveQuestionnaire, assertSingleEquipmentQuestionnaire, assignQuestionnaireEquipment, keepEquipmentQuestionnaire, orderEquipmentQuestionnaires, replaceOrderQuestionnaire, saveQuestionnaire } from "./questionnaires";
 import { questionnaireDisplaySchema } from "./questionnaireSchema";
 import { questionnaireRows } from "./reporting";
 import { questionAnswerText, withQuestionAnswer } from "./questionnaireAnswers";
@@ -125,16 +125,16 @@ describe("substituição do questionário na edição da tarefa", () => {
     const input = [checklist];
     expect(replaceOrderQuestionnaire(input, template())).toBe(input);
   });
-  it("exige um alvo explícito quando há múltiplos vínculos e não substitui todos", () => {
+  it("consolida vários modelos de uma unidade em apenas um após a escolha", () => {
     const first = instantiateQuestionnaire(template(), "unit");
     const second = instantiateQuestionnaire({ ...template(), id: "second" }, "unit");
     const third = { ...template(), id: "third" };
-    expect(() => replaceOrderQuestionnaire([first, second], third, "unit")).toThrow("qual questionário");
+    expect(replaceOrderQuestionnaire([first, second], third, "unit")).toHaveLength(1);
     const result = replaceOrderQuestionnaire([first, second], third, "unit", second.id);
-    expect(result[0]).toEqual(first);
-    expect(result[1].templateId).toBe("third");
+    expect(result).toHaveLength(1);
+    expect(result[0].templateId).toBe("third");
     expect(() => replaceOrderQuestionnaire([first, second], third, "unit", "missing")).toThrow("Reabra");
-    expect(() => replaceOrderQuestionnaire([first, second], template(), "unit", second.id)).toThrow("já está vinculado");
+    expect(replaceOrderQuestionnaire([first, second], template(), "unit", second.id)).toEqual([first]);
   });
   it("troca questionário geral sem alterar equipamentos e permite adicionar o primeiro vínculo", () => {
     const general = instantiateQuestionnaire(template());
@@ -159,6 +159,59 @@ describe("substituição do questionário na edição da tarefa", () => {
     const old = instantiateQuestionnaire(template(), "unit");
     expect(() => replaceOrderQuestionnaire([old], { ...template(), id: "new", archived: true }, "unit")).toThrow("arquivado");
     expect(() => replaceOrderQuestionnaire([old], { ...template(), id: "new", display: { ...template().display, equipment: false } }, "unit")).toThrow("não permite");
+  });
+});
+
+describe("uma manutenção por equipamento em cada tarefa", () => {
+  it("impede adicionar outro modelo ao mesmo equipamento e reatribuir um questionário a uma unidade ocupada", () => {
+    const first = instantiateQuestionnaire(template(), "unit-a");
+    const other = instantiateQuestionnaire({ ...template(), id: "bikes" }, "unit-b");
+    expect(() => addQuestionnaire([first], { ...template(), id: "bikes" }, "unit-a")).toThrow("já possui");
+    expect(() => assignQuestionnaireEquipment([first, other], other.id, "unit-a")).toThrow("já possui");
+    expect(assignQuestionnaireEquipment([first, other], other.id, "unit-c")[1].equipmentId).toBe("unit-c");
+    expect(assignQuestionnaireEquipment([first, other], other.id, "")[1].equipmentId).toBe("");
+  });
+  it("corrige o caso esteira + bicicleta preservando as respostas do modelo escolhido e a outra unidade", () => {
+    const treadmill = instantiateQuestionnaire(template(), "treadmill");
+    treadmill.questions[0].answer = "Esteira revisada";
+    const wrong = instantiateQuestionnaire(template(), "bike");
+    const bike = instantiateQuestionnaire({ ...template(), id: "bikes" }, "bike");
+    bike.questions[0].answer = "Bicicleta revisada";
+    const general = instantiateQuestionnaire(template());
+    const input = [treadmill, wrong, bike, general];
+    const result = replaceOrderQuestionnaire(input, { ...template(), id: "bikes" }, "bike");
+    expect(result).toEqual([treadmill, bike, general]);
+    expect(input).toHaveLength(4);
+    expect(() => assertSingleEquipmentQuestionnaire(result)).not.toThrow();
+    expect(() => assertSingleEquipmentQuestionnaire(input)).toThrow("mais de um");
+  });
+  it("exige escolher a instância a manter quando o mesmo modelo antigo possui respostas duplicadas", () => {
+    const first = instantiateQuestionnaire(template(), "unit");
+    const second = instantiateQuestionnaire(template(), "unit");
+    first.questions[0].answer = "Resposta A";
+    second.questions[0].answer = "Resposta B";
+    expect(() => replaceOrderQuestionnaire([first, second], template(), "unit")).toThrow("qual questionário manter");
+    expect(replaceOrderQuestionnaire([first, second], template(), "unit", second.id)).toEqual([second]);
+    expect(keepEquipmentQuestionnaire([first, second], second.id)).toEqual([second]);
+  });
+  it("permite modelos gerais diferentes sem vincular manutenção duplicada à unidade", () => {
+    const general = instantiateQuestionnaire(template());
+    const second = { ...template(), id: "other" };
+    const result = addQuestionnaire([general], second);
+    expect(result).toHaveLength(2);
+    expect(() => assertSingleEquipmentQuestionnaire(result)).not.toThrow();
+    expect(() => replaceOrderQuestionnaire(result, { ...template(), id: "third" })).toThrow("qual questionário");
+  });
+  it("recusa salvar uma edição que conserva duplicatas sem uma escolha explícita", () => {
+    const data = demoDatabase();
+    const unit = data.equipment[0];
+    const first = instantiateQuestionnaire(template(), unit.id);
+    const second = instantiateQuestionnaire({ ...template(), id: "other" }, unit.id);
+    expect(() => orderEquipmentQuestionnaires(data, unit.clientId, [{ equipmentId: unit.id, questionnaireId: "" }], [first, second], [unit.id])).toThrow("mais de um");
+    const legacy = validateDatabase({ ...data, orders: data.orders.map((order, index) => index === 0
+      ? { ...order, clientId: unit.clientId, equipmentId: unit.id, details: { ...getOrderDetails(order), checklists: [first, second] } } : order) });
+    expect(legacy).toBeDefined();
+    expect(() => replicateOrder(legacy, legacy.orders[0].id, "2026-05-20", "09:00")).toThrow("mais de um");
   });
 });
 
@@ -286,7 +339,7 @@ describe("catálogo e atualização de questionários vinculados", () => {
     const saved = saveQuestionnaire(data, { ...template(), title: "Atualizado" });
     expect(getOrderDetails(saved.orders[0]).checklists.map((list) => list.questions[0].answer)).toEqual(["Geral", "Equipamento"]);
     expect(() => addQuestionnaire(order.details.checklists, template())).toThrow("já está vinculado");
-    expect(() => addQuestionnaire(order.details.checklists, template(), order.equipmentId)).toThrow("já está vinculado");
+    expect(() => addQuestionnaire(order.details.checklists, template(), order.equipmentId)).toThrow("já possui um questionário");
   });
   it("aplica padrão e obrigatoriedade às novas tarefas, incluindo conversão de orçamento", () => {
     const { data } = fixture();

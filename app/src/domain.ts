@@ -35,6 +35,7 @@ export const equipmentModelSchema = z.object({
   id, brandId: id, name: text, category: z.string().max(200),
   line: z.string().trim().max(200).optional(),
   notes: z.string().max(3000), archived: z.boolean().default(false),
+  questionnaireId: z.string().optional(),
 });
 const equipmentModelSnapshotSchema = z.object({
   modelId: id, brandId: id, brand: text, name: text, category: z.string().max(200),
@@ -603,6 +604,12 @@ export function associateQuote(
     ),
   });
 }
+export function assertSingleEquipmentQuestionnaire(checklists: Checklist[]): void {
+  const equipmentIds = checklists.map((item) => item.equipmentId).filter(Boolean);
+  if (new Set(equipmentIds).size !== equipmentIds.length)
+    throw new Error("Há equipamentos com mais de um questionário nesta tarefa. Escolha o modelo correto ou use Manter somente este questionário antes de salvar ou replicar.");
+}
+
 export function replicateOrder(
   data: Database,
   orderId: string,
@@ -612,6 +619,7 @@ export function replicateOrder(
   const original = data.orders.find((item) => item.id === orderId);
   if (!original) throw new Error("OS nao encontrada.");
   const originalDetails = getOrderDetails(original);
+  assertSingleEquipmentQuestionnaire(originalDetails.checklists);
   const details = {
     ...originalDetails,
     archived: false,

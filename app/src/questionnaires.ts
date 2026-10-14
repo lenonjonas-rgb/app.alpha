@@ -1,7 +1,7 @@
-import { getOrderDetails, instantiateQuestionnaire, validateDatabase } from "./domain";
+import { assertSingleEquipmentQuestionnaire, getOrderDetails, instantiateQuestionnaire, validateDatabase } from "./domain";
 import type { Checklist, Database, QuestionnaireTemplate } from "./domain";
 import { questionnaireTemplateSchema, requiresJustification } from "./questionnaireSchema";
-export { instantiateQuestionnaire, defaultQuestionnaires } from "./domain";
+export { assertSingleEquipmentQuestionnaire, instantiateQuestionnaire, defaultQuestionnaires } from "./domain";
 
 function updateChecklist(checklist: Checklist, template: QuestionnaireTemplate): Checklist {
   const updated = instantiateQuestionnaire(template);
@@ -24,6 +24,8 @@ function updateChecklist(checklist: Checklist, template: QuestionnaireTemplate):
 }
 
 export function addQuestionnaire(checklists: Checklist[], template: QuestionnaireTemplate, equipmentId = ""): Checklist[] {
+  if (equipmentId && checklists.some((item) => item.equipmentId === equipmentId))
+    throw new Error("Este equipamento já possui um questionário nesta tarefa. Substitua o atual em vez de adicionar outra manutenção.");
   if (checklists.some((item) => item.templateId === template.id && item.equipmentId === equipmentId))
     throw new Error("Este questionário já está vinculado a esta tarefa/equipamento e recebe as alterações automaticamente.");
   return [...checklists, instantiateQuestionnaire(template, equipmentId)];
@@ -33,6 +35,20 @@ export function replaceOrderQuestionnaire(
   checklists: Checklist[], template: QuestionnaireTemplate, equipmentId = "", checklistId = "",
 ): Checklist[] {
   const linked = checklists.filter((item) => item.equipmentId === equipmentId);
+  if (equipmentId) {
+    if (checklistId && !linked.some((item) => item.id === checklistId))
+      throw new Error("O questionário a substituir não está mais disponível. Reabra a tarefa.");
+    const matching = linked.filter((item) => item.templateId === template.id);
+    const selected = matching.find((item) => item.id === checklistId);
+    if (matching.length > 1 && !selected)
+      throw new Error("Há respostas duplicadas para este modelo. Escolha qual questionário manter usando Manter somente este questionário.");
+    const kept = selected ?? matching[0];
+    if (linked.length === 1 && kept) return checklists;
+    const replacement = kept ?? instantiateQuestionnaire(template, equipmentId);
+    if (!linked.length) return [...checklists, replacement];
+    const firstId = linked[0].id;
+    return checklists.flatMap((item) => item.id === firstId ? [replacement] : item.equipmentId === equipmentId ? [] : [item]);
+  }
   const previous = checklistId
     ? linked.find((item) => item.id === checklistId)
     : linked.length === 1 ? linked[0] : undefined;
@@ -46,7 +62,27 @@ export function replaceOrderQuestionnaire(
   return checklists.map((item) => item.id === previous.id ? replacement : item);
 }
 
+export function keepEquipmentQuestionnaire(checklists: Checklist[], checklistId: string): Checklist[] {
+  const selected = checklists.find((item) => item.id === checklistId);
+  if (!selected?.equipmentId) throw new Error("Selecione um questionário vinculado ao equipamento.");
+  return checklists.filter((item) => item.equipmentId !== selected.equipmentId || item.id === selected.id);
+}
+
+export function assignQuestionnaireEquipment(checklists: Checklist[], checklistId: string, equipmentId: string): Checklist[] {
+  if (!checklists.some((item) => item.id === checklistId)) throw new Error("Questionário não encontrado.");
+  if (equipmentId && checklists.some((item) => item.id !== checklistId && item.equipmentId === equipmentId))
+    throw new Error("Este equipamento já possui um questionário nesta tarefa. Mantenha somente um questionário por equipamento.");
+  return checklists.map((item) => item.id === checklistId ? { ...item, equipmentId } : item);
+}
+
 export type OrderEquipmentSelection = { equipmentId: string; questionnaireId: string; checklistId?: string };
+
+export function equipmentDefaultQuestionnaire(data: Database, equipmentId: string, type: Database["orders"][number]["type"]): string {
+  const unit = data.equipment.find((item) => item.id === equipmentId);
+  const model = data.equipmentModels.find((item) => item.id === unit?.model?.modelId);
+  const defaultId = model?.questionnaireId || data.orderTypeQuestionnaires.find((item) => item.type === type)?.questionnaireId;
+  return data.questionnaires.find((item) => item.id === defaultId && !item.archived && item.display.equipment)?.id ?? "";
+}
 
 export function orderEquipmentQuestionnaires(
   data: Database, clientId: string, selections: OrderEquipmentSelection[], checklists: Checklist[], previousEquipmentIds: string[] = [],
@@ -68,12 +104,15 @@ export function orderEquipmentQuestionnaires(
     if (!template) throw new Error("Questionário indisponível. Selecione um modelo ativo.");
     result = replaceOrderQuestionnaire(result, template, selection.equipmentId, selection.checklistId);
   }
+  assertSingleEquipmentQuestionnaire(result);
   return { equipmentId: ids[0] ?? "", equipmentIds: ids.slice(1), checklists: result };
 }
 
 export function saveQuestionnaire(data: Database, input: QuestionnaireTemplate): Database {
   const template = questionnaireTemplateSchema.parse(input);
   const previous = data.questionnaires.find((item) => item.id === template.id);
+  if (!template.display.equipment && data.equipmentModels.some((item) => item.questionnaireId === template.id))
+    throw new Error("Este questionário é padrão de um modelo de equipamento. Remova o vínculo no catálogo antes de desabilitar a resposta por equipamento.");
   if (previous && previous.revision !== template.revision) throw new Error("O modelo foi alterado em outra sessão. Reabra o questionário antes de salvar.");
   const saved = { ...template, revision: previous ? previous.revision + 1 : 1 };
   return validateDatabase({
@@ -95,6 +134,7 @@ export function archiveQuestionnaire(data: Database, id: string): Database {
   return validateDatabase({
     ...data,
     questionnaires: data.questionnaires.map((item) => item.id === id ? { ...item, archived: true, revision: item.revision + 1 } : item),
+    equipmentModels: data.equipmentModels.map((item) => item.questionnaireId === id ? { ...item, questionnaireId: "" } : item),
     orderTypeQuestionnaires: data.orderTypeQuestionnaires.map((item) => item.questionnaireId === id ? { ...item, questionnaireId: "" } : item),
   });
 }

@@ -16,6 +16,8 @@ export function saveEquipmentModel(data: Database, input: EquipmentModel): Datab
   const model = equipmentModelSchema.parse(input);
   if (!data.equipmentBrands.some((item) => item.id === model.brandId && !item.archived))
     throw new Error("Selecione uma marca ativa.");
+  if (model.questionnaireId && !data.questionnaires.some((item) => item.id === model.questionnaireId && !item.archived && item.display.equipment))
+    throw new Error("Selecione um questionário ativo que permita resposta por equipamento.");
   return validateDatabase({
     ...data,
     equipmentModels: data.equipmentModels.some((item) => item.id === model.id)

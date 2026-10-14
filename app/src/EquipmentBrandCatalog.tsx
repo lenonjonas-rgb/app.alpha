@@ -42,9 +42,9 @@ export function EquipmentBrandCatalog({ data, commit }: {
         {!brand.archived && <button className="button primary" onClick={() => { setError(""); setModelDraft({ id: makeId(), brandId: brand.id, name: "", line: "", category: "", notes: "", archived: false }); }}>Novo modelo em {brand.name}</button>}
       </div>
       <div className="table-scroll"><table>
-        <thead><tr><th>Modelo</th><th>Linha</th><th>Categoria</th><th>Observações</th><th>Ações</th></tr></thead>
+        <thead><tr><th>Modelo</th><th>Linha</th><th>Categoria</th><th>Questionário padrão</th><th>Observações</th><th>Ações</th></tr></thead>
         <tbody>{data.equipmentModels.filter((item) => item.brandId === brand.id).map((model) => <tr key={model.id}>
-          <td>{model.name}{model.archived ? " (arquivado)" : ""}</td><td>{model.line || "Sem linha"}</td><td>{model.category || "—"}</td><td className="preserve-lines">{model.notes || "—"}</td>
+          <td>{model.name}{model.archived ? " (arquivado)" : ""}</td><td>{model.line || "Sem linha"}</td><td>{model.category || "—"}</td><td>{model.questionnaireId ? data.questionnaires.find((item) => item.id === model.questionnaireId)?.title ?? "Questionário indisponível" : "Sem padrão do modelo"}</td><td className="preserve-lines">{model.notes || "—"}</td>
           <td>{!brand.archived && <>
             <button className="text-button" onClick={() => { setError(""); setModelDraft({ ...model }); }}>Editar {model.name}</button>
             <button className="text-button" onClick={() => act((current) => saveEquipmentModel(current, { ...model, archived: !model.archived }))}>{model.archived ? "Restaurar" : "Arquivar"} {model.name}</button>
@@ -79,6 +79,15 @@ export function EquipmentBrandCatalog({ data, commit }: {
             <small>Ex.: Cardio. Digite uma linha ou escolha uma já utilizada nesta marca.</small>
           </label>
           <label className="field full">Categoria do modelo<input maxLength={200} value={modelDraft.category} onChange={(event) => setModelDraft({ ...modelDraft, category: event.target.value })} /></label>
+          <label className="field full">Questionário padrão do equipamento
+            <select aria-label="Questionário padrão do equipamento" value={modelDraft.questionnaireId ?? ""} onChange={(event) => setModelDraft({ ...modelDraft, questionnaireId: event.target.value })}>
+              <option value="">Sem padrão do modelo</option>
+              {modelDraft.questionnaireId && !data.questionnaires.some((item) => item.id === modelDraft.questionnaireId && !item.archived && item.display.equipment) &&
+                <option value={modelDraft.questionnaireId} disabled>Questionário indisponível — selecione outro</option>}
+              {data.questionnaires.filter((item) => !item.archived && item.display.equipment).map((item) => <option key={item.id} value={item.id}>{item.title}</option>)}
+            </select>
+            <small>Aplicado automaticamente ao selecionar uma unidade deste modelo na OS, inclusive unidades já vinculadas aos clientes. Pode ser trocado somente naquela tarefa. Alterar este padrão não modifica tarefas existentes. Sem padrão do modelo, será sugerido o questionário do tipo da tarefa, quando compatível.</small>
+          </label>
           <label className="field full">Observações do modelo<textarea maxLength={3000} value={modelDraft.notes} onChange={(event) => setModelDraft({ ...modelDraft, notes: event.target.value })} /></label>
         </div>
         <footer className="modal-footer"><button type="button" className="button secondary" onClick={() => setModelDraft(null)}>Cancelar</button><button className="button primary">Salvar modelo</button></footer>

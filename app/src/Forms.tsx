@@ -37,7 +37,7 @@ import {
 } from "./cnpj";
 import { formatCpf, isValidCpf } from "./cpf";
 import { orderTypes, orderTypeQuestionnaireSchema } from "./questionnaireSchema";
-import { orderEquipmentQuestionnaires, replaceOrderQuestionnaire } from "./questionnaires";
+import { equipmentDefaultQuestionnaire, orderEquipmentQuestionnaires, replaceOrderQuestionnaire } from "./questionnaires";
 import type { OrderEquipmentSelection } from "./questionnaires";
 import { ServiceLocationFields } from "./ServiceLocationFields";
 import { EquipmentModelPicker, EquipmentSelections } from "./EquipmentModelPicker";
@@ -338,14 +338,15 @@ export function EditorModal({
   const [equipmentOpen, setEquipmentOpen] = useState(false);
   const [orderEquipment, setOrderEquipment] = useState<OrderEquipmentSelection[]>(() => {
     const ids = order ? [order.equipmentId, ...getOrderDetails(order).equipmentIds] : [editor.equipmentId ?? ""];
-    return [...new Set(ids.filter(Boolean))].map((equipmentId) => ({ equipmentId, questionnaireId: "" }));
+    return [...new Set(ids.filter(Boolean))].map((equipmentId) => ({
+      equipmentId, questionnaireId: order ? "" : equipmentDefaultQuestionnaire(data, equipmentId, orderType),
+    }));
   });
   const clientEquipment = data.equipment.filter((item) => item.clientId === clientId);
   const equipmentQuestionnaires = data.questionnaires.filter((item) => !item.archived && item.display.equipment);
   const previousEquipmentIds = order ? [order.equipmentId, ...getOrderDetails(order).equipmentIds].filter(Boolean) : [];
   function equipmentSelection(equipmentId: string): OrderEquipmentSelection {
-    const defaultId = data.orderTypeQuestionnaires.find((item) => item.type === orderType)?.questionnaireId;
-    return { equipmentId, questionnaireId: equipmentQuestionnaires.find((item) => item.id === defaultId)?.id ?? "" };
+    return { equipmentId, questionnaireId: previousEquipmentIds.includes(equipmentId) ? "" : equipmentDefaultQuestionnaire(data, equipmentId, orderType) };
   }
   const [modelId, setModelId] = useState(equipment?.model?.modelId ?? "");
   const [equipmentName, setEquipmentName] = useState(equipment?.name ?? "");
@@ -376,11 +377,12 @@ export function EditorModal({
         ].filter((selection) => {
           if (!selection.questionnaireId) return false;
           const linked = checklists.filter((item) => item.equipmentId === selection.equipmentId);
+          if (selection.equipmentId && linked.length > 1) return true;
           const previous = selection.checklistId ? linked.find((item) => item.id === selection.checklistId)
             : linked.length === 1 ? linked[0] : undefined;
           return previous && previous.templateId !== selection.questionnaireId;
         });
-        if (changes.length && !window.confirm("Substituir os questionários selecionados? As respostas e assinaturas desses questionários serão descartadas e os novos começarão sem respostas. Os demais questionários e os arquivos anexados serão preservados.")) return;
+        if (changes.length && !window.confirm("Aplicar a troca de questionários? Cada equipamento ficará com apenas um questionário. Se o modelo escolhido já estiver vinculado, suas respostas serão preservadas; os outros questionários desse equipamento e suas respostas serão removidos. Modelos novos começam sem respostas. Outros equipamentos e arquivos anexados serão preservados.")) return;
       }
       commit((current) => {
         const recordId = editor.id ?? makeId();
@@ -883,6 +885,8 @@ export function EditorModal({
                     {clientEquipment.map((item) => {
                       const selection = orderEquipment.find((entry) => entry.equipmentId === item.id);
                       const existingChecklists = order ? getOrderDetails(order).checklists.filter((checklist) => checklist.equipmentId === item.id) : [];
+                      const modelDefaultId = data.equipmentModels.find((model) => model.id === item.model?.modelId)?.questionnaireId;
+                      const modelDefault = equipmentQuestionnaires.find((template) => template.id === modelDefaultId);
                       return <div className="order-equipment-option" key={item.id}>
                         <label className="check">
                           <input type="checkbox" checked={Boolean(selection)} onChange={(event) => setOrderEquipment(event.target.checked
@@ -890,10 +894,11 @@ export function EditorModal({
                           <span>{item.name} · {item.assetCode ?? item.serial}{item.model && <small>{item.model.brand} · {item.model.line || "Sem linha cadastrada"}</small>}</span>
                         </label>
                         {selection && <>
+                        {modelDefaultId && <small>{modelDefault ? `Padrão do modelo: ${modelDefault.title}. A escolha abaixo vale apenas para esta OS.` : "O questionário padrão deste modelo está indisponível. Escolha um modelo ativo abaixo e revise o cadastro do equipamento."}</small>}
                         {existingChecklists.length > 1 && <label className="field">
-                          Questionário atual a substituir
+                          Questionário atual de referência
                           <select aria-label={`Questionário a substituir no equipamento ${item.assetCode ?? item.serial}`}
-                            value={selection.checklistId ?? ""} required={Boolean(selection.questionnaireId)}
+                            value={selection.checklistId ?? ""}
                             onChange={(event) => setOrderEquipment(orderEquipment.map((entry) => entry.equipmentId === item.id ? { ...entry, checklistId: event.target.value } : entry))}>
                             <option value="">Selecione o vínculo atual</option>
                             {existingChecklists.map((checklist) => <option key={checklist.id} value={checklist.id}>{checklist.title}</option>)}
@@ -907,12 +912,12 @@ export function EditorModal({
                             <option value="">{previousEquipmentIds.includes(item.id) ? "Preservar vínculo atual, sem adicionar questionário" : "Selecione um questionário"}</option>
                             {equipmentQuestionnaires.map((template) => <option key={template.id} value={template.id}>{template.title}</option>)}
                           </select>
-                          {existingChecklists.length > 0 && <small>Vinculados: {existingChecklists.map((checklist) => checklist.title).join(", ")}. Escolher outro modelo substitui o vínculo selecionado e inicia novas respostas, após confirmação. Manter o mesmo modelo preserva as respostas.</small>}
+                          {existingChecklists.length > 0 && <small>Vinculados: {existingChecklists.map((checklist) => checklist.title).join(", ")}. Ao escolher um modelo, este equipamento ficará com apenas um questionário, após confirmação. Se o modelo já existir, suas respostas serão preservadas; novos modelos começam sem respostas. Para duplicatas do mesmo modelo, escolha o vínculo de referência a manter.</small>}
                         </label></>}
                       </div>;
                     })}
                     {equipmentQuestionnaires.length === 0 && <p role="alert">Não há questionários ativos com resposta por equipamento. Habilite essa opção no cadastro do questionário.</p>}
-                    <small>Cada unidade selecionada terá seu próprio questionário e respostas. A seleção de equipamentos é opcional.</small>
+                    <small>O questionário padrão do modelo é preenchido automaticamente e pode ser trocado somente nesta OS, sem alterar o catálogo. Sem padrão do modelo, será sugerido o padrão compatível do tipo da tarefa. Cada unidade tem apenas um questionário e suas próprias respostas. A seleção de equipamentos é opcional.</small>
                   </div>}
                   {!equipmentOpen && orderEquipment.length > 0 && <small>Abra Equipamentos para conferir o questionário de cada unidade.</small>}
                 </section>}

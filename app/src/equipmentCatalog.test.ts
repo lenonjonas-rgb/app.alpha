@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import { convertQuote, demoDatabase, getOrderDetails, replicateOrder, validateDatabase } from "./domain";
 import { saveEquipmentBrand, saveEquipmentModel, selectEquipmentModel } from "./equipmentCatalogData";
 import { mobileSnapshotSchema } from "./mobile";
+import { archiveQuestionnaire, equipmentDefaultQuestionnaire, orderEquipmentQuestionnaires, saveQuestionnaire } from "./questionnaires";
+import { questionnaireDisplaySchema } from "./questionnaireSchema";
 
 function fixture() {
   let data = saveEquipmentBrand(demoDatabase(), { id: "brand", name: "Marca teste", archived: false });
@@ -10,6 +12,47 @@ function fixture() {
 }
 
 describe("catálogo de marcas e modelos", () => {
+  it("sugere o padrão atual do modelo para unidades antigas e permite troca apenas na OS", () => {
+    let data = fixture();
+    const template = { id: "inspection", title: "Preventiva Esteiras", revision: 1, archived: false, requiredForCheckout: false,
+      header: "", footer: "", display: questionnaireDisplaySchema.parse({ equipment: true }),
+      questions: [{ id: "report", label: "Relato", kind: "Texto" as const, required: false, options: [] }] };
+    data = saveQuestionnaire(data, template);
+    data = saveQuestionnaire(data, { ...template, id: "other", title: "Outro modelo" });
+    data.equipment[0].model = selectEquipmentModel(data, "model");
+    data.orderTypeQuestionnaires = [{ type: "Corretiva", questionnaireId: "other", required: false }];
+    expect(equipmentDefaultQuestionnaire(data, data.equipment[0].id, "Corretiva")).toBe("other");
+    data = saveEquipmentModel(data, { ...data.equipmentModels[0], questionnaireId: template.id });
+    expect(equipmentDefaultQuestionnaire(data, data.equipment[0].id, "Corretiva")).toBe(template.id);
+    const selections = [{ equipmentId: data.equipment[0].id, questionnaireId: equipmentDefaultQuestionnaire(data, data.equipment[0].id, "Corretiva") }];
+    const linked = orderEquipmentQuestionnaires(data, data.equipment[0].clientId, selections, []);
+    expect(linked.checklists[0].templateId).toBe(template.id);
+    const override = orderEquipmentQuestionnaires(data, data.equipment[0].clientId, [{ ...selections[0], questionnaireId: "other" }], []);
+    expect(override.checklists[0].templateId).toBe("other");
+    expect(data.equipmentModels[0].questionnaireId).toBe(template.id);
+    data.orders[0].details = { ...getOrderDetails(data.orders[0]), checklists: linked.checklists };
+    const changed = saveEquipmentModel(data, { ...data.equipmentModels[0], questionnaireId: "other" });
+    expect(changed.orders).toEqual(data.orders);
+    expect(equipmentDefaultQuestionnaire(changed, data.equipment[0].id, "Corretiva")).toBe("other");
+    expect(validateDatabase(JSON.parse(JSON.stringify(changed))).equipmentModels[0].questionnaireId).toBe("other");
+  });
+  it("aceita somente padrões ativos por equipamento e limpa o padrão ao arquivar o questionário", () => {
+    let data = fixture();
+    const template = { id: "inspection", title: "Preventiva", revision: 1, archived: false, requiredForCheckout: false,
+      header: "", footer: "", display: questionnaireDisplaySchema.parse({ equipment: true }),
+      questions: [{ id: "report", label: "Relato", kind: "Texto" as const, required: false, options: [] }] };
+    expect(() => saveEquipmentModel(data, { ...data.equipmentModels[0], questionnaireId: "missing" })).toThrow("questionário ativo");
+    data = saveQuestionnaire(data, template);
+    data = saveQuestionnaire(data, { ...template, id: "general", display: { ...template.display, equipment: false } });
+    expect(() => saveEquipmentModel(data, { ...data.equipmentModels[0], questionnaireId: "general" })).toThrow("por equipamento");
+    data = saveEquipmentModel(data, { ...data.equipmentModels[0], questionnaireId: template.id });
+    expect(() => saveQuestionnaire(data, { ...template, display: { ...template.display, equipment: false } })).toThrow("Remova o vínculo");
+    const archived = archiveQuestionnaire(data, template.id);
+    expect(archived.equipmentModels[0].questionnaireId).toBe("");
+    expect(archived.orders).toEqual(data.orders);
+    expect(() => saveEquipmentModel(archived, { ...data.equipmentModels[0] })).toThrow("questionário ativo");
+    expect(equipmentDefaultQuestionnaire(archived, archived.equipment[0].id, "Corretiva")).toBe("");
+  });
   it("abre bases antigas sem catálogo e mantém seleções opcionais", () => {
     const { equipmentBrands: _brands, equipmentModels: _models, ...legacy } = demoDatabase();
     const data = validateDatabase(legacy);

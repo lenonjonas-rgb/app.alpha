@@ -57,7 +57,7 @@ import { downloadFile, errorMessage } from "./useDatabase";
 import { questionDefinitionSchema, questionKinds, requiresJustification } from "./questionnaireSchema";
 import { prepareQuestionnairePhoto } from "./questionnairePhoto";
 import { questionAnswerText, questionSignature, withQuestionAnswer } from "./questionnaireAnswers";
-import { addQuestionnaire } from "./questionnaires";
+import { addQuestionnaire, assertSingleEquipmentQuestionnaire, assignQuestionnaireEquipment, keepEquipmentQuestionnaire, replaceOrderQuestionnaire } from "./questionnaires";
 import { EquipmentSelections, EquipmentSelectionSummary } from "./EquipmentModelPicker";
 import "./OrderWorkspace.css";
 
@@ -212,6 +212,7 @@ export function OrderWorkspace({
                 throw new Error(
                   "Esta OS foi alterada em outra aba. Cancele e abra a edição novamente.",
                 );
+              assertSingleEquipmentQuestionnaire(draft.checklists);
               return draft;
             },
             `Informações da OS atualizadas: ${tab}`,
@@ -978,8 +979,16 @@ export function OrderWorkspace({
                   </div>
                 )}
               </div>
+              {details.checklists.some((item) => item.equipmentId && details.checklists.filter((other) => other.equipmentId === item.equipmentId).length > 1) &&
+                <p role="alert" className="error-message">Há equipamentos com mais de um questionário nesta tarefa. Em Editar informações, use “Manter somente este questionário” no questionário correto de cada equipamento. As respostas do escolhido serão preservadas.</p>}
               {details.checklists.map((checklist) => (
                 <section className="checklist-block" key={checklist.id}>
+                  {editing && checklist.equipmentId && details.checklists.filter((item) => item.equipmentId === checklist.equipmentId).length > 1 &&
+                    <button className="button secondary" onClick={() => {
+                      if (!window.confirm(`Manter somente "${checklist.title}" neste equipamento? As respostas deste questionário serão preservadas. Os outros questionários deste equipamento e suas respostas serão removidos; os arquivos anexados serão mantidos.`)) return;
+                      try { patch({ checklists: keepEquipmentQuestionnaire(details.checklists, checklist.id) }); setError(""); }
+                      catch (cause) { setError(errorMessage(cause)); }
+                    }}>Manter somente este questionário</button>}
                   <div className="section-heading">
                     <h2>{checklist.title}</h2>
                     {editing && (
@@ -1007,21 +1016,16 @@ export function OrderWorkspace({
                     <select
                       disabled={!editing}
                       value={checklist.equipmentId}
-                      onChange={(event) =>
-                        patch({
-                          checklists: details.checklists.map((item) =>
-                            item.id === checklist.id
-                              ? { ...item, equipmentId: event.target.value }
-                              : item,
-                          ),
-                        })
-                      }
+                      onChange={(event) => {
+                        try { patch({ checklists: assignQuestionnaireEquipment(details.checklists, checklist.id, event.target.value) }); setError(""); }
+                        catch (cause) { setError(errorMessage(cause)); }
+                      }}
                     >
                       <option value="">Questionário da tarefa</option>
                       {data.equipment
                         .filter((item) => linkedEquipment.includes(item.id))
                         .map((item) => (
-                          <option key={item.id} value={item.id}>
+                          <option key={item.id} value={item.id} disabled={details.checklists.some((other) => other.id !== checklist.id && other.equipmentId === item.id)}>
                             {item.name} · {item.assetCode ?? item.serial}
                           </option>
                         ))}
@@ -1860,7 +1864,13 @@ export function OrderWorkspace({
               try {
                 const template = data.questionnaires.find((item) => item.id === questionnaireTemplateId && !item.archived);
                 if (!template) throw new Error("Selecione um questionário ativo no catálogo.");
-                patch({ checklists: addQuestionnaire(details.checklists, template, String(form.get("equipmentId") ?? "")) });
+                const equipmentId = String(form.get("equipmentId") ?? "");
+                const linked = details.checklists.filter((item) => equipmentId && item.equipmentId === equipmentId);
+                if (linked.length && !(linked.length === 1 && linked[0].templateId === template.id) &&
+                  !window.confirm("Este equipamento já possui questionário. Deseja manter somente o modelo selecionado? Se já estiver vinculado, suas respostas serão preservadas; caso contrário, começará sem respostas. Os outros questionários desse equipamento e suas respostas serão removidos. Os anexos e demais equipamentos serão preservados.")) return;
+                patch({ checklists: equipmentId
+                  ? replaceOrderQuestionnaire(details.checklists, template, equipmentId)
+                  : addQuestionnaire(details.checklists, template) });
                 setDialog(null); setQuestionnaireTemplateId(""); setError("");
               } catch (cause) { setError(errorMessage(cause)); }
             }}
@@ -1883,11 +1893,12 @@ export function OrderWorkspace({
                     .filter((item) => linkedEquipment.includes(item.id))
                     .map((item) => (
                       <option key={item.id} value={item.id}>
-                        {item.name}
+                        {item.name} · {item.assetCode ?? item.serial}
                       </option>
                     ))}
                 </select>
               </label>
+              <p className="full">Cada equipamento pode ter apenas um questionário nesta tarefa. Selecionar uma unidade já atendida substitui o modelo atual, após confirmação, sem adicionar outra manutenção.</p>
             </div>
             <footer className="modal-footer">
               <button className="button primary">
