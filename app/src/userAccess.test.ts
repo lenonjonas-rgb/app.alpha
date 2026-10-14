@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { displayLogin, loginEmail } from "./userAccess";
+import { administratorPortalUrl, displayLogin, loginEmail } from "./userAccess";
 import { firstNameBase, manageUsersHandler } from "../../supabase/functions/manage-users/handler";
 
 const master = "00000000-0000-4000-8000-000000000001";
@@ -11,6 +11,22 @@ const request = (body: object = fields, token = "caller-token") => new Request("
 });
 const reply = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status });
 const env = { url: "https://example.test", serviceKey: "server-only-key" };
+
+describe("Seleção do portal pelo perfil", () => {
+  const href = "https://example.test/?tecnico=1&origem=atalho#orders";
+  it.each(["owner", "admin"] as const)("encaminha %s ao painel e preserva outros parâmetros e a página", (role) => {
+    expect(administratorPortalUrl(role, false, href)).toBe("https://example.test/?origem=atalho#orders");
+  });
+  it.each(["technician", "manager"] as const)("não concede painel administrativo ao perfil %s", (role) => {
+    expect(administratorPortalUrl(role, false, href)).toBeNull();
+  });
+  it.each(["owner", "admin", "technician"] as const)("preserva o aplicativo Android para %s", (role) => {
+    expect(administratorPortalUrl(role, true, href)).toBeNull();
+  });
+  it("não redireciona quando o painel já está aberto", () => {
+    expect(administratorPortalUrl("owner", false, "https://example.test/#orders")).toBeNull();
+  });
+});
 
 describe("Logins e criação de usuários", () => {
   it("normaliza primeiro nome, mantém e-mail Master e valida logins", () => {

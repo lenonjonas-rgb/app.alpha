@@ -1,6 +1,14 @@
 export const roleLabels = { owner: "Master", admin: "Administrativo", technician: "Técnico", manager: "Gestor legado" } as const;
 export type CompanyRole = keyof typeof roleLabels;
 
+export function administratorPortalUrl(role: CompanyRole, native: boolean, href: string): string | null {
+  if (native || (role !== "owner" && role !== "admin")) return null;
+  const url = new URL(href);
+  if (url.searchParams.get("tecnico") !== "1") return null;
+  url.searchParams.delete("tecnico");
+  return url.href;
+}
+
 export function loginEmail(login: string): string {
   const value = login.trim().toLowerCase();
   if (/^[a-z][a-z0-9]{0,59}\.aupha$/.test(value)) return `${value}@users.aupha.invalid`;
