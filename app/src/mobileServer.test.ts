@@ -2,7 +2,10 @@
 import { readFile } from "node:fs/promises";
 import { PGlite } from "@electric-sql/pglite";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { demoDatabase, getOrderDetails, validateDatabase } from "./domain";
+import { demoDatabase, getOrderDetails, instantiateQuestionnaire, validateDatabase } from "./domain";
+import { saveQuestionnaire } from "./questionnaires";
+import { questionnaireDisplaySchema } from "./questionnaireSchema";
+import { linkClientEquipment, saveEquipmentBrand, saveEquipmentModel, selectEquipmentModel } from "./equipmentCatalogData";
 import { mobileSnapshotSchema, technicianAgendaOrders } from "./mobile";
 
 const owner = "00000000-0000-4000-8000-000000000001";
@@ -109,6 +112,60 @@ describe("RPC Android e isolamento de dados", () => {
         { id: "text", label: "Observações", kind: "Area de texto" as const, required: false, options: [], answer: "", description: "Informe detalhes", photoMetadata: false },
       ],
     };
+
+    it("entrega a edição do questionário e o local de atendimento ao técnico e rejeita envio sobre a estrutura antiga", async () => {
+      const model = {
+        id: "live-template", title: "Inspeção", revision: 1, archived: false, requiredForCheckout: true,
+        header: "", footer: "", display: questionnaireDisplaySchema.parse({}),
+        questions: [{ id: "live-q", label: "Relato", kind: "Texto" as const, required: true, options: [] }],
+      };
+      await questionnaireFixture([instantiateQuestionnaire(model)]);
+      const old = await snapshot();
+      await identity(owner);
+      const stored = await db.query<{ payload: unknown }>("select payload from public.company_data where company_id=$1", [company]);
+      let full = validateDatabase(stored.rows[0].payload);
+      full = saveEquipmentBrand(full, { id: "brand", name: "Marca teste", archived: false });
+      full = saveEquipmentModel(full, { id: "model", brandId: "brand", name: "Esteira X", line: "Cardio", category: "Esteiras", notes: "", archived: false });
+      full = linkClientEquipment(full, full.orders[0].clientId, [{ modelId: "model", quantity: 2 }]);
+      const assignedUnits = full.equipment.slice(-2);
+      full = linkClientEquipment(full, full.clients[1].id, [{ modelId: "model", quantity: 1 }]);
+      const otherUnit = full.equipment.at(-1)!;
+      const modelSelection = selectEquipmentModel(full, "model");
+      full.equipment[0].model = modelSelection;
+      full.quotes[0].equipmentModels = [modelSelection];
+      full.questionnaires = [model];
+      full.orders[0].details = {
+        ...getOrderDetails(full.orders[0]),
+        serviceLocation: { useClientAddress: false, postalCode: "01001000", street: "Praça da Sé", number: "10", complement: "", neighborhood: "Sé", city: "São Paulo", state: "SP" },
+        responsibleName: "Maria", responsiblePhone: "11999998888",
+        equipmentModels: [{ ...modelSelection, quantity: 2, purpose: "Montagem" }],
+        equipmentIds: assignedUnits.map((item) => item.id),
+      };
+      full = saveQuestionnaire(full, { ...model, title: "Inspeção atualizada", questions: [...model.questions, { ...model.questions[0], id: "new-q", label: "Novo teste" }] });
+      await db.query("select public.save_company_data($1,$2)", [JSON.stringify(full), old.revision]);
+      await identity(tech);
+      const current = await snapshot();
+      const details = getOrderDetails(current.payload.orders[0]);
+      expect(details).toMatchObject({ responsibleName: "Maria", responsiblePhone: "11999998888", serviceLocation: { street: "Praça da Sé", number: "10" } });
+      expect(details.checklists).toHaveLength(1);
+      expect(details.checklists[0].title).toBe("Inspeção atualizada");
+      expect(details.checklists[0].questions.map((q) => q.id)).toEqual(["live-q", "new-q"]);
+      expect(details.equipmentModels[0]).toMatchObject({ name: "Esteira X", brand: "Marca teste", quantity: 2, purpose: "Montagem" });
+      expect(current.payload.equipmentBrands).toEqual([]);
+      expect(current.payload.equipmentModels).toEqual([]);
+      expect(current.payload.equipment[0].model).toMatchObject({ modelId: "model", brand: "Marca teste" });
+      expect(current.payload.equipment.filter((item) => assignedUnits.some((unit) => unit.id === item.id))).toHaveLength(2);
+      expect(current.payload.equipment.find((item) => item.id === assignedUnits[0].id)).toMatchObject({ assetCode: assignedUnits[0].assetCode, model: { line: "Cardio" } });
+      expect(current.payload.equipment.some((item) => item.id === otherUnit.id)).toBe(false);
+      await expect(mutate("report", {}, old.revision)).rejects.toThrow("Sincronize");
+      await mutate("report", {
+        report: details.report, distanceKm: details.distanceKm, attachments: details.attachments,
+        checklists: details.checklists.map((checklist) => ({ ...checklist, questions: checklist.questions.map((q) => ({ ...q, answer: "Feito" })) })),
+        signature: details.signature, pending: details.pending,
+      }, current.revision);
+      expect(getOrderDetails((await snapshot()).payload.orders[0])).toMatchObject({ responsibleName: "Maria", serviceLocation: { number: "10" } });
+      expect(getOrderDetails((await snapshot()).payload.orders[0]).equipmentModels).toEqual(details.equipmentModels);
+    });
 
     it("exige duas assinaturas independentes; carimba no servidor e preserva o horário ao salvar novamente", async () => {
       const report = await questionnaireFixture([structuredClone(list)]);

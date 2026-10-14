@@ -1078,6 +1078,68 @@ td .record-link strong {
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 17px;
 }
+.equipment-brand-catalog {
+  display: grid;
+  gap: 16px;
+  padding: 24px;
+  min-width: 0;
+  border-bottom: 1px solid var(--line);
+}
+.equipment-brand-catalog .section-heading {
+  margin-bottom: 0;
+}
+.equipment-brand-catalog .section-heading,
+.equipment-brand-catalog .row-actions {
+  flex-wrap: wrap;
+}
+.equipment-brand-catalog p,
+.equipment-selections p {
+  color: #6e757f;
+  font-size: 12px;
+  line-height: 1.6;
+}
+.equipment-brand-catalog td {
+  overflow-wrap: anywhere;
+}
+.equipment-units-title {
+  padding: 20px 24px;
+  font-size: 14px;
+  font-weight: 500;
+}
+.equipment-selections {
+  display: grid;
+  gap: 16px;
+  min-width: 0;
+}
+.equipment-selection-row {
+  border-top: 1px solid var(--line);
+  padding-top: 16px;
+}
+.client-equipment,
+.equipment-link-form,
+.equipment-history {
+  display: grid;
+  gap: 18px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.client-equipment .row-actions {
+  flex-wrap: wrap;
+}
+.equipment-link-form,
+.equipment-history article {
+  border: 1px solid var(--line);
+  padding: 18px;
+  border-radius: 8px;
+}
+.equipment-code {
+  overflow-wrap: anywhere;
+  max-width: 220px;
+  font-family: monospace;
+}
+.client-equipment p {
+  line-height: 1.6;
+}
 .field {
   display: flex;
   flex-direction: column;

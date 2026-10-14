@@ -5,7 +5,7 @@ import { Capacitor } from "@capacitor/core";
 import { App as NativeApp } from "@capacitor/app";
 import { ArrowLeft, CalendarDays, Check, ChevronLeft, ChevronRight, Clock3, FileText, Home, MapPin, Navigation, RefreshCw, LogOut, Camera, Pause, Play, X } from "lucide-react";
 import { supabase } from "./supabase";
-import { activityTotals, allowedActivities, currency, displayDate, getOrderDetails, localDay, orderDetailsSchema, orderPending, orderValues, shiftDay, validateOrderDetails } from "./domain";
+import { activityTotals, allowedActivities, currency, displayDate, getOrderDetails, localDay, orderDetailsSchema, orderPending, orderServiceAddress, orderValues, shiftDay, validateOrderDetails } from "./domain";
 import type { Activity, Order, OrderDetails } from "./domain";
 import { errorMessage } from "./useDatabase";
 import { captureLocation, durationText, mobileSnapshotSchema, openRoute, prepareAttachment, shareAttachment, technicianAgendaOrders } from "./mobile";
@@ -16,6 +16,7 @@ import { PasswordSettings } from "./PasswordSettings";
 import { prepareQuestionnairePhoto } from "./questionnairePhoto";
 import { requiresJustification } from "./questionnaireSchema";
 import { withQuestionAnswer } from "./questionnaireAnswers";
+import { EquipmentSelectionSummary } from "./EquipmentModelPicker";
 
 export default function TechnicianApp() {
   const [session, setSession] = useState<Session | null>(null);
@@ -38,8 +39,9 @@ export default function TechnicianApp() {
     setSnapshot(mobileSnapshotSchema.parse(data));
     setSyncedAt(new Date().toLocaleTimeString("pt-BR"));
   }, []);
-  const sync = useCallback(async () => {
+  const sync = useCallback(async (automatic = false) => {
     if (!supabase || syncing.current) return;
+    if (automatic && (hasDraft.current || taskWorking.current)) return;
     if (taskWorking.current) { setError("Aguarde o registro ou a preparação do arquivo."); return; }
     syncing.current = true;
     setBusy(true);
@@ -47,6 +49,7 @@ export default function TechnicianApp() {
     try {
       const result = await supabase.rpc("mobile_company_data");
       if (result.error) throw result.error;
+      if (automatic && (hasDraft.current || taskWorking.current)) return;
       accept(result.data);
     } catch (cause) {
       setError(errorMessage(cause));
@@ -75,7 +78,16 @@ export default function TechnicianApp() {
     const timer = setInterval(() => setToday(localDay()), 60000);
     return () => clearInterval(timer);
   }, []);
-  useEffect(() => { if (userId) void Promise.resolve().then(sync); }, [userId, sync]);
+  useEffect(() => { if (userId) void Promise.resolve().then(() => sync()); }, [userId, sync]);
+  useEffect(() => {
+    if (!userId) return;
+    const refresh = () => {
+      if (document.visibilityState === "visible") void sync(true);
+    };
+    const timer = window.setInterval(refresh, 15000);
+    window.addEventListener("focus", refresh);
+    return () => { window.clearInterval(timer); window.removeEventListener("focus", refresh); };
+  }, [userId, sync]);
   useEffect(() => {
     if (!Capacitor.isNativePlatform()) return;
     const listener = NativeApp.addListener("backButton", () => {
@@ -228,6 +240,7 @@ function Task({ order, snapshot, busy, mutate, onDraftChange, onWorkingChange }:
     setDraft(getOrderDetails(order));
   }
   const client = snapshot.payload.clients.find((item) => item.id === order.clientId)!;
+  const serviceAddress = orderServiceAddress(order, client);
   const totals = activityTotals(original.activities, now);
   const pending = orderPending({ ...order, details: draft });
   useEffect(() => {
@@ -329,16 +342,20 @@ function Task({ order, snapshot, busy, mutate, onDraftChange, onWorkingChange }:
       {error && <div role="alert" className="tech-error">{error}</div>}
       {notice && <p role="status" className="tech-success">{notice}</p>}
       {tab === "details" && <>
-        <section className="tech-panel"><h2><MapPin />Endereço do cliente</h2><p>{client.address || "Endereço não cadastrado."}</p>
-          <button disabled={!client.address} onClick={() => setRoutes(!routes)}><Navigation />Navegar até o local</button>
+        <section className="tech-panel"><h2><MapPin />Endereço de atendimento</h2><p>{serviceAddress || "Endereço não cadastrado."}</p>
+          <button disabled={!serviceAddress} onClick={() => setRoutes(!routes)}><Navigation />Navegar até o local</button>
           {routes && <div className="tech-actions">{(["google", "waze"] as const).map((provider) => <button key={provider} onClick={async () => {
-            try { await openRoute(client.address, provider); } catch (cause) { setError(errorMessage(cause)); }
+            try { await openRoute(serviceAddress, provider); } catch (cause) { setError(errorMessage(cause)); }
           }}>{provider === "google" ? "Google Maps" : "Waze"}</button>)}</div>}
           {client.phone && <a href={`tel:${client.phone.replace(/[^\d+]/g, "")}`}>Ligar: {client.phone}</a>}
+          <h3>Responsável pelo atendimento</h3>
+          <p>{original.responsibleName || "Não informado"}</p>
+          {original.responsiblePhone && <a href={`tel:${original.responsiblePhone.replace(/[^\d+]/g, "")}`}>Ligar para responsável: {original.responsiblePhone}</a>}
         </section>
         <section className="tech-panel"><h2>Informações da tarefa</h2><p>{displayDate(order.date)} às {order.time}</p><p>{order.type} · Prioridade {order.priority}</p><p>Técnico: {order.technician}</p><h3>Orientações</h3><p className="tech-preserve">{order.notes || "Nenhuma orientação."}</p>
           {original.tags.length > 0 && <p>Tags: {original.tags.join(", ")}</p>}
-          <h3>Equipamentos</h3>{snapshot.payload.equipment.filter((item) => [order.equipmentId, ...original.equipmentIds].includes(item.id)).map((item) => <p key={item.id}>{item.name} · {item.serial}<br />{item.notes}</p>)}
+          <h3>Equipamentos</h3>{snapshot.payload.equipment.filter((item) => [order.equipmentId, ...original.equipmentIds].includes(item.id)).map((item) => <p key={item.id}>{item.name} · {item.assetCode ?? item.serial}{item.model ? ` · ${item.model.brand}${item.model.line ? ` · ${item.model.line}` : ""} · ${item.model.name}` : ""}<br />{item.notes}</p>)}
+          <EquipmentSelectionSummary value={original.equipmentModels} />
         </section>
         <section className="tech-panel"><h2>Valores e orçamentos</h2><p>Valor da OS: {currency(orderValues(original).total)}</p>{snapshot.payload.quotes.filter((quote) => quote.orderId === order.id).map((quote) => <p key={quote.id}>{quote.code} · {quote.status}<br />{quote.notes}</p>)}</section>
       </>}
@@ -361,7 +378,7 @@ function Task({ order, snapshot, busy, mutate, onDraftChange, onWorkingChange }:
         {draft.checklists.map((list) => <section key={list.id} className="tech-panel"><h2>{list.title}</h2>
           <p>{list.requiredForCheckout === false ? "Preenchimento opcional para check-out." : "Responda às perguntas obrigatórias para liberar o check-out."}</p>
           {list.header && <p className="tech-preserve">{list.header}</p>}
-          {list.equipmentId && <p>Equipamento: {snapshot.payload.equipment.find((item) => item.id === list.equipmentId)?.name ?? list.equipmentId} · {snapshot.payload.equipment.find((item) => item.id === list.equipmentId)?.serial}</p>}
+          {list.equipmentId && <p>Equipamento: {snapshot.payload.equipment.find((item) => item.id === list.equipmentId)?.name ?? list.equipmentId} · {snapshot.payload.equipment.find((item) => item.id === list.equipmentId)?.assetCode ?? snapshot.payload.equipment.find((item) => item.id === list.equipmentId)?.serial}</p>}
           {list.questions.map((question) => {
             const signature = question.signature === undefined ? draft.signature : question.signature;
             const photo = draft.attachments.find((file) => file.id === (question.kind === "Foto" ? question.answer : question.justificationPhotoId));

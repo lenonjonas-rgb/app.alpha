@@ -37,9 +37,9 @@ export function QuestionnaireCatalog({ data, commit, onSuccess }: {
       <label className="checkbox-field"><input type="checkbox" checked={archived} onChange={(event) => setArchived(event.target.checked)} />Arquivados</label>
       <button className="button primary" onClick={() => { setError(""); setDraft(newTemplate()); }}><Plus size={17} />Novo questionário</button>
     </div>
-    <p>Modelos reutilizáveis. Cada tarefa recebe uma cópia; editar ou arquivar o modelo não altera atendimentos já cadastrados.</p>
+    <p>Editar um questionário atualiza automaticamente as tarefas vinculadas não finalizadas ou arquivadas, preservando respostas compatíveis. Tarefas finalizadas mantêm o histórico original.</p>
     <div className="questionnaire-template-list">{templates.map((template) => <article className="checklist-block" key={template.id}>
-      <h2>{template.title}</h2><p>{template.questions.length} perguntas · Versão {template.revision}{template.display.equipment ? " · Permite resposta por equipamento" : ""}</p>
+      <h2>{template.title}</h2><p>{template.questions.length} perguntas{template.display.equipment ? " · Permite resposta por equipamento" : ""}</p>
       <p>{template.requiredForCheckout ? "Preenchimento obrigatório para check-out" : "Preenchimento opcional para check-out"}</p>
       <div className="row-actions">
         {!archived && <button className="button secondary" onClick={() => { setError(""); setDraft(structuredClone(template)); }}><Pencil size={16} />Editar {template.title}</button>}
@@ -66,7 +66,7 @@ export function QuestionnaireCatalog({ data, commit, onSuccess }: {
       })}
     </section>
     {draft && <TemplateEditor key={draft.id} initial={draft} onClose={() => setDraft(null)} onSave={(template) => {
-      try { commit((current) => saveQuestionnaire(current, template)); setDraft(null); setError(""); onSuccess("Questionário salvo. Tarefas existentes foram preservadas."); }
+      try { commit((current) => saveQuestionnaire(current, template)); setDraft(null); setError(""); onSuccess("Questionário salvo. Tarefas abertas vinculadas foram atualizadas."); }
       catch (cause) { throw new Error(errorMessage(cause)); }
     }} />}
   </section>;
@@ -93,7 +93,7 @@ function TemplateEditor({ initial, onClose, onSave }: { initial: QuestionnaireTe
       {error && <div className="error-message" role="alert">{error}</div>}
       <label className="field">Título do questionário *<input required maxLength={1000} value={draft.title} onChange={(event) => setDraft({ ...draft, title: event.target.value })} /></label>
       <label className="checkbox-field"><input type="checkbox" checked={draft.requiredForCheckout} onChange={(event) => setDraft({ ...draft, requiredForCheckout: event.target.checked })} />Exigir preenchimento para fazer check-out</label>
-      <p>Quando marcado, as perguntas obrigatórias precisam ser respondidas antes de finalizar. Quando desmarcado, o questionário pode ficar incompleto sem bloquear o check-out. Esta opção é copiada para novas associações; tarefas existentes não são alteradas.</p>
+      <p>Quando marcado, as perguntas obrigatórias precisam ser respondidas antes de finalizar. Quando desmarcado, o questionário pode ficar incompleto sem bloquear o check-out. Alterações são aplicadas também às tarefas vinculadas não finalizadas ou arquivadas. Perguntas removidas deixam a tarefa; respostas de perguntas cujo tipo mudou são limpas e opções removidas deixam de ser respostas válidas.</p>
       <label className="field">Cabeçalho<textarea rows={3} maxLength={10000} value={draft.header} onChange={(event) => setDraft({ ...draft, header: event.target.value })} /></label>
       <p>Cabeçalho, descrição e rodapé usam texto simples, sem HTML.</p>
       {draft.questions.map((question, index) => <fieldset className="questionnaire-definition" key={question.id}><legend>Pergunta {index + 1}</legend>

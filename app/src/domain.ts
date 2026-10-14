@@ -27,6 +27,22 @@ const clientSchema = z.object({
   group: z.string(),
   active: z.boolean(),
 });
+export const equipmentBrandSchema = z.object({
+  id, name: text, archived: z.boolean().default(false),
+});
+export const equipmentModelSchema = z.object({
+  id, brandId: id, name: text, category: z.string().max(200),
+  line: z.string().trim().max(200).optional(),
+  notes: z.string().max(3000), archived: z.boolean().default(false),
+});
+const equipmentModelSnapshotSchema = z.object({
+  modelId: id, brandId: id, brand: text, name: text, category: z.string().max(200),
+  line: z.string().trim().max(200).optional(),
+});
+export const equipmentSelectionSchema = equipmentModelSnapshotSchema.extend({
+  quantity: z.number().int().min(1).max(10000),
+  purpose: z.enum(["Montagem", "Manutenção", "Outro"]),
+});
 const equipmentSchema = z.object({
   id,
   name: text,
@@ -35,6 +51,8 @@ const equipmentSchema = z.object({
   category: z.string(),
   warranty: z.union([z.literal(""), day]),
   notes: z.string(),
+  model: equipmentModelSnapshotSchema.optional(),
+  assetCode: z.string().trim().min(1).max(100).optional(),
 });
 const productSchema = z.object({
   id,
@@ -113,15 +131,39 @@ const activitySchema = z.object({
     })
     .optional(),
 });
+export const serviceLocationSchema = z.object({
+  useClientAddress: z.boolean(),
+  postalCode: z.string().max(8),
+  street: z.string().max(300),
+  number: z.string().max(40),
+  complement: z.string().max(200),
+  neighborhood: z.string().max(200),
+  city: z.string().max(200),
+  state: z.string().max(2),
+}).superRefine((location, context) => {
+  if (location.useClientAddress) return;
+  for (const field of ["street", "number", "city", "state"] as const) {
+    if (!location[field].trim())
+      context.addIssue({ code: "custom", path: [field], message: "Preencha o endereço de atendimento." });
+  }
+  if (!/^\d{8}$/.test(location.postalCode))
+    context.addIssue({ code: "custom", path: ["postalCode"], message: "Informe um CEP com 8 dígitos." });
+  if (!/^[A-Z]{2}$/.test(location.state))
+    context.addIssue({ code: "custom", path: ["state"], message: "Informe a UF com 2 letras." });
+});
 export const orderDetailsSchema = z.object({
   archived: z.boolean().default(false),
   createdAt: z.iso.datetime().nullable().default(null),
   report: z.string().max(10000).default(""),
   externalCode: z.string().max(100).default(""),
+  serviceLocation: serviceLocationSchema.optional(),
+  responsibleName: z.string().trim().max(160).optional(),
+  responsiblePhone: z.string().trim().max(40).optional(),
   tags: z.array(text).default([]),
   checkInMode: z.enum(["Manual", "Automatico"]).default("Manual"),
   distanceKm: z.number().nonnegative().max(100000).default(0),
   equipmentIds: z.array(id).default([]),
+  equipmentModels: z.array(equipmentSelectionSchema).default([]),
   attachments: z.array(attachmentSchema).default([]),
   checklists: z.array(checklistSchema).default([]),
   questionnaireRequired: z.boolean().optional(),
@@ -165,6 +207,7 @@ const quoteSchema = z
     discount: money,
     notes: z.string(),
     orderId: z.string(),
+    equipmentModels: z.array(equipmentSelectionSchema).default([]),
   })
   .refine(
     (value) => value.expires >= value.date,
@@ -198,6 +241,8 @@ export const databaseSchema = z.object({
   version: z.literal(1),
   clients: z.array(clientSchema),
   equipment: z.array(equipmentSchema),
+  equipmentBrands: z.array(equipmentBrandSchema).default([]),
+  equipmentModels: z.array(equipmentModelSchema).default([]),
   products: z.array(productSchema),
   services: z.array(serviceSchema),
   orders: z.array(orderSchema),
@@ -233,6 +278,9 @@ export const databaseSchema = z.object({
 export type Database = z.infer<typeof databaseSchema>;
 export type Client = z.infer<typeof clientSchema>;
 export type Equipment = z.infer<typeof equipmentSchema>;
+export type EquipmentBrand = z.infer<typeof equipmentBrandSchema>;
+export type EquipmentModel = z.infer<typeof equipmentModelSchema>;
+export type EquipmentSelection = z.infer<typeof equipmentSelectionSchema>;
 export type Product = z.infer<typeof productSchema>;
 export type Service = z.infer<typeof serviceSchema>;
 export type Order = z.infer<typeof orderSchema>;
@@ -244,6 +292,17 @@ export type OrderDetails = z.infer<typeof orderDetailsSchema>;
 export type Activity = z.infer<typeof activitySchema>;
 export type Checklist = z.infer<typeof checklistSchema>;
 export type Attachment = z.infer<typeof attachmentSchema>;
+export type ServiceLocation = z.infer<typeof serviceLocationSchema>;
+export function orderServiceAddress(order: Order, client: Pick<Client, "address">): string {
+  const location = order.details?.serviceLocation;
+  if (!location || location.useClientAddress) return client.address;
+  return [
+    [location.street, location.number].filter(Boolean).join(", "),
+    location.complement, location.neighborhood,
+    [location.city, location.state].filter(Boolean).join(" - "),
+    `CEP ${location.postalCode}`,
+  ].filter(Boolean).join(" · ");
+}
 export function instantiateQuestionnaire(template: QuestionnaireTemplate, equipmentId = ""): Checklist {
   const parsed = questionnaireTemplateSchema.parse(template);
   if (parsed.archived) throw new Error("Questionário arquivado não pode ser adicionado.");
@@ -560,17 +619,21 @@ export function replicateOrder(
     activities: [],
     signature: null,
     pending: [],
-    checklists: originalDetails.checklists.map((checklist) => ({
-      ...checklist,
-      id: makeId(),
-      questions: checklist.questions.map((question) => ({
-        ...question,
-        ...(question.signature !== undefined ? { signature: null } : {}),
-        ...(question.kind === "Sim ou Não" ? { justification: "", justificationPhotoId: "" } : {}),
+    checklists: originalDetails.checklists.map((checklist) => {
+      const template = data.questionnaires.find((item) => item.id === checklist.templateId && !item.archived);
+      if (template) return instantiateQuestionnaire(template, template.display.equipment ? checklist.equipmentId : "");
+      return {
+        ...checklist,
         id: makeId(),
-        answer: "",
-      })),
-    })),
+        questions: checklist.questions.map((question) => ({
+          ...question,
+          ...(question.signature !== undefined ? { signature: null } : {}),
+          ...(question.kind === "Sim ou Não" ? { justification: "", justificationPhotoId: "" } : {}),
+          id: checklist.templateId ? question.id : makeId(),
+          answer: question.kind === "Multipla escolha" ? [] : "",
+        })),
+      };
+    }),
   };
   const record: Order = {
     ...original,
@@ -657,6 +720,8 @@ export function validateDatabase(input: unknown): Database {
   for (const collection of [
     data.clients,
     data.equipment,
+    data.equipmentBrands,
+    data.equipmentModels,
     data.products,
     data.services,
     data.orders,
@@ -670,6 +735,16 @@ export function validateDatabase(input: unknown): Database {
     )
       throw new Error("Identificadores duplicados no arquivo.");
   }
+  if (data.equipmentModels.some((model) => !data.equipmentBrands.some((brand) => brand.id === model.brandId)))
+    throw new Error("Modelo de equipamento sem marca válida.");
+  const normalizeName = (value: string) => value.trim().toLocaleLowerCase("pt-BR");
+  if (new Set(data.equipmentBrands.map((brand) => normalizeName(brand.name))).size !== data.equipmentBrands.length)
+    throw new Error("Já existe uma marca com este nome.");
+  if (new Set(data.equipmentModels.map((model) => JSON.stringify([model.brandId, normalizeName(model.line ?? ""), normalizeName(model.name)]))).size !== data.equipmentModels.length)
+    throw new Error("Já existe um modelo com este nome nesta marca e linha.");
+  const assetCodes = data.equipment.flatMap((item) => item.assetCode ? [item.assetCode.toUpperCase()] : []);
+  if (new Set(assetCodes).size !== assetCodes.length)
+    throw new Error("Código de equipamento duplicado entre os clientes.");
   data.questionnaires.forEach((template) => validateQuestionDefinitions(template.questions));
   if (new Set(data.orderTypeQuestionnaires.map((item) => item.type)).size !== data.orderTypeQuestionnaires.length)
     throw new Error("Tipo de tarefa com configuracao duplicada.");
@@ -836,7 +911,10 @@ export function convertQuote(data: Database, quoteId: string): Database {
     type: "Corretiva",
     priority: "Media",
     status: "Aberta",
-    details: orderDetailsSchema.parse({ createdAt: new Date().toISOString(), ...defaultQuestionnaires(data, "Corretiva") }),
+    details: orderDetailsSchema.parse({
+      createdAt: new Date().toISOString(), ...defaultQuestionnaires(data, "Corretiva"),
+      equipmentModels: structuredClone(quote.equipmentModels),
+    }),
     notes: `${quote.notes}\n\n${quote.items.map((item) => `${item.quantity} x ${item.name}: ${currency(item.price)}`).join("\n")}\nTotal: ${currency(total(quote))}`,
     history: [
       {
@@ -1060,6 +1138,7 @@ export function demoDatabase(): Database {
       discount: 0,
       notes: "Pagamento a combinar. Pecas e mao de obra inclusas.",
       orderId: "",
+      equipmentModels: [],
     },
   ];
   return validateDatabase({

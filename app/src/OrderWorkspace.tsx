@@ -32,7 +32,7 @@ import {
   currency,
   displayDate,
   getOrderDetails,
-  instantiateQuestionnaire,
+  orderServiceAddress,
   localDay,
   makeId,
   orderPending,
@@ -57,6 +57,8 @@ import { downloadFile, errorMessage } from "./useDatabase";
 import { questionDefinitionSchema, questionKinds, requiresJustification } from "./questionnaireSchema";
 import { prepareQuestionnairePhoto } from "./questionnairePhoto";
 import { questionAnswerText, questionSignature, withQuestionAnswer } from "./questionnaireAnswers";
+import { addQuestionnaire } from "./questionnaires";
+import { EquipmentSelections, EquipmentSelectionSummary } from "./EquipmentModelPicker";
 import "./OrderWorkspace.css";
 
 const tabs = [
@@ -324,11 +326,14 @@ export function OrderWorkspace({
       order.code,
       order.title,
       client.name,
-      client.address,
+      `Endereço de atendimento: ${orderServiceAddress(order, client)}`,
+      `Responsável: ${details.responsibleName || "Não informado"} · Telefone: ${details.responsiblePhone || "Não informado"}`,
       `${displayDate(order.date)} ${order.time}`,
       `Técnico: ${order.technician}`,
       `Orientações: ${order.notes}`,
       `Relato: ${details.report}`,
+      ...data.equipment.filter((item) => item.clientId === order.clientId && linkedEquipment.includes(item.id)).map((item) => `Equipamento: ${item.name} · ${item.assetCode ?? item.serial}`),
+      ...details.equipmentModels.map((item) => `${item.quantity} x ${item.brand}${item.line ? ` · ${item.line}` : ""} · ${item.name} · ${item.purpose}`),
       ...details.items.map(
         (item) => `${item.quantity} x ${item.name}: ${currency(item.price)}`,
       ),
@@ -545,8 +550,20 @@ export function OrderWorkspace({
                       <dd>{client.name}</dd>
                     </div>
                     <div>
-                      <dt>Endereço</dt>
+                      <dt>Endereço de atendimento</dt>
+                      <dd>{orderServiceAddress(order, client) || "Não informado"}</dd>
+                    </div>
+                    <div>
+                      <dt>Endereço cadastrado do cliente</dt>
                       <dd>{client.address || "Não informado"}</dd>
+                    </div>
+                    <div>
+                      <dt>Responsável pelo atendimento</dt>
+                      <dd>{details.responsibleName || "Não informado"}</dd>
+                    </div>
+                    <div>
+                      <dt>Telefone do responsável</dt>
+                      <dd>{details.responsiblePhone || "Não informado"}</dd>
                     </div>
                     <div>
                       <dt>Técnico</dt>
@@ -993,7 +1010,7 @@ export function OrderWorkspace({
                       </button>
                     )}
                   </div>
-                  {checklist.templateRevision && <small>Modelo v{checklist.templateRevision} · Cópia exclusiva desta tarefa</small>}
+                  {checklist.templateId && <small>{order.status === "Finalizada" || details.archived ? "Questionário preservado no histórico desta tarefa" : "Questionário vinculado · Alterações do cadastro são aplicadas automaticamente"}</small>}
                   <p>{checklist.requiredForCheckout === false ? "Preenchimento opcional para check-out." : "Perguntas obrigatórias bloqueiam o check-out enquanto não respondidas."}</p>
                   {checklist.header && <p className="questionnaire-text">{checklist.header}</p>}
                   {(!checklist.display || checklist.display.equipment) && <label className="field questionnaire-equipment">
@@ -1016,7 +1033,7 @@ export function OrderWorkspace({
                         .filter((item) => linkedEquipment.includes(item.id))
                         .map((item) => (
                           <option key={item.id} value={item.id}>
-                            {item.name} · {item.serial}
+                            {item.name} · {item.assetCode ?? item.serial}
                           </option>
                         ))}
                     </select>
@@ -1248,6 +1265,9 @@ export function OrderWorkspace({
           )}
           {tab === "Equipamentos" && (
             <>
+            {editing
+              ? <EquipmentSelections data={data} value={details.equipmentModels} onChange={(equipmentModels) => patch({ equipmentModels })} />
+              : <EquipmentSelectionSummary value={details.equipmentModels} />}
               <h2>
                 <Wrench size={18} />
                 Equipamentos associados
@@ -1274,9 +1294,10 @@ export function OrderWorkspace({
                       <span>
                         <strong>{item.name}</strong>
                         <small>
-                          {item.serial} · {item.category}
+                          {item.assetCode ?? item.serial} · {item.category}
                           {item.id === order.equipmentId ? " · Principal" : ""}
                         </small>
+                        {item.model && <small>{item.model.brand}{item.model.line ? ` · ${item.model.line}` : ""} · {item.model.name}</small>}
                         {item.warranty && (
                           <small>
                             Garantia até {displayDate(item.warranty)}
@@ -1850,7 +1871,7 @@ export function OrderWorkspace({
               try {
                 const template = data.questionnaires.find((item) => item.id === questionnaireTemplateId && !item.archived);
                 if (!template) throw new Error("Selecione um questionário ativo no catálogo.");
-                patch({ checklists: [...details.checklists, instantiateQuestionnaire(template, String(form.get("equipmentId") ?? ""))] });
+                patch({ checklists: addQuestionnaire(details.checklists, template, String(form.get("equipmentId") ?? "")) });
                 setDialog(null); setQuestionnaireTemplateId(""); setError("");
               } catch (cause) { setError(errorMessage(cause)); }
             }}
@@ -1861,7 +1882,7 @@ export function OrderWorkspace({
                 Modelo
                 <select name="type" required value={questionnaireTemplateId} onChange={(event) => setQuestionnaireTemplateId(event.target.value)}>
                   <option value="">Selecione um questionário</option>
-                  {data.questionnaires.filter((item) => !item.archived).map((item) => <option key={item.id} value={item.id}>{item.title} · v{item.revision}</option>)}
+                  {data.questionnaires.filter((item) => !item.archived).map((item) => <option key={item.id} value={item.id}>{item.title}</option>)}
                 </select>
                 {!data.questionnaires.some((item) => !item.archived) && <small>Cadastre um modelo em Cadastros → Questionários. Perguntas avulsas continuam disponíveis em Nova pergunta.</small>}
               </label>
@@ -2356,7 +2377,9 @@ function OrderPrintable({
       <p>
         {[
           client.name,
-          client.address,
+          `Endereço de atendimento: ${orderServiceAddress(order, client)}`,
+          `Endereço cadastrado: ${client.address}`,
+          `Responsável: ${details.responsibleName || "Não informado"} · Telefone: ${details.responsiblePhone || "Não informado"}`,
           `${client.phone} ${client.email}`,
           `${displayDate(order.date)} às ${order.time} · ${order.technician}`,
           `${order.type} · Prioridade ${order.priority}`,
@@ -2368,22 +2391,23 @@ function OrderPrintable({
       <h2>Relato técnico</h2>
       <p>{details.report || "Não registrado."}</p>
       <h2>Equipamentos</h2>
+      <EquipmentSelectionSummary value={details.equipmentModels} />
       {equipment.length ? (
         equipment.map((item) => (
           <p key={item.id}>
-            {item.name} · {item.serial}
+            {item.name} · {item.assetCode ?? item.serial}
+            {item.model ? ` · ${item.model.brand}${item.model.line ? ` · ${item.model.line}` : ""} · ${item.model.name}` : ""}
             {item.warranty ? ` · Garantia: ${displayDate(item.warranty)}` : ""}
           </p>
         ))
       ) : (
-        <p>Não associados.</p>
+        <p>Nenhuma unidade física associada.</p>
       )}
       <h2>Questionários</h2>
       {details.checklists.length ? (
         details.checklists.filter((checklist) => checklist.display?.showOnOrder !== false).map((checklist) => (
           <section key={checklist.id}>
             <h3>{checklist.title}</h3>
-            {checklist.templateRevision && <p>Versão do modelo: {checklist.templateRevision}</p>}
             {checklist.equipmentId && <p>Equipamento: {data.equipment.find((item) => item.id === checklist.equipmentId)?.name}</p>}
             {checklist.header && <p>{checklist.header}</p>}
             <div className={`print-question-grid columns-${checklist.display?.columns ?? 1} ${checklist.display?.inlineAnswers ? "inline-answers" : ""}`}>

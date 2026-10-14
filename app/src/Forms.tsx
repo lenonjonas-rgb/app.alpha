@@ -8,7 +8,7 @@ import {
   nextCode,
   orderDetailsSchema,
   getOrderDetails,
-  instantiateQuestionnaire,
+  serviceLocationSchema,
   shiftDay,
   subtotal,
 } from "./domain";
@@ -16,6 +16,7 @@ import type {
   Client,
   Database,
   Equipment,
+  EquipmentSelection,
   Line,
   Order,
   Product,
@@ -36,6 +37,10 @@ import {
 } from "./cnpj";
 import { formatCpf, isValidCpf } from "./cpf";
 import { orderTypes, orderTypeQuestionnaireSchema } from "./questionnaireSchema";
+import { addQuestionnaire } from "./questionnaires";
+import { ServiceLocationFields } from "./ServiceLocationFields";
+import { EquipmentModelPicker, EquipmentSelections } from "./EquipmentModelPicker";
+import { generateEquipmentCode, selectEquipmentModel } from "./equipmentCatalogData";
 
 export type FormKind =
   | "client"
@@ -50,6 +55,8 @@ export type Editor = {
   id?: string;
   date?: string;
   time?: string;
+  clientId?: string;
+  equipmentId?: string;
 };
 const getText = (form: FormData, key: string) =>
   String(form.get(key) ?? "").trim();
@@ -287,12 +294,14 @@ export function EditorModal({
   commit,
   onClose,
   onSuccess,
+  onClientEquipment,
 }: {
   editor: Editor;
   data: Database;
   commit: (update: Database | ((data: Database) => Database)) => void;
   onClose: () => void;
   onSuccess: (text: string) => void;
+  onClientEquipment?: (clientId: string) => void;
 }) {
   const [error, setError] = useState("");
   const technicians = useTechnicians(editor.kind === "order");
@@ -303,7 +312,7 @@ export function EditorModal({
   );
   const [clientId, setClientId] = useState(() =>
     editor.kind === "order"
-      ? (data.orders.find((record) => record.id === editor.id)?.clientId ?? "")
+      ? (data.orders.find((record) => record.id === editor.id)?.clientId ?? editor.clientId ?? "")
       : "",
   );
   const [lines, setLines] = useState<Line[]>(
@@ -323,6 +332,12 @@ export function EditorModal({
   const service = data.services.find((record) => record.id === editor.id);
   const order = data.orders.find((record) => record.id === editor.id);
   const quote = data.quotes.find((record) => record.id === editor.id);
+  const [modelId, setModelId] = useState(equipment?.model?.modelId ?? "");
+  const [equipmentName, setEquipmentName] = useState(equipment?.name ?? "");
+  const [equipmentCategory, setEquipmentCategory] = useState(equipment?.category ?? "Cardio");
+  const [selectedModels, setSelectedModels] = useState<EquipmentSelection[]>(() =>
+    editor.kind === "order" && order ? getOrderDetails(order).equipmentModels : quote?.equipmentModels ?? [],
+  );
   const titles: Record<FormKind, string> = {
     client: "cliente",
     equipment: "equipamento",
@@ -373,12 +388,14 @@ export function EditorModal({
               throw new Error("Este identificador já está em uso.");
             const record: Equipment = {
               id: recordId,
-              name: getText(form, "name"),
+              name: equipmentName.trim(),
+              assetCode: equipment?.assetCode ?? generateEquipmentCode(current.equipment),
               serial,
               clientId: getText(form, "clientId"),
-              category: getText(form, "category"),
+              category: equipmentCategory,
               warranty: getText(form, "warranty"),
               notes: getText(form, "notes"),
+              ...(modelId ? { model: equipment?.model?.modelId === modelId ? equipment.model : selectEquipmentModel(current, modelId) } : {}),
             };
             return { ...current, equipment: upsert(current.equipment, record) };
           }
@@ -466,10 +483,28 @@ export function EditorModal({
             const template = current.questionnaires.find((item) => item.id === questionnaireId && !item.archived);
             if (questionnaireId && !template) throw new Error("Questionário indisponível. Selecione um modelo ativo.");
             const previousDetails = existing ? getOrderDetails(existing) : orderDetailsSchema.parse({ createdAt: new Date().toISOString() });
+            const useClientAddress = form.get("useClientAddress") === "on";
+            const selectedClient = current.clients.find((item) => item.id === getText(form, "clientId"));
+            if (useClientAddress && !selectedClient?.address.trim())
+              throw new Error("O cliente não possui endereço cadastrado. Informe o endereço de atendimento ou atualize o cadastro do cliente.");
+            const serviceLocation = serviceLocationSchema.parse({
+              useClientAddress,
+              postalCode: getText(form, "service_postalCode").replace(/\D/g, ""),
+              street: getText(form, "service_street"),
+              number: getText(form, "service_number"),
+              complement: getText(form, "service_complement"),
+              neighborhood: getText(form, "service_neighborhood"),
+              city: getText(form, "service_city"),
+              state: getText(form, "service_state").toUpperCase(),
+            });
             const details = {
               ...previousDetails,
+              equipmentModels: selectedModels,
+              serviceLocation,
+              responsibleName: getText(form, "responsibleName"),
+              responsiblePhone: getText(form, "responsiblePhone"),
               ...(existing ? {} : { questionnaireRequired: current.orderTypeQuestionnaires.find((item) => item.type === orderType)?.required ?? false }),
-              checklists: [...previousDetails.checklists, ...(template ? [instantiateQuestionnaire(template)] : [])],
+              checklists: template ? addQuestionnaire(previousDetails.checklists, template) : previousDetails.checklists,
             };
             const record: Order = {
               id: recordId,
@@ -521,6 +556,7 @@ export function EditorModal({
               discount: Math.round(discount * 100),
               notes: getText(form, "notes"),
               orderId: existing?.orderId ?? "",
+              equipmentModels: selectedModels,
             };
             return { ...current, quotes: upsert(current.quotes, record) };
           }
@@ -591,16 +627,30 @@ export function EditorModal({
           )}
           <div className="form-grid">
             {editor.kind === "client" && (
-              <ClientFormFields client={client} />
+              <>
+                <ClientFormFields client={client} />
+                {client && onClientEquipment && <button type="button" className="button secondary full" onClick={() => onClientEquipment(client.id)}>Vincular equipamento / histórico do cliente</button>}
+              </>
             )}
             {editor.kind === "equipment" && (
               <>
+                <EquipmentModelPicker data={data} value={modelId} onChange={(id) => {
+                  setModelId(id);
+                  if (id) {
+                    const selection = selectEquipmentModel(data, id);
+                    setEquipmentName(selection.name);
+                    setEquipmentCategory(selection.category || "Outros");
+                  }
+                }} />
+                {equipment?.model && <p className="full">Modelo vinculado: {equipment.model.brand}{equipment.model.line ? ` · ${equipment.model.line}` : ""} · {equipment.model.name}. Deixe sem modelo para desvincular; nome, série e dados da unidade continuam independentes do catálogo.</p>}
+                {equipment?.assetCode && <label className="field full">Código único do equipamento<input value={equipment.assetCode} readOnly /></label>}
                 <label className="field full">
                   Equipamento *
                   <input
                     autoFocus
                     name="name"
-                    defaultValue={equipment?.name}
+                    value={equipmentName}
+                    onChange={(event) => setEquipmentName(event.target.value)}
                     required
                     maxLength={160}
                   />
@@ -618,8 +668,10 @@ export function EditorModal({
                   Categoria
                   <select
                     name="category"
-                    defaultValue={equipment?.category ?? "Cardio"}
+                    value={equipmentCategory}
+                    onChange={(event) => setEquipmentCategory(event.target.value)}
                   >
+                    {!["Cardio", "Musculacao", "Acessorios", "Outros"].includes(equipmentCategory) && <option>{equipmentCategory}</option>}
                     <option>Cardio</option>
                     <option>Musculacao</option>
                     <option>Acessorios</option>
@@ -771,13 +823,19 @@ export function EditorModal({
                   value={clientId}
                   onChange={setClientId}
                 />
+                <ServiceLocationFields
+                  key={clientId}
+                  client={data.clients.find((item) => item.id === clientId)}
+                  details={order?.clientId === clientId ? getOrderDetails(order) : undefined}
+                />
                 <label className="field full">
                   Equipamento
                   <select
                     key={clientId}
                     name="equipmentId"
                     defaultValue={
-                      order?.clientId === clientId ? order.equipmentId : ""
+                      order?.clientId === clientId ? order.equipmentId
+                        : (editor.clientId === clientId ? editor.equipmentId ?? "" : "")
                     }
                   >
                     <option value="">Sem equipamento específico</option>
@@ -785,11 +843,12 @@ export function EditorModal({
                       .filter((item) => item.clientId === clientId)
                       .map((item) => (
                         <option key={item.id} value={item.id}>
-                          {item.name} · {item.serial}
+                          {item.name} · {item.assetCode ?? item.serial}
                         </option>
                       ))}
                   </select>
                 </label>
+                <EquipmentSelections data={data} value={selectedModels} onChange={setSelectedModels} />
                 <label className="field">
                   Data *
                   <input
@@ -851,9 +910,9 @@ export function EditorModal({
                   {order ? "Adicionar questionário à tarefa" : "Questionário"}
                   <select aria-label={order ? "Adicionar questionário à tarefa" : "Questionário"} value={questionnaireId} onChange={(event) => setQuestionnaireId(event.target.value)}>
                     <option value="">{order ? "Preservar questionários atuais, sem adicionar" : "Sem questionário"}</option>
-                    {data.questionnaires.filter((item) => !item.archived).map((item) => <option key={item.id} value={item.id}>{item.title} · v{item.revision}</option>)}
+                    {data.questionnaires.filter((item) => !item.archived).map((item) => <option key={item.id} value={item.id}>{item.title}</option>)}
                   </select>
-                  <small>{order ? "Os questionários e respostas existentes não são substituídos. Gerencie-os em Mais informações." : "O padrão do tipo é selecionado automaticamente e pode ser substituído. As respostas são exclusivas desta tarefa."}</small>
+                  <small>{order ? "Os questionários vinculados são atualizados automaticamente enquanto a tarefa não estiver finalizada ou arquivada. Não é necessário adicioná-los novamente." : "O padrão do tipo é selecionado automaticamente e pode ser substituído. As respostas são exclusivas desta tarefa."}</small>
                 </label>
                 <label className="field">
                   Prioridade
@@ -879,6 +938,7 @@ export function EditorModal({
             )}
             {editor.kind === "quote" && (
               <>
+                <EquipmentSelections data={data} value={selectedModels} onChange={setSelectedModels} />
                 <label className="field full">
                   Cliente *
                   <select

@@ -41,6 +41,7 @@ import {
   demoDatabase,
   displayDate,
   getOrderDetails,
+  orderServiceAddress,
   initials,
   localDay,
   moveStock,
@@ -58,6 +59,9 @@ import { OrderWorkspace } from "./OrderWorkspace";
 import { UserSettings } from "./UserSettings";
 import { PasswordSettings } from "./PasswordSettings";
 import { QuestionnaireCatalog } from "./QuestionnaireCatalog";
+import { EquipmentBrandCatalog } from "./EquipmentBrandCatalog";
+import { EquipmentSelectionSummary } from "./EquipmentModelPicker";
+import { ClientEquipment } from "./ClientEquipment";
 import { roleLabels } from "./userAccess";
 import type { CompanyRole } from "./userAccess";
 import "./App.css";
@@ -243,6 +247,7 @@ export default function App() {
   const [calendarView, setCalendarView] = useState("dayGridMonth");
   const [calendarTitle, setCalendarTitle] = useState("");
   const [editor, setEditor] = useState<Editor | null>(null);
+  const [clientEquipmentId, setClientEquipmentId] = useState("");
   const [detail, setDetail] = useState<{
     kind: "order" | "quote";
     id: string;
@@ -333,7 +338,7 @@ export default function App() {
   );
   const equipment = database.equipment.filter(
     (item) =>
-      matches(item.name, item.serial, clientName(item.clientId)) &&
+      matches(item.name, item.serial, item.assetCode ?? "", clientName(item.clientId), item.model?.brand ?? "", item.model?.line ?? "", item.model?.name ?? "") &&
       (!clientFilter || item.clientId === clientFilter),
   );
   const products = database.products.filter(
@@ -1037,7 +1042,7 @@ export default function App() {
                               </span>
                               <button
                                 className="record-link"
-                                onClick={() => openEditor("client", item.id)}
+                                onClick={() => setClientEquipmentId(item.id)}
                               >
                                 <strong>{item.name}</strong>
                                 <small>
@@ -1058,6 +1063,7 @@ export default function App() {
                             <Badge value={item.active ? "Ativo" : "Inativo"} />
                           </td>
                           <td>
+                            <button className="text-button" onClick={() => setClientEquipmentId(item.id)}>Vincular equipamento / histórico</button>
                             <button
                               className="icon-button"
                               title="Editar cliente"
@@ -1085,12 +1091,15 @@ export default function App() {
                 </div>
               )}
               {view === "equipment" && (
+                <>
+                <EquipmentBrandCatalog data={database} commit={commit} />
+                <h2 className="equipment-units-title">Unidades vinculadas aos clientes</h2>
                 <div className="table-scroll">
                   <table>
                     <thead>
                       <tr>
                         <th>Equipamento</th>
-                        <th>Identificador</th>
+                        <th>Código / identificador</th>
                         <th>Cliente</th>
                         <th>Categoria</th>
                         <th>Garantia</th>
@@ -1113,10 +1122,11 @@ export default function App() {
                                 onClick={() => openEditor("equipment", item.id)}
                               >
                                 <strong>{item.name}</strong>
+                                {item.model && <small>{item.model.brand}{item.model.line ? ` · ${item.model.line}` : ""} · {item.model.name}</small>}
                               </button>
                             </div>
                           </td>
-                          <td className="mono">{item.serial}</td>
+                          <td className="equipment-code">{item.assetCode ?? item.serial}{item.assetCode && item.serial !== item.assetCode && <small>Série: {item.serial}</small>}</td>
                           <td>{clientName(item.clientId)}</td>
                           <td>
                             <span className="tag">{item.category}</span>
@@ -1144,7 +1154,7 @@ export default function App() {
                           <td>
                             {
                               database.orders.filter(
-                                (order) => order.equipmentId === item.id,
+                                (order) => order.clientId === item.clientId && (order.equipmentId === item.id || getOrderDetails(order).equipmentIds.includes(item.id)),
                               ).length
                             }{" "}
                             OS
@@ -1167,6 +1177,7 @@ export default function App() {
                     <Empty title="Nenhum equipamento encontrado" />
                   )}
                 </div>
+                </>
               )}
               {view === "stock" && (
                 <>
@@ -1665,8 +1676,22 @@ export default function App() {
             commit={commit}
             onClose={() => setEditor(null)}
             onSuccess={setNotice}
+            onClientEquipment={(id) => { setEditor(null); setClientEquipmentId(id); }}
           />
         ))}
+      {database.clients.find((client) => client.id === clientEquipmentId) && <ClientEquipment
+        key={clientEquipmentId}
+        client={database.clients.find((client) => client.id === clientEquipmentId)!}
+        data={database}
+        commit={commit}
+        onClose={() => setClientEquipmentId("")}
+        onEdit={() => { const id = clientEquipmentId; setClientEquipmentId(""); openEditor("client", id); }}
+        onCreateTask={(equipmentId) => {
+          setEditor({ kind: "order", clientId: clientEquipmentId, equipmentId });
+          setClientEquipmentId("");
+        }}
+        onOpenOrder={(id) => { setClientEquipmentId(""); openFullOrder(id); }}
+      />}
       {activeOrder && (
         <OrderDetail
           order={activeOrder}
@@ -1730,6 +1755,7 @@ function OrderDetail({
   onMore: () => void;
 }) {
   const client = data.clients.find((item) => item.id === order.clientId)!;
+  const details = getOrderDetails(order);
   const equipment = data.equipment.find(
     (item) => item.id === order.equipmentId,
   );
@@ -1753,7 +1779,7 @@ function OrderDetail({
           <div>
             <small>Cliente</small>
             <strong>{client.name}</strong>
-            <span>{client.address}</span>
+            <span>Atendimento: {orderServiceAddress(order, client) || "Endereço não informado"}</span>
             <span>{client.phone}</span>
           </div>
           <div>
@@ -1769,13 +1795,21 @@ function OrderDetail({
             <small>Equipamento</small>
             <strong>{equipment?.name ?? "Não informado"}</strong>
             <span>{equipment?.serial}</span>
+            {equipment?.assetCode && equipment.assetCode !== equipment.serial && <span>Código: {equipment.assetCode}</span>}
+            {equipment?.model && <span>{equipment.model.brand}{equipment.model.line ? ` · ${equipment.model.line}` : ""} · {equipment.model.name}</span>}
           </div>
           <div>
             <small>Atendimento</small>
             <strong>{order.type}</strong>
             <span>Prioridade {order.priority.toLowerCase()}</span>
           </div>
+          <div>
+            <small>Responsável pelo atendimento</small>
+            <strong>{details.responsibleName || "Não informado"}</strong>
+            <span>{details.responsiblePhone || "Telefone não informado"}</span>
+          </div>
         </div>
+        <EquipmentSelectionSummary value={details.equipmentModels} />
         <h3>Orientações e relato</h3>
         <p className="preserve-lines">
           {order.notes || "Nenhuma observação registrada."}
@@ -1925,6 +1959,7 @@ function QuoteDetail({
             Total <b>{currency(total(quote))}</b>
           </strong>
         </div>
+        <EquipmentSelectionSummary value={quote.equipmentModels} />
         <h3>Condições e observações</h3>
         <p className="preserve-lines">{quote.notes || "Não informadas."}</p>
         {!quote.orderId && (
@@ -2249,6 +2284,8 @@ function SettingsPanel({
                   version: 1,
                   clients: [],
                   equipment: [],
+                  equipmentBrands: [],
+                  equipmentModels: [],
                   products: [],
                   services: [],
                   orders: [],

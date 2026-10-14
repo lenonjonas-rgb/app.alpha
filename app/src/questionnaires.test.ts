@@ -4,7 +4,7 @@ import {
   orderPending, replicateOrder, validateDatabase, validateOrderDetails,
 } from "./domain";
 import type { Database, Order, QuestionnaireTemplate } from "./domain";
-import { archiveQuestionnaire, saveQuestionnaire } from "./questionnaires";
+import { addQuestionnaire, archiveQuestionnaire, saveQuestionnaire } from "./questionnaires";
 import { questionnaireDisplaySchema } from "./questionnaireSchema";
 import { questionnaireRows } from "./reporting";
 import { questionAnswerText, withQuestionAnswer } from "./questionnaireAnswers";
@@ -34,7 +34,7 @@ function fixture() {
 }
 const signature = { signer: "Técnico", image: "data:image/png;base64,AAAA", at: "2026-10-10T12:00:00.000Z" };
 
-describe("catálogo e snapshots de questionários", () => {
+describe("catálogo e atualização de questionários vinculados", () => {
   it("abre backups antigos sem catálogo, apresentação ou assinaturas por pergunta", () => {
     const { questionnaires: _templates, orderTypeQuestionnaires: _types, ...old } = demoDatabase();
     expect(validateDatabase(old).questionnaires).toEqual([]);
@@ -63,20 +63,102 @@ describe("catálogo e snapshots de questionários", () => {
     expect(model.questions[1].options).toEqual(["Motor", "Freio"]);
     expect(model.display.columns).toBe(2);
   });
-  it("edita, arquiva e restaura modelos sem alterar tarefas existentes", () => {
+  it("atualiza tarefas abertas sem criar instâncias e preserva vínculos ao arquivar", () => {
     const { data, order } = fixture();
     const oldOrder = structuredClone(order);
     const edited = saveQuestionnaire(data, { ...template(), title: "Nova inspeção" });
     expect(edited.questionnaires[0].revision).toBe(2);
-    expect(edited.orders[0]).toEqual(oldOrder);
+    expect(edited.questionnaires).toHaveLength(1);
+    expect(getOrderDetails(edited.orders[0]).checklists).toHaveLength(1);
+    expect(getOrderDetails(edited.orders[0]).checklists[0]).toMatchObject({ id: oldOrder.details.checklists[0].id, title: "Nova inspeção", templateRevision: 2 });
     const configured = { ...edited, orderTypeQuestionnaires: [{ type: "Preventiva" as const, questionnaireId: "template", required: true }] };
     const archived = archiveQuestionnaire(configured, "template");
     expect(archived.orderTypeQuestionnaires[0]).toMatchObject({ questionnaireId: "", required: true });
-    expect(archived.orders[0]).toEqual(oldOrder);
+    expect(archived.orders[0]).toEqual(edited.orders[0]);
     expect(() => instantiateQuestionnaire(archived.questionnaires[0])).toThrow("arquivado");
     const restored = saveQuestionnaire(archived, { ...archived.questionnaires[0], archived: false });
     expect(restored.questionnaires[0]).toMatchObject({ archived: false, revision: 4 });
     expect(() => saveQuestionnaire(restored, template())).toThrow("outra sessão");
+  });
+  it.each(["Aberta", "Em atendimento", "Pausada"] as const)("sincroniza estrutura, apresentação e respostas compatíveis em tarefa %s", (status) => {
+    const { data, order } = fixture();
+    order.status = status;
+    const checklist = order.details.checklists[0];
+    checklist.questions[0].answer = "Motor revisado";
+    checklist.questions[1].answer = ["Motor", "Freio"];
+    checklist.questions[2].signature = signature;
+    const edited = saveQuestionnaire(data, {
+      ...template(), header: "Novo cabeçalho", footer: "Novo rodapé", requiredForCheckout: false,
+      display: { ...template().display, columns: 3 },
+      questions: [
+        { ...template().questions[1], options: ["Freio", "Correia"] },
+        { ...template().questions[0], label: "Novo relato" },
+        template().questions[2],
+        { id: "new", label: "Verificação", kind: "Texto", required: true, options: [] },
+      ],
+    });
+    const saved = getOrderDetails(edited.orders[0]).checklists[0];
+    expect(saved).toMatchObject({ id: checklist.id, header: "Novo cabeçalho", footer: "Novo rodapé", requiredForCheckout: false, display: { columns: 3 } });
+    expect(saved.questions.map((q) => q.id)).toEqual(["choices", "text", "tech-sign", "new"]);
+    expect(saved.questions[0].answer).toEqual(["Freio"]);
+    expect(saved.questions[1]).toMatchObject({ label: "Novo relato", answer: "Motor revisado" });
+    expect(saved.questions[2].signature).toEqual(signature);
+    expect(saved.questions[3].answer).toBe("");
+    expect(order.details.checklists[0].questions[1].answer).toEqual(["Motor", "Freio"]);
+  });
+  it("preserva tarefas finalizadas e arquivadas e não associa modelos a outras tarefas", () => {
+    const { data, order } = fixture();
+    data.orders = [
+      { ...order, id: "closed", code: "OS-901", status: "Finalizada" },
+      { ...order, id: "archived", code: "OS-902", details: { ...order.details, archived: true } },
+      { ...order, id: "unlinked", code: "OS-903", details: { ...order.details, checklists: [] } },
+    ];
+    const before = structuredClone(data.orders);
+    expect(saveQuestionnaire(data, { ...template(), title: "Alterado" }).orders).toEqual(before);
+  });
+  it("usa o cadastro atual ao replicar uma tarefa finalizada, sem modificar seu histórico", () => {
+    const { data, order } = fixture();
+    order.status = "Finalizada";
+    const edited = saveQuestionnaire(data, { ...template(), title: "Modelo atual", questions: [{ ...template().questions[0], label: "Pergunta atual" }] });
+    const replicated = replicateOrder(edited, order.id, "2026-10-20", "09:00");
+    expect(getOrderDetails(replicated.orders[0]).checklists[0].title).toBe("Inspeção");
+    expect(getOrderDetails(replicated.orders.at(-1)!).checklists[0]).toMatchObject({ title: "Modelo atual", questions: [{ id: "text", label: "Pergunta atual", answer: "" }] });
+  });
+  it("limpa respostas quando o tipo muda e limpa escolhas removidas", () => {
+    const { data, order } = fixture();
+    order.details.checklists[0].questions[0].answer = "Texto antigo";
+    order.details.checklists[0].questions[1] = { ...order.details.checklists[0].questions[1], kind: "Escolha", answer: "Motor" };
+    const saved = saveQuestionnaire(data, { ...template(), questions: [
+      { ...template().questions[0], kind: "Numero" },
+      { ...template().questions[1], kind: "Escolha", options: ["Freio", "Correia"] },
+    ] });
+    expect(getOrderDetails(saved.orders[0]).checklists[0].questions.map((q) => q.answer)).toEqual(["", ""]);
+  });
+  it("preserva fotos e justificativas compatíveis e remove vínculos de justificativa que deixaram de se aplicar", () => {
+    const { data, order } = fixture();
+    const model = { ...template(), questions: [{ id: "yes-no", label: "Funcionou?", kind: "Sim ou Não" as const, options: [], required: true, justificationOn: "Nao" as const }, template().questions[4]] };
+    data.questionnaires = [model];
+    order.details.checklists = [instantiateQuestionnaire(model)];
+    order.details.attachments = [{ id: "file", name: "foto.jpg", mime: "image/jpeg", size: 3, data: "data:image/jpeg;base64,AAAA", at: signature.at }];
+    Object.assign(order.details.checklists[0].questions[0], { answer: "Nao", justification: "Falhou", justificationPhotoId: "file" });
+    order.details.checklists[0].questions[1].answer = "file";
+    const saved = saveQuestionnaire(data, model);
+    expect(getOrderDetails(saved.orders[0]).checklists[0].questions[0]).toMatchObject({ answer: "Nao", justification: "Falhou", justificationPhotoId: "file" });
+    const changed = saveQuestionnaire(saved, { ...saved.questionnaires[0], questions: [{ ...model.questions[0], justificationOn: "Sim" }, model.questions[1]] });
+    const details = getOrderDetails(changed.orders[0]);
+    expect(details.checklists[0].questions[0]).toMatchObject({ answer: "Nao", justification: "", justificationPhotoId: "" });
+    expect(details.checklists[0].questions[1].answer).toBe("file");
+    expect(details.attachments).toEqual(order.details.attachments);
+  });
+  it("atualiza instâncias por equipamento sem misturar respostas e bloqueia novas duplicações", () => {
+    const { data, order } = fixture();
+    order.details.checklists = addQuestionnaire(order.details.checklists, template(), order.equipmentId);
+    order.details.checklists[0].questions[0].answer = "Geral";
+    order.details.checklists[1].questions[0].answer = "Equipamento";
+    const saved = saveQuestionnaire(data, { ...template(), title: "Atualizado" });
+    expect(getOrderDetails(saved.orders[0]).checklists.map((list) => list.questions[0].answer)).toEqual(["Geral", "Equipamento"]);
+    expect(() => addQuestionnaire(order.details.checklists, template())).toThrow("já está vinculado");
+    expect(() => addQuestionnaire(order.details.checklists, template(), order.equipmentId)).toThrow("já está vinculado");
   });
   it("aplica padrão e obrigatoriedade às novas tarefas, incluindo conversão de orçamento", () => {
     const { data } = fixture();
@@ -133,13 +215,13 @@ describe("catálogo e snapshots de questionários", () => {
     expect(() => changeOrderStatus(data, order.id, "Finalizada")).toThrow("pendencias");
     expect(() => appendActivity(data, order.id, { id: "out", kind: "Check-out", at: signature.at, technician: order.technician, reason: "", justification: "", origin: "Web local" })).toThrow("pendencias");
   });
-  it("preserva o bloqueio dos modelos antigos e copia a opção sem alterar tarefas existentes", () => {
+  it("preserva o bloqueio legado e sincroniza a opção de check-out nas tarefas abertas", () => {
     const { requiredForCheckout: _requirement, ...legacy } = template();
     const data = validateDatabase({ ...demoDatabase(), questionnaires: [legacy] });
     expect(data.questionnaires[0].requiredForCheckout).toBe(true);
     const { data: configured, order } = fixture();
     const edited = saveQuestionnaire(configured, { ...template(), requiredForCheckout: false });
-    expect(getOrderDetails(edited.orders[0]).checklists[0].requiredForCheckout).toBe(true);
+    expect(getOrderDetails(edited.orders[0]).checklists[0].requiredForCheckout).toBe(false);
     expect(instantiateQuestionnaire(edited.questionnaires[0]).requiredForCheckout).toBe(false);
     delete order.details.checklists[0].requiredForCheckout;
     expect(orderPending(order)).toHaveLength(5);
@@ -158,7 +240,7 @@ describe("catálogo e snapshots de questionários", () => {
     expect(orderPending(order)).toHaveLength(6);
     expect(() => appendActivity(data, order.id, { id: "out", kind: "Check-out", at: signature.at, technician: order.technician, reason: "", justification: "", origin: "Web local" })).toThrow("pendencias");
     const replicated = replicateOrder(data, order.id, "2026-10-20", "09:00");
-    expect(getOrderDetails(replicated.orders.at(-1)!).checklists[0].requiredForCheckout).toBe(false);
+    expect(getOrderDetails(replicated.orders.at(-1)!).checklists[0].requiredForCheckout).toBe(true);
   });
   it("replica estrutura sem copiar respostas, fotos ou assinaturas", () => {
     const { data, order } = fixture();
@@ -169,8 +251,11 @@ describe("catálogo e snapshots de questionários", () => {
     expect(details.questionnaireRequired).toBe(true);
     expect(details.checklists[0].templateRevision).toBe(1);
     expect(details.checklists[0].questions[0].answer).toBe("");
+    expect(details.checklists[0].questions[0].id).toBe("text");
     expect(details.checklists[0].questions[2].signature).toBeNull();
     expect(details.attachments).toEqual([]);
+    const updated = saveQuestionnaire(replicated, { ...template(), title: "Atualizada após réplica" });
+    expect(getOrderDetails(updated.orders.at(-1)!).checklists[0].title).toBe("Atualizada após réplica");
   });
   it("relatórios usam assinante e nome de foto, não IDs, e respeitam perguntas não respondidas", () => {
     const { data, order } = fixture();
@@ -206,9 +291,11 @@ describe("catálogo e snapshots de questionários", () => {
   });
   it("valida foto opcional, reporta justificativa e limpa execução ao replicar", () => {
     const { data, order } = fixture();
-    order.details.checklists = [instantiateQuestionnaire({ ...template(), questions: [{
+    const model = { ...template(), questions: [{
       ...template().questions[0], kind: "Sim ou Não", justificationOn: "Nao",
-    }] })];
+    }] } satisfies QuestionnaireTemplate;
+    data.questionnaires = [model];
+    order.details.checklists = [instantiateQuestionnaire(model)];
     const q = order.details.checklists[0].questions[0];
     q.answer = "Nao"; q.justification = "Motor parado."; q.justificationPhotoId = "photo";
     expect(() => validateOrderDetails(order, data)).toThrow("Foto de justificativa");
