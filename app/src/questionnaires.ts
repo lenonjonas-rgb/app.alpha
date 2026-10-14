@@ -29,6 +29,31 @@ export function addQuestionnaire(checklists: Checklist[], template: Questionnair
   return [...checklists, instantiateQuestionnaire(template, equipmentId)];
 }
 
+export type OrderEquipmentSelection = { equipmentId: string; questionnaireId: string };
+
+export function orderEquipmentQuestionnaires(
+  data: Database, clientId: string, selections: OrderEquipmentSelection[], checklists: Checklist[], previousEquipmentIds: string[] = [],
+): { equipmentId: string; equipmentIds: string[]; checklists: Checklist[] } {
+  const ids = selections.map((item) => item.equipmentId);
+  if (new Set(ids).size !== ids.length) throw new Error("Selecione cada equipamento apenas uma vez.");
+  if (ids.some((id) => !data.equipment.some((item) => item.id === id && item.clientId === clientId)))
+    throw new Error("Um dos equipamentos selecionados não pertence ao cliente. Confira a seleção.");
+  if (checklists.some((item) => item.equipmentId && !ids.includes(item.equipmentId)))
+    throw new Error("Há questionários vinculados a um equipamento desmarcado. Ajuste esses vínculos em Mais informações antes de removê-lo.");
+  let result = checklists;
+  for (const selection of selections) {
+    if (!selection.questionnaireId) {
+      if (!previousEquipmentIds.includes(selection.equipmentId) && !checklists.some((item) => item.equipmentId === selection.equipmentId))
+        throw new Error("Selecione um questionário para cada equipamento marcado.");
+      continue;
+    }
+    const template = data.questionnaires.find((item) => item.id === selection.questionnaireId && !item.archived);
+    if (!template) throw new Error("Questionário indisponível. Selecione um modelo ativo.");
+    result = addQuestionnaire(result, template, selection.equipmentId);
+  }
+  return { equipmentId: ids[0] ?? "", equipmentIds: ids.slice(1), checklists: result };
+}
+
 export function saveQuestionnaire(data: Database, input: QuestionnaireTemplate): Database {
   const template = questionnaireTemplateSchema.parse(input);
   const previous = data.questionnaires.find((item) => item.id === template.id);

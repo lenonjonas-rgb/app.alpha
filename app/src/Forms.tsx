@@ -37,7 +37,8 @@ import {
 } from "./cnpj";
 import { formatCpf, isValidCpf } from "./cpf";
 import { orderTypes, orderTypeQuestionnaireSchema } from "./questionnaireSchema";
-import { addQuestionnaire } from "./questionnaires";
+import { addQuestionnaire, orderEquipmentQuestionnaires } from "./questionnaires";
+import type { OrderEquipmentSelection } from "./questionnaires";
 import { ServiceLocationFields } from "./ServiceLocationFields";
 import { EquipmentModelPicker, EquipmentSelections } from "./EquipmentModelPicker";
 import { generateEquipmentCode, selectEquipmentModel } from "./equipmentCatalogData";
@@ -332,6 +333,18 @@ export function EditorModal({
   const service = data.services.find((record) => record.id === editor.id);
   const order = data.orders.find((record) => record.id === editor.id);
   const quote = data.quotes.find((record) => record.id === editor.id);
+  const [equipmentOpen, setEquipmentOpen] = useState(false);
+  const [orderEquipment, setOrderEquipment] = useState<OrderEquipmentSelection[]>(() => {
+    const ids = order ? [order.equipmentId, ...getOrderDetails(order).equipmentIds] : [editor.equipmentId ?? ""];
+    return [...new Set(ids.filter(Boolean))].map((equipmentId) => ({ equipmentId, questionnaireId: "" }));
+  });
+  const clientEquipment = data.equipment.filter((item) => item.clientId === clientId);
+  const equipmentQuestionnaires = data.questionnaires.filter((item) => !item.archived && item.display.equipment);
+  const previousEquipmentIds = order ? [order.equipmentId, ...getOrderDetails(order).equipmentIds].filter(Boolean) : [];
+  function equipmentSelection(equipmentId: string): OrderEquipmentSelection {
+    const defaultId = data.orderTypeQuestionnaires.find((item) => item.type === orderType)?.questionnaireId;
+    return { equipmentId, questionnaireId: equipmentQuestionnaires.find((item) => item.id === defaultId)?.id ?? "" };
+  }
   const [modelId, setModelId] = useState(equipment?.model?.modelId ?? "");
   const [equipmentName, setEquipmentName] = useState(equipment?.name ?? "");
   const [equipmentCategory, setEquipmentCategory] = useState(equipment?.category ?? "Cardio");
@@ -481,8 +494,10 @@ export function EditorModal({
                 "Este técnico já possui uma OS neste horário. Ajuste o horário ou o técnico.",
               );
             const template = current.questionnaires.find((item) => item.id === questionnaireId && !item.archived);
-            if (questionnaireId && !template) throw new Error("Questionário indisponível. Selecione um modelo ativo.");
+            if (questionnaireId && (existing || orderEquipment.length === 0) && !template) throw new Error("Questionário indisponível. Selecione um modelo ativo.");
             const previousDetails = existing ? getOrderDetails(existing) : orderDetailsSchema.parse({ createdAt: new Date().toISOString() });
+            const equipmentLinks = orderEquipmentQuestionnaires(current, clientId, orderEquipment, previousDetails.checklists,
+              existing ? [existing.equipmentId, ...previousDetails.equipmentIds].filter(Boolean) : []);
             const useClientAddress = form.get("useClientAddress") === "on";
             const selectedClient = current.clients.find((item) => item.id === getText(form, "clientId"));
             if (useClientAddress && !selectedClient?.address.trim())
@@ -500,17 +515,18 @@ export function EditorModal({
             const details = {
               ...previousDetails,
               equipmentModels: selectedModels,
+              equipmentIds: equipmentLinks.equipmentIds,
               serviceLocation,
               responsibleName: getText(form, "responsibleName"),
               responsiblePhone: getText(form, "responsiblePhone"),
               ...(existing ? {} : { questionnaireRequired: current.orderTypeQuestionnaires.find((item) => item.type === orderType)?.required ?? false }),
-              checklists: template ? addQuestionnaire(previousDetails.checklists, template) : previousDetails.checklists,
+              checklists: template && (existing || orderEquipment.length === 0) ? addQuestionnaire(equipmentLinks.checklists, template) : equipmentLinks.checklists,
             };
             const record: Order = {
               id: recordId,
               code: existing?.code ?? nextCode(current.orders, "OS"),
               clientId: getText(form, "clientId"),
-              equipmentId: getText(form, "equipmentId"),
+              equipmentId: equipmentLinks.equipmentId,
               title: getText(form, "title"),
               technician: technicianAccount?.name ?? technician,
               technicianUserId,
@@ -568,6 +584,7 @@ export function EditorModal({
       onClose();
     } catch (cause) {
       setError(errorMessage(cause));
+      if (editor.kind === "order" && orderEquipment.length > 0) setEquipmentOpen(true);
     }
   }
 
@@ -821,33 +838,58 @@ export function EditorModal({
                 <ClientPicker
                   clients={data.clients}
                   value={clientId}
-                  onChange={setClientId}
+                  onChange={(id) => {
+                    if (id === clientId) return;
+                    setClientId(id);
+                    setOrderEquipment([]);
+                    setEquipmentOpen(false);
+                  }}
                 />
                 <ServiceLocationFields
                   key={clientId}
                   client={data.clients.find((item) => item.id === clientId)}
                   details={order?.clientId === clientId ? getOrderDetails(order) : undefined}
                 />
-                <label className="field full">
-                  Equipamento
-                  <select
-                    key={clientId}
-                    name="equipmentId"
-                    defaultValue={
-                      order?.clientId === clientId ? order.equipmentId
-                        : (editor.clientId === clientId ? editor.equipmentId ?? "" : "")
-                    }
-                  >
-                    <option value="">Sem equipamento específico</option>
-                    {data.equipment
-                      .filter((item) => item.clientId === clientId)
-                      .map((item) => (
-                        <option key={item.id} value={item.id}>
-                          {item.name} · {item.assetCode ?? item.serial}
-                        </option>
-                      ))}
-                  </select>
-                </label>
+                {clientEquipment.length > 0 && <section className="field full order-equipment-picker">
+                  <button type="button" className="button secondary" aria-expanded={equipmentOpen} aria-controls="order-client-equipment" onClick={() => setEquipmentOpen(!equipmentOpen)}>
+                    Equipamentos ({orderEquipment.length} de {clientEquipment.length} selecionados)
+                  </button>
+                  {equipmentOpen && <div id="order-client-equipment">
+                    <label className="check">
+                      <input type="checkbox" checked={clientEquipment.every((item) => orderEquipment.some((selection) => selection.equipmentId === item.id))}
+                        ref={(node) => { if (node) node.indeterminate = orderEquipment.length > 0 && orderEquipment.length < clientEquipment.length; }}
+                        onChange={(event) => setOrderEquipment(event.target.checked
+                          ? clientEquipment.map((item) => orderEquipment.find((selection) => selection.equipmentId === item.id) ?? equipmentSelection(item.id))
+                          : [])} />
+                      Selecionar todos
+                    </label>
+                    {clientEquipment.map((item) => {
+                      const selection = orderEquipment.find((entry) => entry.equipmentId === item.id);
+                      const existingChecklists = order ? getOrderDetails(order).checklists.filter((checklist) => checklist.equipmentId === item.id) : [];
+                      return <div className="order-equipment-option" key={item.id}>
+                        <label className="check">
+                          <input type="checkbox" checked={Boolean(selection)} onChange={(event) => setOrderEquipment(event.target.checked
+                            ? [...orderEquipment, equipmentSelection(item.id)] : orderEquipment.filter((entry) => entry.equipmentId !== item.id))} />
+                          <span>{item.name} · {item.assetCode ?? item.serial}{item.model && <small>{item.model.brand} · {item.model.line || "Sem linha cadastrada"}</small>}</span>
+                        </label>
+                        {selection && <label className="field">
+                          Questionário para {item.name} · {item.assetCode ?? item.serial}
+                          <select aria-label={`Questionário do equipamento ${item.assetCode ?? item.serial}`} value={selection.questionnaireId}
+                            required={existingChecklists.length === 0 && !previousEquipmentIds.includes(item.id)}
+                            onChange={(event) => setOrderEquipment(orderEquipment.map((entry) => entry.equipmentId === item.id ? { ...entry, questionnaireId: event.target.value } : entry))}>
+                            <option value="">{previousEquipmentIds.includes(item.id) ? "Preservar vínculo atual, sem adicionar questionário" : "Selecione um questionário"}</option>
+                            {equipmentQuestionnaires.filter((template) => !existingChecklists.some((checklist) => checklist.templateId === template.id))
+                              .map((template) => <option key={template.id} value={template.id}>{template.title}</option>)}
+                          </select>
+                          {existingChecklists.length > 0 && <small>Vinculados: {existingChecklists.map((checklist) => checklist.title).join(", ")}. As respostas serão preservadas.</small>}
+                        </label>}
+                      </div>;
+                    })}
+                    {equipmentQuestionnaires.length === 0 && <p role="alert">Não há questionários ativos com resposta por equipamento. Habilite essa opção no cadastro do questionário.</p>}
+                    <small>Cada unidade selecionada terá seu próprio questionário e respostas. A seleção de equipamentos é opcional.</small>
+                  </div>}
+                  {!equipmentOpen && orderEquipment.length > 0 && <small>Abra Equipamentos para conferir o questionário de cada unidade.</small>}
+                </section>}
                 <EquipmentSelections data={data} value={selectedModels} onChange={setSelectedModels} />
                 <label className="field">
                   Data *
@@ -906,14 +948,14 @@ export function EditorModal({
                     {orderTypes.map((type) => <option key={type}>{type}</option>)}
                   </select>
                 </label>
-                <label className="field full">
+                {(order || orderEquipment.length === 0) && <label className="field full">
                   {order ? "Adicionar questionário à tarefa" : "Questionário"}
                   <select aria-label={order ? "Adicionar questionário à tarefa" : "Questionário"} value={questionnaireId} onChange={(event) => setQuestionnaireId(event.target.value)}>
                     <option value="">{order ? "Preservar questionários atuais, sem adicionar" : "Sem questionário"}</option>
                     {data.questionnaires.filter((item) => !item.archived).map((item) => <option key={item.id} value={item.id}>{item.title}</option>)}
                   </select>
                   <small>{order ? "Os questionários vinculados são atualizados automaticamente enquanto a tarefa não estiver finalizada ou arquivada. Não é necessário adicioná-los novamente." : "O padrão do tipo é selecionado automaticamente e pode ser substituído. As respostas são exclusivas desta tarefa."}</small>
-                </label>
+                </label>}
                 <label className="field">
                   Prioridade
                   <select

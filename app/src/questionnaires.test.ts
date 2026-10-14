@@ -4,7 +4,7 @@ import {
   orderPending, replicateOrder, validateDatabase, validateOrderDetails,
 } from "./domain";
 import type { Database, Order, QuestionnaireTemplate } from "./domain";
-import { addQuestionnaire, archiveQuestionnaire, saveQuestionnaire } from "./questionnaires";
+import { addQuestionnaire, archiveQuestionnaire, orderEquipmentQuestionnaires, saveQuestionnaire } from "./questionnaires";
 import { questionnaireDisplaySchema } from "./questionnaireSchema";
 import { questionnaireRows } from "./reporting";
 import { questionAnswerText, withQuestionAnswer } from "./questionnaireAnswers";
@@ -33,6 +33,71 @@ function fixture() {
   return { data, order };
 }
 const signature = { signer: "Técnico", image: "data:image/png;base64,AAAA", at: "2026-10-10T12:00:00.000Z" };
+
+describe("equipamentos e questionários na criação da OS", () => {
+  function setup() {
+    const data = saveQuestionnaire(saveQuestionnaire(demoDatabase(), template()), { ...template(), id: "second", title: "Outro questionário" });
+    const first = data.equipment[0];
+    const second = { ...first, id: "second-unit", serial: "SECOND-UNIT" };
+    data.equipment.push(second);
+    return { data, first, second, picks: [
+      { equipmentId: first.id, questionnaireId: "template" },
+      { equipmentId: second.id, questionnaireId: "second" },
+    ] };
+  }
+  it("associa todas as unidades e cria questionários diferentes por equipamento", () => {
+    const { data, first, second, picks } = setup();
+    const result = orderEquipmentQuestionnaires(data, first.clientId, picks, []);
+    expect(result.equipmentId).toBe(first.id);
+    expect(result.equipmentIds).toEqual([second.id]);
+    expect(result.checklists.map((item) => [item.equipmentId, item.templateId])).toEqual([[first.id, "template"], [second.id, "second"]]);
+    const order = { ...data.orders[0], clientId: first.clientId, equipmentId: result.equipmentId,
+      details: { ...getOrderDetails(data.orders[0]), equipmentIds: result.equipmentIds, checklists: result.checklists } };
+    expect(() => validateOrderDetails(order, data)).not.toThrow();
+  });
+  it("permite o mesmo modelo com respostas e instâncias independentes", () => {
+    const { data, first, picks } = setup();
+    const result = orderEquipmentQuestionnaires(data, first.clientId, picks.map((item) => ({ ...item, questionnaireId: "template" })), []);
+    expect(result.checklists[0].id).not.toBe(result.checklists[1].id);
+    result.checklists[0].questions[0].answer = "Revisado";
+    expect(result.checklists[1].questions[0].answer).toBe("");
+    expect(data.questionnaires[0].questions[0]).not.toHaveProperty("answer");
+  });
+  it("mantém seleção de equipamentos opcional", () => {
+    const { data, first } = setup();
+    const general = instantiateQuestionnaire(data.questionnaires[0]);
+    expect(orderEquipmentQuestionnaires(data, first.clientId, [], [general])).toEqual({ equipmentId: "", equipmentIds: [], checklists: [general] });
+  });
+  it("não obriga adicionar questionário ao editar um vínculo legado", () => {
+    const { data, first, picks } = setup();
+    const result = orderEquipmentQuestionnaires(data, first.clientId, [{ ...picks[0], questionnaireId: "" }], [], [first.id]);
+    expect(result).toEqual({ equipmentId: first.id, equipmentIds: [], checklists: [] });
+  });
+  it("impede equipamento de outro cliente e IDs duplicados", () => {
+    const { data, first, picks } = setup();
+    expect(() => orderEquipmentQuestionnaires(data, "other-client", picks, [])).toThrow("não pertence");
+    expect(() => orderEquipmentQuestionnaires(data, first.clientId, [picks[0], picks[0]], [])).toThrow("apenas uma vez");
+  });
+  it("exige questionário ativo e compatível para cada unidade nova", () => {
+    const { data, first, picks } = setup();
+    expect(() => orderEquipmentQuestionnaires(data, first.clientId, [{ ...picks[0], questionnaireId: "" }], [])).toThrow("cada equipamento");
+    data.questionnaires[0].archived = true;
+    expect(() => orderEquipmentQuestionnaires(data, first.clientId, picks, [])).toThrow("indisponível");
+    data.questionnaires[0].archived = false;
+    data.questionnaires[0].display.equipment = false;
+    expect(() => orderEquipmentQuestionnaires(data, first.clientId, picks, [])).toThrow("não permite");
+  });
+  it("preserva respostas existentes e não duplica o questionário da unidade", () => {
+    const { data, first, picks } = setup();
+    const existing = instantiateQuestionnaire(data.questionnaires[0], first.id);
+    existing.questions[0].answer = "Manutenção anterior";
+    const result = orderEquipmentQuestionnaires(data, first.clientId, [{ ...picks[0], questionnaireId: "" }, picks[1]], [existing]);
+    expect(result.checklists[0]).toEqual(existing);
+    expect(result.checklists).toHaveLength(2);
+    expect(() => orderEquipmentQuestionnaires(data, first.clientId, picks, [existing])).toThrow("já está vinculado");
+    expect(() => orderEquipmentQuestionnaires(data, first.clientId, [picks[1]], [existing])).toThrow("desmarcado");
+  });
+});
 
 describe("catálogo e atualização de questionários vinculados", () => {
   it("abre backups antigos sem catálogo, apresentação ou assinaturas por pergunta", () => {
