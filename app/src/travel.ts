@@ -7,11 +7,14 @@ export const servicePointSchema = z.object({
   source: z.literal("Google Maps").optional(),
 });
 const amount = z.number().int().nonnegative().max(100_000_000);
+const routeEndpointSchema = z.union([servicePointSchema, z.object({
+  address: servicePointSchema.shape.address,
+}).strict()]);
 export const travelRouteSchema = z.object({
   provider: z.literal("Google Maps"),
   calculatedAt: z.iso.datetime(),
-  origin: servicePointSchema,
-  destination: servicePointSchema,
+  origin: routeEndpointSchema,
+  destination: routeEndpointSchema,
   outboundMeters: z.number().int().nonnegative().max(50_000_000),
   returnMeters: z.number().int().nonnegative().max(50_000_000),
 });
@@ -38,4 +41,13 @@ export function travelValues(travel: Travel) {
 
 export function samePoint(first: z.infer<typeof servicePointSchema> | undefined, second: z.infer<typeof servicePointSchema> | undefined) {
   return Boolean(first && second && first.latitude === second.latitude && first.longitude === second.longitude && first.address === second.address);
+}
+
+export function travelEndpoint(address: string, point: z.infer<typeof servicePointSchema> | undefined): TravelRoute["origin"] {
+  return point?.address === address ? point : { address };
+}
+
+export function sameTravelEndpoint(first: TravelRoute["origin"], second: TravelRoute["origin"]) {
+  if ("latitude" in first && "latitude" in second) return samePoint(first, second);
+  return !("latitude" in first) && !("latitude" in second) && first.address === second.address;
 }

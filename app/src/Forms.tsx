@@ -673,8 +673,6 @@ export function EditorModal({
             const previousDetails = existing ? getOrderDetails(existing) : orderDetailsSchema.parse({ createdAt: new Date().toISOString() });
             const equipmentLinks = orderEquipmentQuestionnaires(current, clientId, orderEquipment, previousDetails.checklists,
               existing ? [existing.equipmentId, ...previousDetails.equipmentIds].filter(Boolean) : []);
-            if (form.get("servicePointLookup") === "pending")
-              throw new Error("Aguarde a localização automática do atendimento ou marque o ponto manualmente antes de salvar.");
             const useClientAddress = form.get("useClientAddress") === "on";
             const selectedClient = current.clients.find((item) => item.id === getText(form, "clientId"));
             if (useClientAddress && !selectedClient?.address.trim())

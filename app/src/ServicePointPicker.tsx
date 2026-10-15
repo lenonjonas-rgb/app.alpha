@@ -115,6 +115,7 @@ export function ServicePointPicker({ address, initialPoint, inputName = "service
     <p>{validPoint
       ? `Ponto ${googlePreview ? "localizado automaticamente" : "confirmado"}: ${validPoint.latitude.toFixed(6)}, ${validPoint.longitude.toFixed(6)}.`
       : "As coordenadas serão preenchidas automaticamente pelo endereço completo. Você também pode marcar o ponto manualmente."}</p>
+    {!validPoint && <p>Você pode salvar o endereço sem coordenadas e calcular a rota por ele. A distância do check-in/check-out só ficará disponível quando houver um ponto confirmado.</p>}
     <input ref={pointInput} type="hidden" name={inputName} value={validPoint ? JSON.stringify(validPoint) : ""} readOnly />
     <input type="hidden" name={`${inputName}Lookup`} value={lookupPending ? "pending" : ""} />
     {lookupPending && <p role="status">{lookupMessage || "Aguardando o endereço para localizar as coordenadas…"}</p>}

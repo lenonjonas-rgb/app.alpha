@@ -18,8 +18,6 @@ export function TravelSettings({ data, commit, onSuccess, onError }: {
       event.preventDefault();
       try {
         const form = new FormData(event.currentTarget);
-        if (form.get("assistancePointLookup") === "pending")
-          throw new Error("Aguarde a localização automática da assistência ou marque o ponto manualmente antes de salvar.");
         const rawPoint = String(form.get("assistancePoint") ?? "");
         const point = rawPoint ? servicePointSchema.parse(JSON.parse(rawPoint)) : undefined;
         const fuelPrice = Math.round(Number(form.get("fuelPrice")) * 100);
@@ -37,7 +35,7 @@ export function TravelSettings({ data, commit, onSuccess, onError }: {
         <label className="field full">Endereço de saída da assistência<input value={address} maxLength={2000} onChange={(event) => setAddress(event.target.value)} /></label>
         <div className="full"><ServicePointPicker address={address} initialPoint={data.settings.assistancePoint} inputName="assistancePoint" assistance /></div>
       </div>
-      <p>As coordenadas são localizadas automaticamente pelo endereço. Confira e salve. Se necessário, corrija o ponto manualmente. As rotas serão calculadas nos dois sentidos.</p>
+      <p>Salve o endereço completo mesmo sem coordenadas: as rotas podem ser calculadas diretamente pelo endereço nos dois sentidos. O ponto no mapa é opcional para a rota.</p>
       <button className="button primary">Salvar deslocamento e combustível</button>
     </form>
   </section>;

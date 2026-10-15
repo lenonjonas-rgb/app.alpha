@@ -2,6 +2,7 @@ import { geocodeAddress } from "./geocoding.ts";
 
 type Environment = { url: string; publicKey: string; googleKey: string };
 type Point = { latitude: number; longitude: number; address: string; source?: "Google Maps" };
+type Endpoint = Point | { address: string };
 const cors = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, apikey, content-type, x-client-info",
@@ -19,6 +20,12 @@ function point(value: unknown): Point {
     throw new Error("Confirme os pontos da assistência e do atendimento antes de calcular.");
   const source = data.source === "Google Maps" ? "Google Maps" : undefined;
   return { latitude: data.latitude, longitude: data.longitude, address: data.address, ...(source ? { source } : {}) };
+}
+function endpoint(address: unknown, savedPoint: unknown): Endpoint {
+  if (typeof address !== "string" || !address.trim() || address.length > 2000)
+    throw new Error("Cadastre e salve o endereço completo da assistência e do atendimento antes de calcular.");
+  if (savedPoint && object(savedPoint).address === address) return point(savedPoint);
+  return { address };
 }
 function records(value: unknown) {
   if (!Array.isArray(value)) throw new Error("Base da empresa inválida.");
@@ -88,8 +95,8 @@ export function travelRouteHandler(env: Environment, fetcher: typeof fetch = fet
         Object.keys(fields).some((key) => key !== "orderId")) throw new Error("Informe somente a OS a calcular.");
       orderId = fields.orderId;
     } catch (cause) { return response(400, { error: cause instanceof Error ? cause.message : "Solicitação inválida." }); }
-    let origin: Point;
-    let destination: Point;
+    let origin: Endpoint;
+    let destination: Endpoint;
     try {
       const rows = records(await api(`/rest/v1/company_data?company_id=eq.${companyId}&select=payload`));
       const payload = object(rows[0]?.payload);
@@ -98,15 +105,17 @@ export function travelRouteHandler(env: Environment, fetcher: typeof fetch = fet
       const details = object(order.details);
       const client = records(payload.clients).find((item) => item.id === order.clientId);
       if (!client) throw new Error("Cliente não encontrado.");
-      origin = point(object(payload.settings).assistancePoint);
-      destination = point(details.servicePoint);
-      if (destination.address !== serviceAddress(details, client))
-        throw new Error("O endereço mudou. Confirme novamente o ponto do atendimento e salve a OS.");
+      const settings = object(payload.settings);
+      const assistanceAddress = settings.assistanceAddress || (settings.assistancePoint ? object(settings.assistancePoint).address : "") || settings.address;
+      origin = endpoint(assistanceAddress, settings.assistancePoint);
+      destination = endpoint(serviceAddress(details, client), details.servicePoint);
     } catch (cause) { return response(400, { error: cause instanceof Error ? cause.message : "Confira os pontos cadastrados." }); }
     try { await api("/rest/v1/rpc/reserve_travel_route", {}, false); }
     catch { return response(429, { error: "Cálculo não autorizado ou muito frequente. Aguarde 10 segundos e verifique se a migração de rotas foi aplicada." }); }
-    async function leg(from: Point, to: Point) {
-      const location = (value: Point) => ({ location: { latLng: { latitude: value.latitude, longitude: value.longitude } } });
+    async function leg(from: Endpoint, to: Endpoint) {
+      const location = (value: Endpoint) => "latitude" in value
+        ? { location: { latLng: { latitude: value.latitude, longitude: value.longitude } } }
+        : { address: value.address };
       const result = await fetcher("https://routes.googleapis.com/directions/v2:computeRoutes", {
         method: "POST",
         headers: { "Content-Type": "application/json", "X-Goog-Api-Key": env.googleKey, "X-Goog-FieldMask": "routes.distanceMeters" },
@@ -114,7 +123,7 @@ export function travelRouteHandler(env: Environment, fetcher: typeof fetch = fet
           origin: location(from), destination: location(to), travelMode: "DRIVE",
           routingPreference: "TRAFFIC_UNAWARE", computeAlternativeRoutes: false,
           routeModifiers: { avoidTolls: false, avoidHighways: false, avoidFerries: false },
-          languageCode: "pt-BR", units: "METRIC",
+          languageCode: "pt-BR", regionCode: "BR", units: "METRIC",
         }),
         signal: AbortSignal.timeout(20000),
       });
