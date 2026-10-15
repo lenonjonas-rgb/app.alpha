@@ -1091,7 +1091,6 @@ export function EditorModal({
                   <TravelPanel data={data} previewDestination={previewDestination} travel={travel} editing busy={travelBusy}
                     initialCharge={savedFormValue(savedDraft, "travelChargeTravel", travel?.chargeTravel ? "Sim" : "Não") === "Sim"}
                     onBusy={setTravelBusy} onChange={setTravel} onError={setError} />
-                  <p>Ao salvar uma nova OS, a rota e os custos são calculados se ainda não houver cálculo válido. Sim adiciona km e o total dos pedágios aos valores; Não registra somente os custos internos.</p>
                 </div>
                 {clientEquipment.length > 0 && <section className="field full order-equipment-picker">
                   <button type="button" className="button secondary" aria-expanded={equipmentOpen} aria-controls="order-client-equipment" onClick={() => setEquipmentOpen(!equipmentOpen)}>

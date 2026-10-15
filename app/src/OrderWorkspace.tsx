@@ -1910,7 +1910,11 @@ export function OrderWorkspace({
                 </div>
                 <div>
                   <small>Deslocamento cobrado</small>
-                  <strong>{currency(values.travel)}</strong>
+                  <strong>{currency(details.travel ? travelValues(details.travel).mileageCharge : 0)}</strong>
+                </div>
+                <div>
+                  <small>Pedágio cobrado</small>
+                  <strong>{currency(details.travel?.chargeTravel ? details.travel.tolls : 0)}</strong>
                 </div>
                 <label className="field">
                   Desconto geral

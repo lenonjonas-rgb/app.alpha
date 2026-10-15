@@ -26,9 +26,19 @@ describe("custos e cobrança de deslocamento", () => {
     const travel = { ...trip(), tollsConfirmed: false };
     travel.route.tollEstimate = { outbound: 1250, return: null };
     const pending = renderToStaticMarkup(<TravelPanel {...props} travel={travel} />);
-    expect(pending).toContain("Valor total dos pedágios — ida + volta");
-    expect(pending).toContain("preço indisponível");
+    expect(pending).toContain("Pedágio — ida + volta");
     expect(pending).toContain("não pode ser salvo");
+  });
+  it.each([false, true])("mostra somente totais separados sem recados da rota (Sim=%s)", (chargeTravel) => {
+    const travel = { ...trip(), chargeTravel };
+    const html = renderToStaticMarkup(<TravelPanel data={demoDatabase()} travel={travel} editing busy={false}
+      onBusy={() => {}} onChange={() => {}} onError={() => {}} />);
+    expect(html).toContain('Total do deslocamento (R$)<input readOnly="" value="175.00"');
+    expect(html).toContain('Pedágio — ida + volta (R$)<input');
+    expect(html).toContain('value="20"');
+    expect(html).toContain("70 km");
+    for (const text of ["Origem registrada", "Preços registrados", "Consumo estimado", "Cobrança ao cliente", "Rota de carro", "Não é obrigatório", "Estimativa de combustível"])
+      expect(html).not.toContain(text);
   });
   it.each([false, true])("preserva estimativas dos pedágios de ida e volta no backup e aplica o total uma única vez (Sim=%s)", (chargeTravel) => {
     const data = demoDatabase();
