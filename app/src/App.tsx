@@ -2154,7 +2154,7 @@ function SettingsPanel({
     <div className="settings-page">
       {cloud && role === "owner" && <UserSettings />}
       {cloud && <PasswordSettings />}
-      <TravelSettings key={JSON.stringify([data.settings.fuelPrice, data.settings.kilometersPerLiter, data.settings.kilometerRate, data.settings.assistancePoint])} data={data} commit={commit} onSuccess={onSuccess} onError={onError} />
+      <TravelSettings key={JSON.stringify([data.settings.fuelPrice, data.settings.kilometersPerLiter, data.settings.kilometerRate, data.settings.assistancePoint, data.settings.assistanceAddress])} data={data} commit={commit} onSuccess={onSuccess} onError={onError} />
       <ReportSettingsPanel key={JSON.stringify(data.settings.reportSettings)} data={data} commit={commit} onSuccess={onSuccess} onError={onError} />
       <section className="settings-section">
         <div className="section-heading">

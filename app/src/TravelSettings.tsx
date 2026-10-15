@@ -10,7 +10,7 @@ export function TravelSettings({ data, commit, onSuccess, onError }: {
   onSuccess: (message: string) => void;
   onError: (message: string) => void;
 }) {
-  const [address, setAddress] = useState(data.settings.assistancePoint?.address ?? data.settings.address);
+  const [address, setAddress] = useState(data.settings.assistanceAddress || data.settings.assistancePoint?.address || data.settings.address);
   return <section className="settings-section">
     <h2>Deslocamento, combustível e assistência</h2>
     <p>Valores padrão para novos cálculos. As OS já calculadas preservam seus preços. A chave Google Maps é configurada somente no servidor, nunca neste formulário.</p>
@@ -18,13 +18,15 @@ export function TravelSettings({ data, commit, onSuccess, onError }: {
       event.preventDefault();
       try {
         const form = new FormData(event.currentTarget);
+        if (form.get("assistancePointLookup") === "pending")
+          throw new Error("Aguarde a localização automática da assistência ou marque o ponto manualmente antes de salvar.");
         const rawPoint = String(form.get("assistancePoint") ?? "");
         const point = rawPoint ? servicePointSchema.parse(JSON.parse(rawPoint)) : undefined;
         const fuelPrice = Math.round(Number(form.get("fuelPrice")) * 100);
         const kilometersPerLiter = Number(form.get("kilometersPerLiter"));
         const kilometerRate = Math.round(Number(form.get("kilometerRate")) * 100);
         if (fuelPrice <= 0 || kilometersPerLiter <= 0) throw new Error("Informe preço do combustível e rendimento maiores que zero.");
-        commit((current) => ({ ...current, settings: { ...current.settings, fuelPrice, kilometersPerLiter, kilometerRate, assistancePoint: point } }));
+        commit((current) => ({ ...current, settings: { ...current.settings, fuelPrice, kilometersPerLiter, kilometerRate, assistancePoint: point, assistanceAddress: address } }));
         onSuccess("Configurações de deslocamento salvas."); onError("");
       } catch (cause) { onError(errorMessage(cause)); }
     }}>
@@ -35,7 +37,7 @@ export function TravelSettings({ data, commit, onSuccess, onError }: {
         <label className="field full">Endereço de saída da assistência<input value={address} maxLength={2000} onChange={(event) => setAddress(event.target.value)} /></label>
         <div className="full"><ServicePointPicker address={address} initialPoint={data.settings.assistancePoint} inputName="assistancePoint" assistance /></div>
       </div>
-      <p>Confirme o ponto exato da assistência e salve. As rotas serão calculadas a partir dele até o ponto confirmado na OS, nos dois sentidos.</p>
+      <p>As coordenadas são localizadas automaticamente pelo endereço. Confira e salve. Se necessário, corrija o ponto manualmente. As rotas serão calculadas nos dois sentidos.</p>
       <button className="button primary">Salvar deslocamento e combustível</button>
     </form>
   </section>;

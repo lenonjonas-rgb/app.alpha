@@ -1,5 +1,7 @@
+import { geocodeAddress } from "./geocoding.ts";
+
 type Environment = { url: string; publicKey: string; googleKey: string };
-type Point = { latitude: number; longitude: number; address: string };
+type Point = { latitude: number; longitude: number; address: string; source?: "Google Maps" };
 const cors = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, apikey, content-type, x-client-info",
@@ -15,7 +17,8 @@ function point(value: unknown): Point {
     typeof data.longitude !== "number" || !Number.isFinite(data.longitude) || Math.abs(data.longitude) > 180 ||
     typeof data.address !== "string" || !data.address.trim() || data.address.length > 2000)
     throw new Error("Confirme os pontos da assistência e do atendimento antes de calcular.");
-  return { latitude: data.latitude, longitude: data.longitude, address: data.address };
+  const source = data.source === "Google Maps" ? "Google Maps" : undefined;
+  return { latitude: data.latitude, longitude: data.longitude, address: data.address, ...(source ? { source } : {}) };
 }
 function records(value: unknown) {
   if (!Array.isArray(value)) throw new Error("Base da empresa inválida.");
@@ -69,8 +72,17 @@ export function travelRouteHandler(env: Environment, fetcher: typeof fetch = fet
     let orderId: string;
     try {
       const raw = await request.text();
-      if (raw.length > 1024) throw new Error("Solicitação excede o tamanho permitido.");
+      if (raw.length > 12000) throw new Error("Solicitação excede o tamanho permitido.");
       const fields = object(JSON.parse(raw));
+      if (fields.action === "geocode") {
+        if (typeof fields.address !== "string" || fields.address.trim().length < 8 || fields.address.length > 2000 ||
+          Object.keys(fields).some((key) => !["action", "address"].includes(key)))
+          throw new Error("Informe um endereço completo de até 2000 caracteres.");
+        try { await api("/rest/v1/rpc/reserve_address_lookup", {}); }
+        catch { return response(429, { error: "Não foi possível autorizar a consulta de endereço. Aguarde um minuto se atingiu o limite e confira se a migração de geocodificação foi aplicada." }); }
+        try { return response(200, await geocodeAddress(fields.address, env.googleKey, fetcher)); }
+        catch (cause) { return response(502, { error: cause instanceof Error ? cause.message : "Não foi possível localizar o endereço." }); }
+      }
       if (typeof fields.orderId !== "string" || !fields.orderId.trim() || fields.orderId.length > 200 ||
         Object.keys(fields).some((key) => key !== "orderId")) throw new Error("Informe somente a OS a calcular.");
       orderId = fields.orderId;

@@ -3,7 +3,8 @@ import { z } from "zod";
 export const servicePointSchema = z.object({
   latitude: z.number().min(-90).max(90),
   longitude: z.number().min(-180).max(180),
-  address: z.string().trim().min(1).max(2000),
+  address: z.string().min(1).max(2000).refine((value) => value.trim().length > 0, "Informe o endereço do ponto."),
+  source: z.literal("Google Maps").optional(),
 });
 const amount = z.number().int().nonnegative().max(100_000_000);
 export const travelRouteSchema = z.object({

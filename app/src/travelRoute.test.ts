@@ -10,15 +10,15 @@ const json = (body: unknown, status = 200) => new Response(JSON.stringify(body),
 const request = (body: object = { orderId: "order-1" }) => new Request("https://example.test/travel-route", {
   method: "POST", headers: { Authorization: "Bearer test-user", "Content-Type": "application/json" }, body: JSON.stringify(body),
 });
-function setup({ role = "owner", stale = false, found = true, googleStatus = 200, reserveStatus = 200, noRoutes = false } = {}) {
+function setup({ role = "owner", stale = false, found = true, googleStatus = 200, reserveStatus = 200, noRoutes = false, geocoded = false } = {}) {
   const legs: { body: Record<string, unknown>; headers: Headers }[] = [];
   const fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const url = String(input);
     if (url.endsWith("/auth/v1/user")) return json({ id: user });
     if (url.includes("/company_memberships?")) return json([{ company_id: company, role }]);
     if (url.includes("/company_data?")) return json([{ payload: {
-      settings: { assistancePoint: origin },
-      orders: found ? [{ id: "order-1", clientId: "client", details: { servicePoint: { ...destination, address: stale ? "Antigo" : destination.address } } }] : [],
+      settings: { assistancePoint: { ...origin, ...(geocoded ? { source: "Google Maps" } : {}) } },
+      orders: found ? [{ id: "order-1", clientId: "client", details: { servicePoint: { ...destination, address: stale ? "Antigo" : destination.address, ...(geocoded ? { source: "Google Maps" } : {}) } } }] : [],
       clients: [{ id: "client", address: destination.address }],
     } }]);
     if (url.endsWith("/rpc/reserve_travel_route")) return json(null, reserveStatus);
@@ -31,6 +31,14 @@ function setup({ role = "owner", stale = false, found = true, googleStatus = 200
   return { handler: travelRouteHandler(env, fetcher), fetcher, legs };
 }
 describe("Google Maps Routes protegido no servidor", () => {
+  it("preserva a origem Google dos pontos no histórico da rota", async () => {
+    const { handler } = setup({ geocoded: true });
+    const response = await handler(request());
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      origin: { ...origin, source: "Google Maps" }, destination: { ...destination, source: "Google Maps" },
+    });
+  });
   it("solicita ida e volta separadamente e só envia coordenadas ao Google", async () => {
     const { handler, legs } = setup();
     const response = await handler(request());

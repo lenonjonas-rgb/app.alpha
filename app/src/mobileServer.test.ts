@@ -44,7 +44,7 @@ beforeAll(async () => {
     grant usage on schema auth to anon,authenticated;
     grant execute on function auth.uid() to anon,authenticated;
   `);
-  for (const file of ["20261008010000_tenant_auth_and_company_data.sql", "20261009010000_android_technicians.sql", "20261009020000_technician_link_validation.sql", "20261010010000_questionnaires.sql", "20261011010000_questionnaire_checkout_requirement.sql", "20261011020000_yes_no_question_justification.sql", "20261015010000_service_distance.sql", "20261015020000_travel_route_limits.sql"]) {
+  for (const file of ["20261008010000_tenant_auth_and_company_data.sql", "20261009010000_android_technicians.sql", "20261009020000_technician_link_validation.sql", "20261010010000_questionnaires.sql", "20261011010000_questionnaire_checkout_requirement.sql", "20261011020000_yes_no_question_justification.sql", "20261015010000_service_distance.sql", "20261015020000_travel_route_limits.sql", "20261015030000_address_lookup_limits.sql"]) {
     await db.exec(await readFile(new URL(`../../supabase/migrations/${file}`, import.meta.url), "utf8"));
   }
   await db.query("insert into auth.users values ($1,'owner@example.test'),($2,'tech@example.test'),($3,'other@example.test')", [owner, tech, other]);
@@ -55,6 +55,23 @@ beforeAll(async () => {
 afterAll(async () => { await db.close(); });
 
 describe("RPC Android e isolamento de dados", () => {
+  it("limita geocodificação a 30 por minuto por empresa, permite renovar a janela e bloqueia acesso direto", async () => {
+    await identity(tech);
+    await expect(db.query("select public.reserve_address_lookup()")).rejects.toThrow("administração");
+    await identity(owner);
+    for (let count = 0; count < 30; count++) await db.query("select public.reserve_address_lookup()");
+    await expect(db.query("select public.reserve_address_lookup()")).rejects.toThrow("30 consultas");
+    await expect(db.query("delete from public.address_lookup_requests")).rejects.toThrow("permission");
+    await identity(owner, "anon");
+    await expect(db.query("select public.reserve_address_lookup()")).rejects.toThrow("permission");
+    await db.exec("reset role");
+    await db.query("update public.address_lookup_requests set window_started_at=clock_timestamp()-interval '61 seconds' where company_id=$1", [company]);
+    await identity(owner);
+    await db.query("select public.reserve_address_lookup()");
+    await db.exec("reset role");
+    const rows = await db.query<{ requests: number }>("select requests from public.address_lookup_requests where company_id=$1", [company]);
+    expect(rows.rows[0].requests).toBe(1);
+  });
   it("reserva rotas apenas para administradores e limita chamadas por empresa", async () => {
     await identity(tech);
     await expect(db.query("select public.reserve_travel_route()")).rejects.toThrow("administração");

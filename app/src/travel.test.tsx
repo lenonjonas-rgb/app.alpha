@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { currency, demoDatabase, getOrderDetails, orderValues, replicateOrder, validateDatabase } from "./domain";
-import { travelSchema, travelValues } from "./travel";
+import { servicePointSchema, travelSchema, travelValues } from "./travel";
 import { filterOrders, defaultReportFilters, travelCostRows } from "./reporting";
 import { OrderPrintable } from "./OrderWorkspace";
 
@@ -16,6 +16,28 @@ const trip = () => travelSchema.parse({
 });
 
 describe("custos e cobrança de deslocamento", () => {
+  it("não aceita endereço em branco e não altera o endereço vinculado às coordenadas", () => {
+    expect(servicePointSchema.safeParse({ ...trip().route.origin, address: "   " }).success).toBe(false);
+    expect(servicePointSchema.parse({ ...trip().route.origin, address: " Rua da assistência, 10 " }).address).toBe(" Rua da assistência, 10 ");
+  });
+  it("preserva endereço e origem Google em backups e mantém compatibilidade com pontos manuais antigos", () => {
+    const data = demoDatabase();
+    data.settings.assistanceAddress = "Rua da assistência, 10";
+    data.settings.assistancePoint = { ...trip().route.origin, source: "Google Maps" };
+    const travel = trip();
+    travel.route.origin.source = "Google Maps";
+    data.orders[0].details = { ...getOrderDetails(data.orders[0]), travel, servicePoint: { ...travel.route.destination, source: "Google Maps" } };
+    const restored = validateDatabase(JSON.parse(JSON.stringify(data)));
+    expect(restored.settings.assistanceAddress).toBe(data.settings.assistanceAddress);
+    expect(restored.settings.assistancePoint?.source).toBe("Google Maps");
+    expect(restored.orders[0].details?.servicePoint?.source).toBe("Google Maps");
+    expect(restored.orders[0].details?.travel?.route.origin.source).toBe("Google Maps");
+    Reflect.deleteProperty(data.settings, "assistanceAddress");
+    data.settings.assistancePoint = trip().route.origin;
+    const legacy = validateDatabase(data);
+    expect(legacy.settings.assistanceAddress).toBe("");
+    expect(legacy.settings.assistancePoint?.source).toBeUndefined();
+  });
   it("calcula exatamente o exemplo de 70 km sem cobrar quando Não", () => {
     expect(travelValues(trip())).toEqual({
       kilometers: 70, liters: 7, fuelCost: 4200, cost: 6200,

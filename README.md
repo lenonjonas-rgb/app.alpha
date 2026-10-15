@@ -247,7 +247,11 @@ Os testes `mobile.test.ts` e `mobileServer.test.ts` verificam tempo, GPS, compat
 
 ## Deslocamento: rotas, cobranca e combustivel
 
-Em **Configuracoes > Deslocamento, combustivel e assistencia**, cadastre o preco do combustivel em R$/litro, o rendimento do veiculo em km/litro, a tarifa cobrada em R$/km e confirme o ponto de saida da assistencia no mapa. Na OS, confirme e salve tambem o ponto exato de atendimento.
+Em **Configuracoes > Deslocamento, combustivel e assistencia**, cadastre o preco do combustivel em R$/litro, o rendimento do veiculo em km/litro, a tarifa cobrada em R$/km e o endereco de saida da assistencia. As coordenadas sao preenchidas automaticamente apos uma pausa de 1,2 segundo no preenchimento. Na criacao/edicao da OS, o mesmo ocorre com o endereco do cliente ou o endereco especifico completo do atendimento. Confira o ponto e salve o formulario; nao e preciso confirmar manualmente as coordenadas automaticas.
+
+A busca aceita somente um resultado completo do Google, com precisao de edificio ou interpolacao de numero. Endereco nao encontrado, parcial, ambiguo ou aproximado exibe erro: complete o endereco, tente novamente ou marque o ponto manualmente. Os campos de endereco especifico devem estar completos. Durante a consulta, o salvamento pede para aguardar ou selecionar manualmente o ponto; alterar o endereco descarta respostas anteriores. Pontos ja salvos para o mesmo endereco sao preservados sem nova consulta. A busca automatica exige login administrativo Supabase.
+
+Pontos automaticos sao conferidos em mapa Google; a selecao manual continua disponivel em mapa OpenStreetMap ou pelos campos latitude/longitude. A chave privada permanece no servidor.
 
 Em **Mais informacoes > Editar informacoes > Valores**, calcule a rota para habilitar **Cobranca de deslocamento: Sim/Nao** e os **pedagios totais de ida e volta**. Salve as alteracoes da OS.
 
@@ -263,17 +267,16 @@ Em **Mais informacoes > Editar informacoes > Valores**, calcule a rota para habi
 
 ### Ativar Google Maps no servidor
 
-1. No Google Cloud, habilite **Routes API**, faturamento e uma chave restrita a essa API. Configure cotas e alertas de orcamento para controlar despesas; cada calculo consome duas consultas (ida e volta).
-2. Aplique as migracoes anteriores, inclusive `20261015010000_service_distance.sql`, e `20261015020000_travel_route_limits.sql`. Esta ultima autoriza administradores/Master e limita os calculos a um a cada 10 segundos por empresa, sem permitir acesso direto a tabela de limites.
+1. No Google Cloud, habilite **Routes API** e **Geocoding API**, faturamento e uma chave restrita a essas duas APIs. Se a chave ja funciona para rotas, acrescente Geocoding API tanto nas APIs ativadas quanto nas restricoes da chave existente. Configure cotas e alertas de orcamento; cada calculo de rota consome duas consultas (ida e volta), e cada busca de endereco consome uma consulta de geocodificacao.
+2. Aplique somente as migracoes ainda pendentes, inclusive `20261015010000_service_distance.sql`, `20261015020000_travel_route_limits.sql` e `20261015030000_address_lookup_limits.sql`. Se as rotas ja estao funcionando, execute apenas a nova `20261015030000_address_lookup_limits.sql` no SQL Editor. Nao repita migracoes antigas aplicadas manualmente nem use `db push` sem conciliar o historico. Os limites por empresa sao um calculo de rota a cada 10 segundos e 30 buscas de endereco por minuto, em tabelas privadas separadas, somente para administradores/Master.
 3. Cadastre o secret **GOOGLE_MAPS_ROUTES_API_KEY** no painel Supabase, em Edge Functions > Secrets. Nao coloque a chave no frontend, em variaveis `VITE_*`, no documento da empresa ou no repositorio. Nao envie a chave por chat.
 4. Publique a Edge Function `travel-route` usando a configuracao de `supabase/config.toml`. Exemplo, com Supabase CLI previamente configurado:
 
 ```powershell
-supabase db push
-supabase functions deploy travel-route
+npx supabase functions deploy travel-route
 ```
 
-A funcao valida o JWT em `/auth/v1/user`, exige papel owner/admin na mesma empresa e consulta os pontos salvos via RLS com o token do chamador. O navegador envia apenas o ID da OS; a chave Google nunca e retornada. Ao Google sao enviadas apenas as coordenadas necessarias para as rotas, sem nomes, enderecos textuais, valores ou documento da empresa. Pedagios sao informados manualmente, nao consultados automaticamente. Sem secret, migracao ou funcao publicada, o erro e exibido e nao e criado um calculo ficticio. Publicar a versao web atualizada conclui a ativacao; chamadas reais ao provedor nao fazem parte dos testes automatizados.
+A funcao valida o JWT em `/auth/v1/user` e exige papel owner/admin na mesma empresa. Para rotas, o navegador envia apenas o ID da OS e o servidor consulta os pontos salvos via RLS com o token do chamador; ao Google sao enviadas as coordenadas. Para geocodificacao, o navegador envia o endereco em preenchimento (que ainda pode nao estar salvo), e o servidor envia esse texto ao Google. Nao sao enviados nomes de clientes, valores ou documento da empresa pela consulta; nao inclua dados pessoais extras no campo de endereco. A chave Google nunca e retornada. Pedagios sao informados manualmente, nao consultados automaticamente. Sem secret, migracao, API habilitada ou funcao publicada, o erro e exibido e nao e criado um ponto/calculo ficticio. Republique a funcao existente e a versao web atualizada para ativar a busca automatica; chamadas reais pagas ao provedor nao fazem parte dos testes.
 
 ## Estrutura
 

@@ -268,6 +268,7 @@ export const databaseSchema = z.object({
     fuelPrice: money.default(0),
     kilometersPerLiter: z.number().nonnegative().max(1000).default(0),
     assistancePoint: servicePointSchema.optional(),
+    assistanceAddress: z.string().max(2000).default(""),
     logo: z
       .string()
       .max(1_500_000)
