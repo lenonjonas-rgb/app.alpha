@@ -10,7 +10,7 @@ const json = (body: unknown, status = 200) => new Response(JSON.stringify(body),
 const request = (body: object = { orderId: "order-1" }) => new Request("https://example.test/travel-route", {
   method: "POST", headers: { Authorization: "Bearer test-user", "Content-Type": "application/json" }, body: JSON.stringify(body),
 });
-function setup({ role = "owner", stale = false, found = true, googleStatus = 200, reserveStatus = 200, noRoutes = false, geocoded = false, noPoints = false, assistanceAddress = "", clientAddress = destination.address, companyAddress = "", specificAddress = false } = {}) {
+function setup({ role = "owner", stale = false, found = true, googleStatus = 200, reserveStatus = 200, noRoutes = false, geocoded = false, noPoints = false, assistanceAddress = "", clientAddress = destination.address, companyAddress = "", specificAddress = false, tolls = false, unknownTolls = false } = {}) {
   const legs: { body: Record<string, unknown>; headers: Headers }[] = [];
   const fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const url = String(input);
@@ -27,13 +27,47 @@ function setup({ role = "owner", stale = false, found = true, googleStatus = 200
     if (url.endsWith("/rpc/reserve_travel_route")) return new Response(null, { status: reserveStatus });
     if (url.startsWith("https://routes.googleapis.com/")) {
       legs.push({ body: JSON.parse(String(init?.body)), headers: new Headers(init?.headers) });
-      return json(noRoutes ? { routes: [] } : { routes: [{ distanceMeters: legs.length === 1 ? 30000 : 40000 }] }, googleStatus);
+      return json(noRoutes ? { routes: [] } : { routes: [{
+        distanceMeters: legs.length === 1 ? 30000 : 40000,
+        ...(tolls ? { travelAdvisory: { tollInfo: unknownTolls && legs.length === 2 ? {} : {
+          estimatedPrice: [{ currencyCode: "BRL", units: legs.length === 1 ? "12" : "18", nanos: legs.length === 1 ? 500000000 : 750000000 }],
+        } } } : {}),
+      }] }, googleStatus);
     }
     throw new Error(`Unexpected request ${url}`);
   });
   return { handler: travelRouteHandler(env, fetcher), fetcher, legs };
 }
 describe("Google Maps Routes protegido no servidor", () => {
+  it("busca preços distintos de ida e volta e não assume zero quando uma perna não tem preço", async () => {
+    const { handler } = setup({ tolls: true });
+    expect(await (await handler(request())).json()).toMatchObject({ tollEstimate: { outbound: 1250, return: 1875 } });
+    const unknown = setup({ tolls: true, unknownTolls: true });
+    expect(await (await unknown.handler(request())).json()).toMatchObject({ tollEstimate: { outbound: 1250, return: null } });
+  });
+  it("calcula prévia antes de criar a OS usando somente origem da própria empresa", async () => {
+    const { handler, legs } = setup({ found: false, tolls: true });
+    const response = await handler(request({ action: "preview-route", destination: { address: "Rua do novo atendimento, 10 - Cidade - SC" } }));
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ origin, tollEstimate: { outbound: 1250, return: 1875 } });
+    expect(legs).toHaveLength(2);
+  });
+  it.each([
+    { action: "preview-route", destination: { address: "" } },
+    { action: "preview-route", destination: { address: "Destino", latitude: 99, longitude: 0 } },
+    { action: "preview-route", destination: { address: "Destino", companyId: company } },
+    { action: "preview-route", destination: { address: "Destino" }, origin },
+    { action: "preview-route", destination: { address: "Destino" }, fuelPrice: 1 },
+  ])("recusa destino inválido ou campos extras na prévia: %j", async (body) => {
+    const { handler, legs } = setup();
+    expect((await handler(request(body))).status).toBe(400);
+    expect(legs).toHaveLength(0);
+  });
+  it.each([{ role: "technician", status: 403 }, { reserveStatus: 400, status: 429 }])("protege prévia por perfil e limite: %j", async ({ status, ...options }) => {
+    const { handler, legs } = setup(options);
+    expect((await handler(request({ action: "preview-route", destination: { address: "Destino" } }))).status).toBe(status);
+    expect(legs).toHaveLength(0);
+  });
   it("preserva a origem Google dos pontos no histórico da rota", async () => {
     const { handler } = setup({ geocoded: true });
     const response = await handler(request());
@@ -51,7 +85,8 @@ describe("Google Maps Routes protegido no servidor", () => {
     expect(legs[0].body.origin).toEqual(legs[1].body.destination);
     expect(legs[1].body.origin).toEqual(legs[0].body.destination);
     expect(legs[0].body).toMatchObject({ travelMode: "DRIVE", routingPreference: "TRAFFIC_UNAWARE" });
-    expect(legs[0].headers.get("X-Goog-FieldMask")).toBe("routes.distanceMeters");
+    expect(legs[0].headers.get("X-Goog-FieldMask")).toBe("routes.distanceMeters,routes.travelAdvisory.tollInfo");
+    expect(legs[0].body.extraComputations).toEqual(["TOLLS"]);
     expect(JSON.stringify(legs.map((leg) => leg.body))).not.toContain("Assistência");
     expect(JSON.stringify(legs.map((leg) => leg.body))).not.toContain("Cliente");
   });

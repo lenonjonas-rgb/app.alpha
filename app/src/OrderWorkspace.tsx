@@ -64,7 +64,7 @@ import { serviceDistanceForActivity, serviceDistanceText } from "./serviceDistan
 import { captureLocation } from "./mobile";
 import { csvContent } from "./reporting";
 import { TravelPanel } from "./TravelPanel";
-import { travelValues } from "./travel";
+import { assertTravelReady, travelValues } from "./travel";
 import "./OrderWorkspace.css";
 
 const tabs = [
@@ -325,6 +325,7 @@ export function OrderWorkspace({
                   "Esta OS foi alterada em outra aba. Cancele e abra a edição novamente.",
                 );
               assertSingleEquipmentQuestionnaire(draft.checklists);
+              if (draft.travel) assertTravelReady(draft.travel, draft.travel.chargeTravel);
               return draft;
             },
             `Informações da OS atualizadas: ${tab}`,

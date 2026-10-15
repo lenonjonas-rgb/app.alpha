@@ -7,7 +7,7 @@ export const servicePointSchema = z.object({
   source: z.literal("Google Maps").optional(),
 });
 const amount = z.number().int().nonnegative().max(100_000_000);
-const routeEndpointSchema = z.union([servicePointSchema, z.object({
+export const routeEndpointSchema = z.union([servicePointSchema, z.object({
   address: servicePointSchema.shape.address,
 }).strict()]);
 export const travelRouteSchema = z.object({
@@ -17,6 +17,7 @@ export const travelRouteSchema = z.object({
   destination: routeEndpointSchema,
   outboundMeters: z.number().int().nonnegative().max(50_000_000),
   returnMeters: z.number().int().nonnegative().max(50_000_000),
+  tollEstimate: z.object({ outbound: amount.nullable(), return: amount.nullable() }).optional(),
 });
 export const travelSchema = z.object({
   route: travelRouteSchema,
@@ -25,9 +26,24 @@ export const travelSchema = z.object({
   kilometersPerLiter: z.number().min(0.01).max(1000),
   kilometerRate: amount,
   tolls: amount,
+  tollsConfirmed: z.boolean().optional(),
 });
 export type Travel = z.infer<typeof travelSchema>;
 export type TravelRoute = z.infer<typeof travelRouteSchema>;
+
+export function routeTolls(route: TravelRoute): number | undefined {
+  const estimate = route.tollEstimate;
+  return estimate && estimate.outbound !== null && estimate.return !== null
+    ? estimate.outbound + estimate.return : undefined;
+}
+
+export function assertTravelReady(travel: Travel | undefined, chargeTravel: boolean) {
+  if (!travel) throw new Error("Calcule a rota e os custos do deslocamento antes de salvar a OS.");
+  if (travel.tollsConfirmed === false)
+    throw new Error("O Google não informou todos os preços de pedágio. Informe e confirme o total de ida e volta, mesmo que seja zero.");
+  if (travel.chargeTravel !== chargeTravel)
+    throw new Error("Confira a opção de cobrança de deslocamento antes de salvar.");
+}
 
 export function travelValues(travel: Travel) {
   const kilometers = (travel.route.outboundMeters + travel.route.returnMeters) / 1000;

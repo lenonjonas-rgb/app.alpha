@@ -12,6 +12,7 @@ import {
   orderDetailsSchema,
   getOrderDetails,
   serviceLocationSchema,
+  serviceLocationAddress,
   servicePointSchema,
   shiftDay,
   subtotal,
@@ -46,6 +47,10 @@ import type { OrderEquipmentSelection } from "./questionnaires";
 import { ServiceLocationFields } from "./ServiceLocationFields";
 import { EquipmentModelPicker, EquipmentSelections } from "./EquipmentModelPicker";
 import { generateEquipmentCode, selectEquipmentModel } from "./equipmentCatalogData";
+import { TravelPanel } from "./TravelPanel";
+import { assertTravelReady, routeTolls, sameTravelEndpoint, travelEndpoint, travelSchema } from "./travel";
+import type { Travel } from "./travel";
+import { assistanceEndpoint, calculateTravelRoute } from "./travelClient";
 
 export type FormKind =
   | "client"
@@ -108,6 +113,28 @@ function savedServicePoint(draft: SavedFormDraft | null) {
     console.warn("Ponto do atendimento inválido no rascunho. Confirme o ponto novamente.", cause);
     return undefined;
   }
+}
+function savedTravel(draft: SavedFormDraft | null, fallback?: Travel) {
+  const value = savedFormValue(draft, "draftTravel", "");
+  if (!value) return fallback;
+  try { return travelSchema.parse(JSON.parse(value)); }
+  catch (cause) {
+    console.warn("Cálculo de deslocamento inválido no rascunho. Calcule novamente.", cause);
+    return fallback;
+  }
+}
+function orderLocation(form: FormData) {
+  return serviceLocationSchema.parse({
+    useClientAddress: form.get("useClientAddress") === "on",
+    postalCode: getText(form, "service_postalCode").replace(/\D/g, ""),
+    street: getText(form, "service_street"), number: getText(form, "service_number"),
+    complement: getText(form, "service_complement"), neighborhood: getText(form, "service_neighborhood"),
+    city: getText(form, "service_city"), state: getText(form, "service_state").toUpperCase(),
+  });
+}
+function orderPoint(form: FormData) {
+  const value = getText(form, "servicePoint");
+  return value ? servicePointSchema.parse(JSON.parse(value)) : undefined;
 }
 function savedFormArray<T>(
   draft: SavedFormDraft | null,
@@ -175,15 +202,15 @@ const getNumber = (form: FormData, key: string) => Number(getText(form, key));
 const getMoney = (form: FormData, key: string) =>
   Math.round(getNumber(form, key) * 100);
 
-function FormButtons({ onClose }: { onClose: () => void }) {
+function FormButtons({ onClose, busy = false }: { onClose: () => void; busy?: boolean }) {
   return (
     <footer className="modal-footer">
-      <button type="button" className="button secondary" onClick={onClose}>
+      <button type="button" className="button secondary" disabled={busy} onClick={onClose}>
         Cancelar
       </button>
-      <button className="button primary" type="submit">
+      <button className="button primary" type="submit" disabled={busy}>
         <Save size={17} />
-        Salvar
+        {busy ? "Calculando rota e pedágios…" : "Salvar"}
       </button>
     </footer>
   );
@@ -455,6 +482,8 @@ export function EditorModal({
   const product = data.products.find((record) => record.id === editor.id);
   const service = data.services.find((record) => record.id === editor.id);
   const order = data.orders.find((record) => record.id === editor.id);
+  const [travel, setTravel] = useState(() => savedTravel(savedDraft, order?.details?.travel));
+  const [travelBusy, setTravelBusy] = useState(false);
   const quote = data.quotes.find((record) => record.id === editor.id);
   const generalChecklists = order ? getOrderDetails(order).checklists.filter((item) => !item.equipmentId) : [];
   const [generalChecklistId, setGeneralChecklistId] = useState(() => savedFormValue(savedDraft, "generalChecklistId", ""));
@@ -495,8 +524,9 @@ export function EditorModal({
   useEffect(() => {
     const form = formRef.current;
     if (!form || !draftScope) return;
-    const draft = readFormDraft(draftKey);
-    const save = () => saveFormDraft(form, draftKey);
+    const draft = savedDraft;
+    let restoring = Boolean(draft);
+    const save = () => { if (!restoring) saveFormDraft(form, draftKey); };
     form.addEventListener("input", save);
     form.addEventListener("change", save);
     let restoreFrame = 0;
@@ -506,6 +536,7 @@ export function EditorModal({
         restoreFormDraft(form, draft);
         restoreFrame = requestAnimationFrame(() => {
           restoreFormDraft(form, draft);
+          restoring = false;
           setDraftReady(true);
         });
       });
@@ -515,15 +546,24 @@ export function EditorModal({
       form.removeEventListener("input", save);
       form.removeEventListener("change", save);
     };
-  }, [draftKey, draftScope]);
+  }, [draftKey, draftScope, savedDraft]);
   useEffect(() => {
     if (!draftReady || !draftScope || !formRef.current) return;
     saveFormDraft(formRef.current, draftKey);
-  }, [draftKey, draftReady, draftScope, discount, lines, orderEquipment, selectedModels]);
+  }, [draftKey, draftReady, draftScope, discount, lines, orderEquipment, selectedModels, travel]);
 
-  function submit(event: FormEvent<HTMLFormElement>) {
+  function previewDestination(form = new FormData(formRef.current!)) {
+    const selectedClient = data.clients.find((item) => item.id === getText(form, "clientId"));
+    const address = serviceLocationAddress(orderLocation(form), selectedClient?.address ?? "");
+    return travelEndpoint(address, orderPoint(form));
+  }
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const form = new FormData(event.currentTarget);
+    if (travelBusy) return;
+    const element = event.currentTarget;
+    const form = new FormData(element);
+    let submittedTravel = travel;
     setError("");
     try {
       if (editor.kind === "order" && order) {
@@ -540,6 +580,23 @@ export function EditorModal({
           return previous && previous.templateId !== selection.questionnaireId;
         });
         if (changes.length && !window.confirm("Aplicar a troca de questionários? Cada equipamento ficará com apenas um questionário. Se o modelo escolhido já estiver vinculado, suas respostas serão preservadas; os outros questionários desse equipamento e suas respostas serão removidos. Modelos novos começam sem respostas. Outros equipamentos e arquivos anexados serão preservados.")) return;
+      }
+      if (editor.kind === "order" && (!order || travel || form.get("travelChargeTravel") === "Sim")) {
+        const target = previewDestination(form);
+        const chargeTravel = form.get("travelChargeTravel") === "Sim";
+        if (!submittedTravel || !sameTravelEndpoint(submittedTravel.route.origin, assistanceEndpoint(data)) ||
+          !sameTravelEndpoint(submittedTravel.route.destination, target)) {
+          setTravelBusy(true);
+          const route = await calculateTravelRoute(data, target);
+          if (!sameTravelEndpoint(target, previewDestination()) ||
+            element.querySelector<HTMLSelectElement>('[name="travelChargeTravel"]')?.value !== form.get("travelChargeTravel"))
+            throw new Error("O endereço ou a cobrança mudou durante a consulta. Confira e salve novamente.");
+          const tolls = routeTolls(route);
+          submittedTravel = { route, chargeTravel, tolls: tolls ?? 0, tollsConfirmed: tolls !== undefined,
+            fuelPrice: data.settings.fuelPrice, kilometersPerLiter: data.settings.kilometersPerLiter, kilometerRate: data.settings.kilometerRate };
+          setTravel(submittedTravel);
+        } else submittedTravel = { ...submittedTravel, chargeTravel };
+        assertTravelReady(submittedTravel, chargeTravel);
       }
       commit((current) => {
         const recordId = editor.id ?? makeId();
@@ -677,21 +734,15 @@ export function EditorModal({
             const selectedClient = current.clients.find((item) => item.id === getText(form, "clientId"));
             if (useClientAddress && !selectedClient?.address.trim())
               throw new Error("O cliente não possui endereço cadastrado. Informe o endereço de atendimento ou atualize o cadastro do cliente.");
-            const serviceLocation = serviceLocationSchema.parse({
-              useClientAddress,
-              postalCode: getText(form, "service_postalCode").replace(/\D/g, ""),
-              street: getText(form, "service_street"),
-              number: getText(form, "service_number"),
-              complement: getText(form, "service_complement"),
-              neighborhood: getText(form, "service_neighborhood"),
-              city: getText(form, "service_city"),
-              state: getText(form, "service_state").toUpperCase(),
-            });
+            const serviceLocation = orderLocation(form);
+            const servicePoint = orderPoint(form);
+            if (submittedTravel && (!sameTravelEndpoint(submittedTravel.route.origin, assistanceEndpoint(current)) ||
+              !sameTravelEndpoint(submittedTravel.route.destination, travelEndpoint(serviceLocationAddress(serviceLocation, selectedClient?.address ?? ""), servicePoint))))
+              throw new Error("Os endereços mudaram. Calcule o deslocamento novamente antes de salvar.");
             const details = {
               ...previousDetails,
-              servicePoint: getText(form, "servicePoint")
-                ? servicePointSchema.parse(JSON.parse(getText(form, "servicePoint")))
-                : undefined,
+              servicePoint,
+              travel: submittedTravel,
               equipmentModels: selectedModels,
               equipmentIds: equipmentLinks.equipmentIds,
               serviceLocation,
@@ -764,7 +815,7 @@ export function EditorModal({
     } catch (cause) {
       setError(errorMessage(cause));
       if (editor.kind === "order" && orderEquipment.length > 0) setEquipmentOpen(true);
-    }
+    } finally { setTravelBusy(false); }
   }
 
   function addLine() {
@@ -812,13 +863,14 @@ export function EditorModal({
     <Modal
       title={`${editor.id ? "Editar" : "Novo"} ${titles[editor.kind]}`}
       wide={editor.kind === "quote"}
-      onClose={onClose}
+      onClose={() => { if (!travelBusy) onClose(); }}
     >
       <form ref={formRef} onSubmit={submit}>
         <input type="hidden" name="draftLines" value={JSON.stringify(lines)} readOnly />
         <input type="hidden" name="draftOrderEquipment" value={JSON.stringify(orderEquipment)} readOnly />
         <input type="hidden" name="draftSelectedModels" value={JSON.stringify(selectedModels)} readOnly />
-        <div className="modal-body">
+        {editor.kind === "order" && <input type="hidden" name="draftTravel" value={travel ? JSON.stringify(travel) : ""} readOnly />}
+        <div className="modal-body" inert={travelBusy}>
           {draftRecovered && <p className="full" role="status">Rascunho recuperado automaticamente. Arquivos ainda não salvos não são recuperados.</p>}
           {error && (
             <div role="alert" className="error-message">
@@ -1035,6 +1087,12 @@ export function EditorModal({
                   details={order?.clientId === clientId ? getOrderDetails(order) : undefined}
                   initialPoint={savedServicePoint(savedDraft)}
                 />
+                <div className="full">
+                  <TravelPanel data={data} previewDestination={previewDestination} travel={travel} editing busy={travelBusy}
+                    initialCharge={savedFormValue(savedDraft, "travelChargeTravel", travel?.chargeTravel ? "Sim" : "Não") === "Sim"}
+                    onBusy={setTravelBusy} onChange={setTravel} onError={setError} />
+                  <p>Ao salvar uma nova OS, a rota e os custos são calculados se ainda não houver cálculo válido. Sim adiciona km e o total dos pedágios aos valores; Não registra somente os custos internos.</p>
+                </div>
                 {clientEquipment.length > 0 && <section className="field full order-equipment-picker">
                   <button type="button" className="button secondary" aria-expanded={equipmentOpen} aria-controls="order-client-equipment" onClick={() => setEquipmentOpen(!equipmentOpen)}>
                     Equipamentos ({orderEquipment.length} de {clientEquipment.length} selecionados)
@@ -1369,7 +1427,7 @@ export function EditorModal({
             )}
           </div>
         </div>
-        <FormButtons onClose={onClose} />
+        <FormButtons onClose={onClose} busy={travelBusy} />
       </form>
     </Modal>
   );

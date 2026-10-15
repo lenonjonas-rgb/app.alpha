@@ -1,9 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { currency, demoDatabase, getOrderDetails, orderValues, replicateOrder, validateDatabase } from "./domain";
-import { sameTravelEndpoint, servicePointSchema, travelEndpoint, travelSchema, travelValues } from "./travel";
+import { routeTolls, sameTravelEndpoint, servicePointSchema, travelEndpoint, travelSchema, travelValues } from "./travel";
 import { filterOrders, defaultReportFilters, travelCostRows } from "./reporting";
 import { OrderPrintable } from "./OrderWorkspace";
+import { TravelPanel } from "./TravelPanel";
 
 const trip = () => travelSchema.parse({
   route: {
@@ -16,6 +17,36 @@ const trip = () => travelSchema.parse({
 });
 
 describe("custos e cobrança de deslocamento", () => {
+  it("oferece Sim/Não na criação antes de calcular e explica total de pedágios incompleto", () => {
+    const data = demoDatabase();
+    const props = { data, editing: true, busy: false, onBusy: () => {}, onChange: () => {}, onError: () => {} };
+    const html = renderToStaticMarkup(<TravelPanel {...props} travel={undefined} initialCharge />);
+    expect(html.match(/<select name="travelChargeTravel"[^>]*>/)?.[0]).not.toContain("disabled");
+    expect(html).toContain('<option selected="">Sim</option>');
+    const travel = { ...trip(), tollsConfirmed: false };
+    travel.route.tollEstimate = { outbound: 1250, return: null };
+    const pending = renderToStaticMarkup(<TravelPanel {...props} travel={travel} />);
+    expect(pending).toContain("Valor total dos pedágios — ida + volta");
+    expect(pending).toContain("preço indisponível");
+    expect(pending).toContain("não pode ser salvo");
+  });
+  it.each([false, true])("preserva estimativas dos pedágios de ida e volta no backup e aplica o total uma única vez (Sim=%s)", (chargeTravel) => {
+    const data = demoDatabase();
+    const travel = trip();
+    travel.route.tollEstimate = { outbound: 1250, return: 1875 };
+    travel.tolls = routeTolls(travel.route)!;
+    travel.tollsConfirmed = true;
+    travel.chargeTravel = chargeTravel;
+    const details = getOrderDetails(data.orders[0]);
+    const baseline = orderValues(details).total;
+    data.orders[0].details = { ...details, travel };
+    const restored = validateDatabase(JSON.parse(JSON.stringify(data)));
+    const saved = restored.orders[0].details!;
+    expect(saved.travel?.route.tollEstimate).toEqual({ outbound: 1250, return: 1875 });
+    expect(saved.travel?.tollsConfirmed).toBe(true);
+    expect(travelValues(saved.travel!)).toMatchObject({ cost: 7325, charge: chargeTravel ? 20625 : 0 });
+    expect(orderValues(saved).total).toBe(baseline + (chargeTravel ? 20625 : 0));
+  });
   it("não aceita endereço em branco e não altera o endereço vinculado às coordenadas", () => {
     expect(servicePointSchema.safeParse({ ...trip().route.origin, address: "   " }).success).toBe(false);
     expect(servicePointSchema.parse({ ...trip().route.origin, address: " Rua da assistência, 10 " }).address).toBe(" Rua da assistência, 10 ");

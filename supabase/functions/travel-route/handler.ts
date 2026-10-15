@@ -1,4 +1,5 @@
 import { geocodeAddress } from "./geocoding.ts";
+import { tollPrice } from "./tolls.ts";
 
 type Environment = { url: string; publicKey: string; googleKey: string };
 type Point = { latitude: number; longitude: number; address: string; source?: "Google Maps" };
@@ -77,7 +78,8 @@ export function travelRouteHandler(env: Environment, fetcher: typeof fetch = fet
         return response(403, { error: "Somente a administração pode calcular o deslocamento." });
       companyId = member.company_id;
     } catch { return response(403, { error: "Não foi possível confirmar o acesso administrativo à empresa." }); }
-    let orderId: string;
+    let orderId: string | undefined;
+    let previewDestination: Endpoint | undefined;
     try {
       const raw = await request.text();
       if (raw.length > 12000) throw new Error("Solicitação excede o tamanho permitido.");
@@ -91,24 +93,36 @@ export function travelRouteHandler(env: Environment, fetcher: typeof fetch = fet
         try { return response(200, await geocodeAddress(fields.address, env.googleKey, fetcher)); }
         catch (cause) { return response(502, { error: cause instanceof Error ? cause.message : "Não foi possível localizar o endereço." }); }
       }
-      if (typeof fields.orderId !== "string" || !fields.orderId.trim() || fields.orderId.length > 200 ||
-        Object.keys(fields).some((key) => key !== "orderId")) throw new Error("Informe somente a OS a calcular.");
-      orderId = fields.orderId;
+      if (fields.action === "preview-route") {
+        if (Object.keys(fields).some((key) => !["action", "destination"].includes(key)))
+          throw new Error("Informe somente o destino do atendimento para a prévia.");
+        const value = object(fields.destination);
+        if (Object.keys(value).some((key) => !["address", "latitude", "longitude", "source"].includes(key)))
+          throw new Error("Destino inválido para a prévia.");
+        previewDestination = endpoint(value.address, "latitude" in value || "longitude" in value ? value : undefined);
+      } else {
+        if (typeof fields.orderId !== "string" || !fields.orderId.trim() || fields.orderId.length > 200 ||
+          Object.keys(fields).some((key) => key !== "orderId")) throw new Error("Informe somente a OS a calcular.");
+        orderId = fields.orderId;
+      }
     } catch (cause) { return response(400, { error: cause instanceof Error ? cause.message : "Solicitação inválida." }); }
     let origin: Endpoint;
     let destination: Endpoint;
     try {
       const rows = records(await api(`/rest/v1/company_data?company_id=eq.${companyId}&select=payload`));
       const payload = object(rows[0]?.payload);
-      const order = records(payload.orders).find((item) => item.id === orderId);
-      if (!order) throw new Error("OS não encontrada na empresa.");
-      const details = object(order.details);
-      const client = records(payload.clients).find((item) => item.id === order.clientId);
-      if (!client) throw new Error("Cliente não encontrado.");
       const settings = object(payload.settings);
       const assistanceAddress = settings.assistanceAddress || (settings.assistancePoint ? object(settings.assistancePoint).address : "") || settings.address;
       origin = endpoint(assistanceAddress, settings.assistancePoint);
-      destination = endpoint(serviceAddress(details, client), details.servicePoint);
+      if (previewDestination) destination = previewDestination;
+      else {
+        const order = records(payload.orders).find((item) => item.id === orderId);
+        if (!order) throw new Error("OS não encontrada na empresa.");
+        const details = object(order.details);
+        const client = records(payload.clients).find((item) => item.id === order.clientId);
+        if (!client) throw new Error("Cliente não encontrado.");
+        destination = endpoint(serviceAddress(details, client), details.servicePoint);
+      }
     } catch (cause) { return response(400, { error: cause instanceof Error ? cause.message : "Confira os pontos cadastrados." }); }
     try { await api("/rest/v1/rpc/reserve_travel_route", {}, false); }
     catch { return response(429, { error: "Cálculo não autorizado ou muito frequente. Aguarde 10 segundos e verifique se a migração de rotas foi aplicada." }); }
@@ -118,10 +132,11 @@ export function travelRouteHandler(env: Environment, fetcher: typeof fetch = fet
         : { address: value.address };
       const result = await fetcher("https://routes.googleapis.com/directions/v2:computeRoutes", {
         method: "POST",
-        headers: { "Content-Type": "application/json", "X-Goog-Api-Key": env.googleKey, "X-Goog-FieldMask": "routes.distanceMeters" },
+        headers: { "Content-Type": "application/json", "X-Goog-Api-Key": env.googleKey, "X-Goog-FieldMask": "routes.distanceMeters,routes.travelAdvisory.tollInfo" },
         body: JSON.stringify({
           origin: location(from), destination: location(to), travelMode: "DRIVE",
           routingPreference: "TRAFFIC_UNAWARE", computeAlternativeRoutes: false,
+          extraComputations: ["TOLLS"],
           routeModifiers: { avoidTolls: false, avoidHighways: false, avoidFerries: false },
           languageCode: "pt-BR", regionCode: "BR", units: "METRIC",
         }),
@@ -135,11 +150,13 @@ export function travelRouteHandler(env: Environment, fetcher: typeof fetch = fet
       const meters = routes[0]?.distanceMeters;
       if (typeof meters !== "number" || !Number.isSafeInteger(meters) || meters < 0 || meters > 50_000_000)
         throw new Error("O Google Maps não retornou uma distância válida para esta rota.");
-      return meters;
+      return { meters, tolls: tollPrice(routes[0]) };
     }
     try {
-      const [outboundMeters, returnMeters] = await Promise.all([leg(origin, destination), leg(destination, origin)]);
-      return response(200, { provider: "Google Maps", calculatedAt: new Date().toISOString(), origin, destination, outboundMeters, returnMeters });
+      const [outbound, returning] = await Promise.all([leg(origin, destination), leg(destination, origin)]);
+      return response(200, { provider: "Google Maps", calculatedAt: new Date().toISOString(), origin, destination,
+        outboundMeters: outbound.meters, returnMeters: returning.meters,
+        tollEstimate: { outbound: outbound.tolls, return: returning.tolls } });
     } catch (cause) {
       return response(502, { error: cause instanceof Error && cause.name !== "TimeoutError" ? cause.message : "Tempo limite ao calcular a rota. Tente novamente." });
     }
