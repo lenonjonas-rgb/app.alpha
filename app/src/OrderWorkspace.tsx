@@ -37,6 +37,7 @@ import {
   makeId,
   orderPending,
   orderValues,
+  orderDetailsSchema,
   replicateOrder,
   shiftDay,
   total,
@@ -59,6 +60,11 @@ import { prepareQuestionnairePhoto } from "./questionnairePhoto";
 import { questionAnswerText, questionSignature, withQuestionAnswer } from "./questionnaireAnswers";
 import { addQuestionnaire, assertSingleEquipmentQuestionnaire, assignQuestionnaireEquipment, keepEquipmentQuestionnaire, replaceOrderQuestionnaire } from "./questionnaires";
 import { EquipmentSelections, EquipmentSelectionSummary } from "./EquipmentModelPicker";
+import { serviceDistanceForActivity, serviceDistanceText } from "./serviceDistance";
+import { captureLocation } from "./mobile";
+import { csvContent } from "./reporting";
+import { TravelPanel } from "./TravelPanel";
+import { travelValues } from "./travel";
 import "./OrderWorkspace.css";
 
 const tabs = [
@@ -72,6 +78,45 @@ const tabs = [
   "Envios",
   "Valores",
 ] as const;
+function orderDraftKey(scope: string, orderId: string) {
+  return `alpha-tec.order-draft.v1.${scope}.${orderId}`;
+}
+function orderEditorKey(scope: string, orderId: string) {
+  return `alpha-tec.order-editor.v1.${scope}.${orderId}`;
+}
+function readOrderEditor(key: string): Editor | null {
+  try {
+    const saved: unknown = JSON.parse(sessionStorage.getItem(key) ?? "null");
+    if (!saved || typeof saved !== "object" || Array.isArray(saved) || !("kind" in saved) ||
+      typeof saved.kind !== "string" ||
+      !["client", "equipment", "product", "service", "order", "quote", "movement"].includes(saved.kind)) return null;
+    if (("id" in saved && typeof saved.id !== "string") ||
+      ("date" in saved && typeof saved.date !== "string") ||
+      ("time" in saved && typeof saved.time !== "string") ||
+      ("clientId" in saved && typeof saved.clientId !== "string") ||
+      ("equipmentId" in saved && typeof saved.equipmentId !== "string")) return null;
+    return { ...saved, kind: saved.kind as Editor["kind"] };
+  } catch (error) {
+    console.warn("Não foi possível restaurar o formulário da OS.", error);
+    return null;
+  }
+}
+function readOrderDraft(key: string) {
+  try {
+    const saved: unknown = JSON.parse(sessionStorage.getItem(key) ?? "null");
+    if (!saved || typeof saved !== "object" || Array.isArray(saved) || !("draft" in saved) || !("snapshot" in saved) || typeof saved.snapshot !== "string") return null;
+    const draft = orderDetailsSchema.safeParse(saved.draft);
+    return draft.success ? { draft: draft.data, snapshot: saved.snapshot } : null;
+  } catch (error) {
+    console.warn("Não foi possível restaurar as alterações da OS.", error);
+    try {
+      sessionStorage.removeItem(key);
+    } catch (removeError) {
+      console.warn("Não foi possível remover o rascunho inválido da OS.", removeError);
+    }
+    return null;
+  }
+}
 type Tab = (typeof tabs)[number];
 const timeText = (milliseconds: number) => {
   const seconds = Math.floor(milliseconds / 1000);
@@ -123,23 +168,36 @@ export function OrderWorkspace({
   order,
   data,
   commit,
+  draftScope,
+  cloudEnabled,
+  cloudSaveVersion,
+  getSaveRequestVersion,
   onBack,
   onOpen,
 }: {
   order: Order;
   data: Database;
   commit: (update: Database | ((data: Database) => Database)) => void;
+  draftScope: string;
+  cloudEnabled: boolean;
+  cloudSaveVersion: number;
+  getSaveRequestVersion: () => number;
   onBack: () => void;
   onOpen: (id: string) => void;
 }) {
+  const persistedDraftKey = orderDraftKey(draftScope || "local", order.id);
+  const persistedEditorKey = orderEditorKey(draftScope || "local", order.id);
+  const [persistedDraft] = useState(() => readOrderDraft(persistedDraftKey));
+  const [persistedEditor] = useState(() => readOrderEditor(persistedEditorKey));
   const [tab, setTab] = useState<Tab>("Detalhes");
-  const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState(() => getOrderDetails(order));
-  const [snapshot, setSnapshot] = useState("");
+  const pendingDraftCleanup = useRef(0);
+  const [editing, setEditing] = useState(Boolean(persistedDraft));
+  const [draft, setDraft] = useState(() => persistedDraft?.draft ?? getOrderDetails(order));
+  const [snapshot, setSnapshot] = useState(() => persistedDraft?.snapshot ?? "");
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState(false);
-  const [editor, setEditor] = useState<Editor | null>(null);
+  const [editor, setEditor] = useState<Editor | null>(persistedEditor);
   const [dialog, setDialog] = useState<
     | "signature"
     | "checklist"
@@ -154,6 +212,7 @@ export function OrderWorkspace({
   const [signatureQuestion, setSignatureQuestion] = useState<{ checklistId: string; questionId: string } | null>(null);
   const [quoteId, setQuoteId] = useState("");
   const [clock, setClock] = useState(() => Date.now());
+  const pendingEditorCleanup = useRef<{ editor: Editor; targetVersion: number } | null>(null);
   useEffect(() => {
     const interval = setInterval(() => setClock(Date.now()), 1000);
     return () => clearInterval(interval);
@@ -163,6 +222,58 @@ export function OrderWorkspace({
     const timeout = setTimeout(() => setNotice(""), 4500);
     return () => clearTimeout(timeout);
   }, [notice]);
+  useEffect(() => {
+    if (!editing || !snapshot) return;
+    try {
+      sessionStorage.setItem(persistedDraftKey, JSON.stringify({ draft, snapshot }));
+    } catch (cause) {
+      const message = errorMessage(cause);
+      requestAnimationFrame(() => setError(`Não foi possível salvar o rascunho temporário da OS: ${message}`));
+    }
+  }, [draft, editing, persistedDraftKey, snapshot]);
+  useEffect(() => {
+    if (!pendingDraftCleanup.current || cloudSaveVersion < pendingDraftCleanup.current) return;
+    try {
+      sessionStorage.removeItem(persistedDraftKey);
+      pendingDraftCleanup.current = 0;
+    } catch (cause) {
+      console.warn("Não foi possível remover o rascunho sincronizado da OS.", cause);
+    }
+  }, [cloudSaveVersion, persistedDraftKey]);
+  useEffect(() => {
+    if (!editor) return;
+    try {
+      sessionStorage.setItem(persistedEditorKey, JSON.stringify(editor));
+    } catch (cause) {
+      const message = errorMessage(cause);
+      requestAnimationFrame(() => setError(`Não foi possível guardar o formulário temporário: ${message}`));
+    }
+  }, [editor, persistedEditorKey]);
+  useEffect(() => {
+    const pending = pendingEditorCleanup.current;
+    if (!pending) return;
+    if (cloudSaveVersion < pending.targetVersion) return;
+    try {
+      sessionStorage.removeItem(persistedEditorKey);
+      sessionStorage.removeItem(`alpha-tec.form-draft.v1.${draftScope || "local"}.${pending.editor.kind}.${pending.editor.id ?? "new"}`);
+      pendingEditorCleanup.current = null;
+    } catch (cause) {
+      console.warn("Não foi possível remover o formulário sincronizado.", cause);
+    }
+  }, [cloudSaveVersion, draftScope, persistedEditorKey]);
+  function closeNestedEditor(saved = false) {
+    if (editor && saved && cloudEnabled) {
+      pendingEditorCleanup.current = { editor, targetVersion: getSaveRequestVersion() };
+    } else if (editor) {
+      try {
+        sessionStorage.removeItem(persistedEditorKey);
+        sessionStorage.removeItem(`alpha-tec.form-draft.v1.${draftScope || "local"}.${editor.kind}.${editor.id ?? "new"}`);
+      } catch (cause) {
+        console.warn("Não foi possível remover o formulário temporário.", cause);
+      }
+    }
+    setEditor(null);
+  }
   const details = editing ? draft : getOrderDetails(order);
   const client = data.clients.find((item) => item.id === order.clientId)!;
   const pending = orderPending({ ...order, details });
@@ -201,6 +312,7 @@ export function OrderWorkspace({
     setEditing(true);
   }
   function save() {
+    if (busy) return;
     if (
       act(
         (current) =>
@@ -219,10 +331,21 @@ export function OrderWorkspace({
           ),
         "Alterações salvas.",
       )
-    )
+    ) {
       setEditing(false);
+      if (cloudEnabled) {
+        pendingDraftCleanup.current = getSaveRequestVersion();
+      } else {
+        try {
+          sessionStorage.removeItem(persistedDraftKey);
+        } catch (cause) {
+          console.warn("Não foi possível remover o rascunho salvo da OS.", cause);
+        }
+      }
+    }
   }
   function cancel() {
+    if (busy) return;
     if (
       JSON.stringify(draft) !== snapshot &&
       !confirm("Descartar as alterações não salvas?")
@@ -230,6 +353,11 @@ export function OrderWorkspace({
       return;
     setEditing(false);
     setError("");
+    try {
+      sessionStorage.removeItem(persistedDraftKey);
+    } catch (cause) {
+      console.warn("Não foi possível remover o rascunho descartado da OS.", cause);
+    }
   }
   function patch(update: Partial<OrderDetails>) {
     setDraft((previous) => ({ ...previous, ...update }));
@@ -1450,6 +1578,7 @@ export function OrderWorkspace({
                       <th>Justificativa</th>
                       <th>Origem</th>
                       <th>Localização</th>
+                      <th>Distância do atendimento</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -1466,6 +1595,12 @@ export function OrderWorkspace({
                             {item.location.latitude.toFixed(5)}, {item.location.longitude.toFixed(5)} (±{Math.round(item.location.accuracy)} m)
                           </a>
                         ) : "—"}</td>
+                        <td>
+                          {serviceDistanceText(item)}
+                          {item.serviceDistance && <small>
+                            Referência registrada: {item.serviceDistance.address} · {item.serviceDistance.latitude.toFixed(6)}, {item.serviceDistance.longitude.toFixed(6)}
+                          </small>}
+                        </td>
                       </tr>
                     ))}
                   </tbody>
@@ -1474,6 +1609,16 @@ export function OrderWorkspace({
                   <Empty title="Nenhuma atividade registrada" />
                 )}
               </div>
+              <p>A distância é em linha reta, não quilometragem de rota. A precisão do GPS indica a margem de incerteza da posição; não comprova a presença no endereço.</p>
+              <button className="button secondary" onClick={() => downloadFile(`${order.code}-atividades.csv`, csvContent(
+                ["OS", "Colaborador", "Atividade", "Data/hora", "Origem", "Latitude GPS", "Longitude GPS", "Precisão GPS (m)", "Distância do atendimento (m)", "Endereço de referência", "Latitude de referência", "Longitude de referência", "Situação"],
+                details.activities.map((item) => [
+                  order.code, item.technician, item.kind, item.at, item.origin,
+                  item.location?.latitude ?? "", item.location?.longitude ?? "", item.location?.accuracy ?? "",
+                  item.serviceDistance?.meters ?? "", item.serviceDistance?.address ?? "",
+                  item.serviceDistance?.latitude ?? "", item.serviceDistance?.longitude ?? "", serviceDistanceText(item),
+                ]),
+              ), "text/csv;charset=utf-8")}>Exportar atividades e distâncias</button>
             </>
           )}
           {tab === "Envios" && (
@@ -1524,6 +1669,8 @@ export function OrderWorkspace({
           )}
           {tab === "Valores" && (
             <>
+              <TravelPanel data={data} order={{ ...order, details }} travel={details.travel} editing={editing} busy={busy}
+                onBusy={setBusy} onChange={(travel) => patch({ travel })} onError={setError} />
               <div className="section-heading">
                 <h2>Produtos e serviços</h2>
               </div>
@@ -1760,6 +1907,10 @@ export function OrderWorkspace({
                   <small>Custos</small>
                   <strong>{currency(values.costs)}</strong>
                 </div>
+                <div>
+                  <small>Deslocamento cobrado</small>
+                  <strong>{currency(values.travel)}</strong>
+                </div>
                 <label className="field">
                   Desconto geral
                   <div className="discount-control">
@@ -1810,7 +1961,7 @@ export function OrderWorkspace({
         {editing && (
           <div className="order-savebar document-controls">
             <span>
-              {busy ? "Lendo arquivos..." : "Alterações ainda não salvas"}
+              {busy ? "Lendo arquivos..." : persistedDraft ? "Rascunho recuperado automaticamente" : "Alterações ainda não salvas"}
             </span>
             <button className="button primary" onClick={save} disabled={busy}>
               <Save size={16} />
@@ -1824,6 +1975,7 @@ export function OrderWorkspace({
         <EditorModal
           editor={editor}
           data={data}
+          draftScope={draftScope}
           commit={(update) =>
             commit((current) => {
               const next =
@@ -1838,7 +1990,7 @@ export function OrderWorkspace({
                 : next;
             })
           }
-          onClose={() => setEditor(null)}
+          onClose={closeNestedEditor}
           onSuccess={setNotice}
         />
       )}
@@ -1941,6 +2093,7 @@ export function OrderWorkspace({
       {dialog === "activity" && (
         <ActivityEditor
           order={order}
+          clientAddress={client.address}
           allowed={allowedActivities(details.activities)}
           onClose={() => setDialog(null)}
           onSave={(activity) => {
@@ -2247,28 +2400,34 @@ function QuestionEditor({
 
 function ActivityEditor({
   order,
+  clientAddress,
   allowed,
   onClose,
   onSave,
 }: {
   order: Order;
+  clientAddress: string;
   allowed: Activity["kind"][];
   onClose: () => void;
   onSave: (activity: Activity) => void;
 }) {
   const [kind, setKind] = useState<Activity["kind"]>(allowed[0]);
   const [error, setError] = useState("");
+  const [locating, setLocating] = useState(false);
   const [at] = useState(localDateTime);
   return (
     <Modal title="Adicionar atividade" onClose={onClose}>
       <form
-        onSubmit={(event) => {
+        onSubmit={async (event) => {
           event.preventDefault();
+          if (locating) return;
           const form = new FormData(event.currentTarget);
+          setLocating(true);
           try {
             const date = new Date(String(form.get("at")));
             if (date.getTime() > Date.now() + 1000)
               throw new Error("Não registre atividade em horário futuro.");
+            const location = kind === "Check-in" || kind === "Check-out" ? await captureLocation() : undefined;
             onSave({
               id: makeId(),
               kind,
@@ -2277,10 +2436,14 @@ function ActivityEditor({
               reason: String(form.get("reason") ?? "").trim(),
               justification: String(form.get("justification")).trim(),
               origin: "Web local",
+              ...(location ? {
+                location,
+                serviceDistance: serviceDistanceForActivity(order, { address: clientAddress }, location),
+              } : {}),
             });
           } catch (cause) {
             setError(errorMessage(cause));
-          }
+          } finally { setLocating(false); }
         }}
       >
         <div className="modal-body form-grid">
@@ -2292,6 +2455,7 @@ function ActivityEditor({
           <label className="field">
             Atividade
             <select
+              disabled={locating}
               value={kind}
               onChange={(event) =>
                 setKind(event.target.value as Activity["kind"])
@@ -2306,6 +2470,7 @@ function ActivityEditor({
             Data e horário *
             <input
               type="datetime-local"
+              disabled={locating}
               name="at"
               step="1"
               defaultValue={at}
@@ -2316,6 +2481,7 @@ function ActivityEditor({
             Colaborador *
             <input
               name="technician"
+              disabled={locating}
               defaultValue={order.technician}
               required
               maxLength={120}
@@ -2323,18 +2489,19 @@ function ActivityEditor({
           </label>
           {kind === "Pausa" && (
             <label className="field full">
-              Motivo da pausa *<input name="reason" required maxLength={200} />
+              Motivo da pausa *<input name="reason" disabled={locating} required maxLength={200} />
             </label>
           )}
           <label className="field full">
             Justificativa
-            <textarea name="justification" rows={3} maxLength={1000} />
+            <textarea name="justification" disabled={locating} rows={3} maxLength={1000} />
           </label>
+          {(kind === "Check-in" || kind === "Check-out") && <p className="full">Será solicitado o GPS deste dispositivo no momento do registro. A distância é calculada até o ponto confirmado do atendimento; o registro administrativo mantém a origem Web local.</p>}
         </div>
         <footer className="modal-footer">
-          <button className="button primary">
+          <button className="button primary" disabled={locating}>
             <Save size={16} />
-            Registrar atividade
+            {locating ? "Obtendo GPS e registrando…" : "Registrar atividade"}
           </button>
         </footer>
       </form>
@@ -2497,6 +2664,8 @@ export function OrderPrintable({
           {item.reason ? ` · ${item.reason}` : ""}
           {item.justification ? ` · ${item.justification}` : ""}
           {item.location ? ` · GPS: ${item.location.latitude.toFixed(5)}, ${item.location.longitude.toFixed(5)} (precisão ${Math.round(item.location.accuracy)} m)` : ""}
+          {` · ${serviceDistanceText(item)}`}
+          {item.serviceDistance ? ` · Referência: ${item.serviceDistance.address} (${item.serviceDistance.latitude.toFixed(6)}, ${item.serviceDistance.longitude.toFixed(6)})` : ""}
         </p>
       ))}
       </section>}
@@ -2533,6 +2702,7 @@ export function OrderPrintable({
           {item.name}: {currency(item.value)}
         </p>
       ))}
+      {details.travel?.chargeTravel && <p>Deslocamento ({travelValues(details.travel).kilometers.toLocaleString("pt-BR")} km ida e volta × {currency(details.travel.kilometerRate)}/km): {currency(travelValues(details.travel).mileageCharge)}<br />Pedágios: {currency(details.travel.tolls)}<br />Total do deslocamento: {currency(values.travel)}</p>}
       <p>{`Desconto geral: ${currency(values.discount)}\nTotal da OS: ${currency(values.total)}`}</p>
       </section>}
       {show.quotes && <section>

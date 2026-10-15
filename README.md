@@ -245,6 +245,36 @@ Esse e um **APK de teste, assinado com chave debug**, nao uma release pronta par
 
 Os testes `mobile.test.ts` e `mobileServer.test.ts` verificam tempo, GPS, compatibilidade de backups, revisao, RLS e RPCs com PostgreSQL isolado via PGlite. `node app\scripts\mobile-smoke.ts` disponibiliza fixtures ficticias em `http://127.0.0.1:5180`; nao aponta para o banco de producao. A validacao de GPS no navegador usa localizacao simulada; o teste em um aparelho Android real deve validar a permissao, camera e abertura dos aplicativos instalados.
 
+## Deslocamento: rotas, cobranca e combustivel
+
+Em **Configuracoes > Deslocamento, combustivel e assistencia**, cadastre o preco do combustivel em R$/litro, o rendimento do veiculo em km/litro, a tarifa cobrada em R$/km e confirme o ponto de saida da assistencia no mapa. Na OS, confirme e salve tambem o ponto exato de atendimento.
+
+Em **Mais informacoes > Editar informacoes > Valores**, calcule a rota para habilitar **Cobranca de deslocamento: Sim/Nao** e os **pedagios totais de ida e volta**. Salve as alteracoes da OS.
+
+- A Routes API do Google Maps calcula as duas pernas separadamente em modo carro, sem trafego em tempo real. O total e `(metros ida + metros volta) / 1000`, nao a distancia GPS em linha reta.
+- Custo de combustivel: `(km totais / km por litro) x preco por litro`. Custo interno total: combustivel + pedagios, independentemente da opcao Sim/Nao.
+- Sim: soma `km totais x tarifa por km + pedagios` ao total da OS. O desconto geral existente da OS tambem incide sobre essa cobranca.
+- Nao: deslocamento cobrado igual a zero; combustivel e pedagios permanecem no registro interno.
+- Exemplo: 70 km totais, 10 km/litro, R$6/litro e R$20 em pedagios: custo de R$42 de combustivel + R$20 = R$62. Com tarifa R$2,50/km e Sim, cobranca de R$195; com Nao, cobranca de R$0 e mesmo custo R$62.
+- O documento/preview/TXT destinado ao cliente mostra apenas a cobranca de deslocamento quando Sim, nunca o novo custo interno ou consumo de combustivel.
+- **Relatorios > Custos de deslocamento** apresenta km, litros, combustivel, pedagios, custo total, cobranca e saldo, com os filtros da OS e CSV. Sao estimativas, nao despesas comprovadas; nao ha soma duplicada com despesas manuais. O saldo e anterior ao desconto geral e nao representa lucro da OS.
+- Cada calculo guarda rotas, pontos e precos historicos. Mudar configuracoes nao recalcula OS antigas; recalcular aplica os precos atuais explicitamente. Pontos alterados exibem aviso. Replicar OS limpa o calculo anterior.
+- O km informado pelo tecnico continua separado. Falhas de rota nao sao substituidas por linha reta nem por zeros. No modo local, configuracoes e calculos antigos podem ser consultados, mas novos calculos Google Maps exigem login Supabase.
+
+### Ativar Google Maps no servidor
+
+1. No Google Cloud, habilite **Routes API**, faturamento e uma chave restrita a essa API. Configure cotas e alertas de orcamento para controlar despesas; cada calculo consome duas consultas (ida e volta).
+2. Aplique as migracoes anteriores, inclusive `20261015010000_service_distance.sql`, e `20261015020000_travel_route_limits.sql`. Esta ultima autoriza administradores/Master e limita os calculos a um a cada 10 segundos por empresa, sem permitir acesso direto a tabela de limites.
+3. Cadastre o secret **GOOGLE_MAPS_ROUTES_API_KEY** no painel Supabase, em Edge Functions > Secrets. Nao coloque a chave no frontend, em variaveis `VITE_*`, no documento da empresa ou no repositorio. Nao envie a chave por chat.
+4. Publique a Edge Function `travel-route` usando a configuracao de `supabase/config.toml`. Exemplo, com Supabase CLI previamente configurado:
+
+```powershell
+supabase db push
+supabase functions deploy travel-route
+```
+
+A funcao valida o JWT em `/auth/v1/user`, exige papel owner/admin na mesma empresa e consulta os pontos salvos via RLS com o token do chamador. O navegador envia apenas o ID da OS; a chave Google nunca e retornada. Ao Google sao enviadas apenas as coordenadas necessarias para as rotas, sem nomes, enderecos textuais, valores ou documento da empresa. Pedagios sao informados manualmente, nao consultados automaticamente. Sem secret, migracao ou funcao publicada, o erro e exibido e nao e criado um calculo ficticio. Publicar a versao web atualizada conclui a ativacao; chamadas reais ao provedor nao fazem parte dos testes automatizados.
+
 ## Estrutura
 
 - `app/src/domain.ts`: tipos, esquemas, regras, valores monetarios em centavos e dados ficticios.

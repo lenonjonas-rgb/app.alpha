@@ -24,6 +24,55 @@ type DatabaseState = {
   loading: boolean;
 };
 
+type CompanyCache = {
+  companyId: string;
+  revision: number;
+  data: Database;
+};
+
+const companyCacheKey = (userId: string) =>
+  `alpha-tec.company-cache.v1.${userId}`;
+
+function readCompanyCache(userId: string): CompanyCache | null {
+  try {
+    const saved = sessionStorage.getItem(companyCacheKey(userId));
+    if (!saved) return null;
+    const cache = JSON.parse(saved) as CompanyCache;
+    if (
+      typeof cache.companyId !== "string" ||
+      !cache.companyId ||
+      !Number.isInteger(cache.revision) ||
+      cache.revision < 1
+    )
+      throw new Error("Cache local da empresa inválido.");
+    return { ...cache, data: validateDatabase(cache.data) };
+  } catch (error) {
+    console.warn("Não foi possível restaurar o cache temporário da empresa.", error);
+    try {
+      sessionStorage.removeItem(companyCacheKey(userId));
+    } catch (removeError) {
+      console.warn("Não foi possível remover o cache temporário inválido.", removeError);
+    }
+    return null;
+  }
+}
+
+function writeCompanyCache(
+  userId: string,
+  companyId: string,
+  revision: number,
+  data: Database,
+) {
+  try {
+    sessionStorage.setItem(
+      companyCacheKey(userId),
+      JSON.stringify({ companyId, revision, data }),
+    );
+  } catch (error) {
+    console.warn("Não foi possível atualizar o cache temporário da empresa.", error);
+  }
+}
+
 export function errorMessage(error: unknown): string {
   if (error instanceof z.ZodError)
     return error.issues
@@ -57,12 +106,14 @@ export function useDatabase() {
   );
   const [user, setUser] = useState<User | null>(null);
   const [role, setRole] = useState<CompanyRole | null>(null);
+  const [companyScope, setCompanyScope] = useState("");
   const [cloudMode, setCloudMode] = useState<CloudScreenMode>(
     cloudEnabled ? (supabase ? "loading" : "configuration") : "login",
   );
   const [cloudBusy, setCloudBusy] = useState(false);
+  const [cloudSaveVersion, setCloudSaveVersion] = useState(0);
   const [cloudSyncState, setCloudSyncState] = useState<
-    "idle" | "saving" | "synced" | "error"
+    "idle" | "loading" | "saving" | "synced" | "error"
   >("idle");
   const [cloudError, setCloudError] = useState(
     cloudEnabled
@@ -76,7 +127,9 @@ export function useDatabase() {
   const companyId = useRef<string | null>(null);
   const revision = useRef<number | null>(null);
   const saveQueue = useRef<Promise<void>>(Promise.resolve());
+  const cloudSaveSequence = useRef(0);
   const activeUserId = useRef<string | null>(null);
+  const cloudReady = useRef(false);
   const loadSequence = useRef(0);
   const syncBlocked = useRef(false);
 
@@ -84,7 +137,13 @@ export function useDatabase() {
     if (!supabase) throw new Error("O cliente Supabase não está configurado.");
     if (activeUserId.current !== userId) return;
     const loadId = ++loadSequence.current;
-    setState({ data: null, error: "", loading: true });
+    cloudReady.current = false;
+    companyId.current = null;
+    revision.current = null;
+    setState((previous) => ({
+      ...previous,
+      loading: previous.data === null,
+    }));
     const membership = await supabase
       .from("company_memberships")
       .select("company_id, role")
@@ -97,6 +156,7 @@ export function useDatabase() {
     if (membership.error) throw membership.error;
     if (!membership.data) {
       companyId.current = null;
+      setCompanyScope("");
       revision.current = null;
       current.current = null;
       setCloudError("");
@@ -112,6 +172,20 @@ export function useDatabase() {
     }
     if (memberRole !== "owner" && memberRole !== "admin")
       throw new Error("Nível sem acesso ao painel. Solicite ao Master o ajuste do seu usuário.");
+    companyId.current = membership.data.company_id;
+    setCompanyScope(membership.data.company_id);
+    const cache = readCompanyCache(userId);
+    if (cache && cache.companyId === membership.data.company_id) {
+      current.current = cache.data;
+      setCloudSyncState("loading");
+      setState({ data: cache.data, error: "", loading: false });
+    } else if (cache) {
+      try {
+        sessionStorage.removeItem(companyCacheKey(userId));
+      } catch (error) {
+        console.warn("Não foi possível remover o cache de outra empresa.", error);
+      }
+    }
     const result = await supabase
       .from("company_data")
       .select("payload, revision")
@@ -124,10 +198,12 @@ export function useDatabase() {
     companyId.current = membership.data.company_id;
     revision.current = Number(result.data.revision);
     current.current = data;
+    cloudReady.current = true;
     setCloudError("");
     setCloudMode("loading");
     setCloudSyncState("synced");
     setState({ data, error: "", loading: false });
+    writeCompanyCache(userId, membership.data.company_id, revision.current, data);
   }, []);
 
   useEffect(() => {
@@ -166,17 +242,21 @@ export function useDatabase() {
       syncBlocked.current = false;
       setUser(nextUser);
       setRole(null);
+      setCompanyScope("");
       setCloudError("");
       setCloudSyncState("idle");
       current.current = null;
       companyId.current = null;
       revision.current = null;
+      cloudReady.current = false;
       if (!nextUser) {
         setCloudMode("login");
         setState({ data: null, error: "", loading: false });
         return;
       }
+      setState({ data: null, error: "", loading: true });
       setCloudMode("loading");
+      setCloudSyncState("loading");
       try {
         await loadCompany(nextUser.id);
       } catch (error) {
@@ -246,6 +326,13 @@ export function useDatabase() {
     try {
       const result = await supabase.auth.signOut();
       if (result.error) throw result.error;
+      if (user) {
+        try {
+          sessionStorage.removeItem(companyCacheKey(user.id));
+        } catch (error) {
+          console.warn("Não foi possível remover o cache temporário ao sair.", error);
+        }
+      }
     } catch (error) {
       setCloudError(errorMessage(error));
       setCloudMode("unavailable");
@@ -253,7 +340,7 @@ export function useDatabase() {
     } finally {
       setCloudBusy(false);
     }
-  }, []);
+  }, [user]);
 
   const retry = useCallback(async () => {
     if (!user) return;
@@ -283,14 +370,15 @@ export function useDatabase() {
       setState({ data: validated, error: "", loading: false });
       return;
     }
-    if (!supabase || !companyId.current || revision.current === null)
-      throw new Error("Sessão ou empresa indisponível para salvar dados.");
+    if (!supabase || !companyId.current || revision.current === null || !cloudReady.current)
+      throw new Error("Aguarde a sincronização do banco seguro antes de salvar.");
     if (syncBlocked.current)
       throw new Error("Sincronização pausada. Recarregue os dados antes de editar.");
 
     const payload = validated;
     const queuedUserId = activeUserId.current;
     const queuedCompanyId = companyId.current;
+    const queuedSaveSequence = ++cloudSaveSequence.current;
     current.current = payload;
     setCloudSyncState("saving");
     setState({ data: payload, error: "", loading: false });
@@ -310,6 +398,9 @@ export function useDatabase() {
         });
         if (saved.error) throw saved.error;
         revision.current = Number(saved.data);
+        if (queuedUserId && queuedCompanyId)
+          writeCompanyCache(queuedUserId, queuedCompanyId, revision.current, payload);
+        setCloudSaveVersion(queuedSaveSequence);
         setCloudSyncState("synced");
       })
       .catch(async (error: unknown) => {
@@ -344,6 +435,13 @@ export function useDatabase() {
       role,
       busy: cloudBusy,
       syncState: cloudSyncState,
+      saveVersion: cloudSaveVersion,
+      getSaveRequestVersion: () => cloudSaveSequence.current,
+      draftScope: cloudEnabled
+        ? user && companyScope
+          ? `${user.id}.${companyScope}`
+          : ""
+        : "local",
       error: cloudError,
       signIn,
       createCompany,

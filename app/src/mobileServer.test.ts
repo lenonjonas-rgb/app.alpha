@@ -7,6 +7,7 @@ import { saveQuestionnaire } from "./questionnaires";
 import { questionnaireDisplaySchema } from "./questionnaireSchema";
 import { linkClientEquipment, saveEquipmentBrand, saveEquipmentModel, selectEquipmentModel } from "./equipmentCatalogData";
 import { mobileSnapshotSchema, technicianAgendaOrders } from "./mobile";
+import { distanceMeters } from "./serviceDistance";
 
 const owner = "00000000-0000-4000-8000-000000000001";
 const tech = "00000000-0000-4000-8000-000000000002";
@@ -43,7 +44,7 @@ beforeAll(async () => {
     grant usage on schema auth to anon,authenticated;
     grant execute on function auth.uid() to anon,authenticated;
   `);
-  for (const file of ["20261008010000_tenant_auth_and_company_data.sql", "20261009010000_android_technicians.sql", "20261009020000_technician_link_validation.sql", "20261010010000_questionnaires.sql", "20261011010000_questionnaire_checkout_requirement.sql", "20261011020000_yes_no_question_justification.sql"]) {
+  for (const file of ["20261008010000_tenant_auth_and_company_data.sql", "20261009010000_android_technicians.sql", "20261009020000_technician_link_validation.sql", "20261010010000_questionnaires.sql", "20261011010000_questionnaire_checkout_requirement.sql", "20261011020000_yes_no_question_justification.sql", "20261015010000_service_distance.sql", "20261015020000_travel_route_limits.sql"]) {
     await db.exec(await readFile(new URL(`../../supabase/migrations/${file}`, import.meta.url), "utf8"));
   }
   await db.query("insert into auth.users values ($1,'owner@example.test'),($2,'tech@example.test'),($3,'other@example.test')", [owner, tech, other]);
@@ -54,6 +55,85 @@ beforeAll(async () => {
 afterAll(async () => { await db.close(); });
 
 describe("RPC Android e isolamento de dados", () => {
+  it("reserva rotas apenas para administradores e limita chamadas por empresa", async () => {
+    await identity(tech);
+    await expect(db.query("select public.reserve_travel_route()")).rejects.toThrow("administração");
+    await identity(owner);
+    await db.query("select public.reserve_travel_route()");
+    await expect(db.query("select public.reserve_travel_route()")).rejects.toThrow("10 segundos");
+    await expect(db.query("delete from public.travel_route_requests")).rejects.toThrow("permission");
+    await identity(owner, "anon");
+    await expect(db.query("select public.reserve_travel_route()")).rejects.toThrow("permission");
+    await db.exec("reset role");
+    await db.query("update public.travel_route_requests set requested_at=clock_timestamp()-interval '11 seconds' where company_id=$1", [company]);
+    await identity(owner);
+    await db.query("select public.reserve_travel_route()");
+    await db.exec("reset role");
+  });
+  describe("distância do GPS ao ponto confirmado do atendimento", () => {
+    let baseline: { payload: unknown; revision: number };
+    beforeAll(async () => {
+      await db.exec("reset role");
+      baseline = (await db.query<{ payload: unknown; revision: number }>("select payload,revision from public.company_data where company_id=$1", [company])).rows[0];
+    });
+    afterAll(async () => {
+      await db.exec("reset role");
+      await db.query("update public.company_data set payload=$1,revision=$2 where company_id=$3", [JSON.stringify(baseline.payload), baseline.revision, company]);
+    });
+    async function fixture(stale = false, specific = false) {
+      await identity(owner);
+      const state = await snapshot();
+      const data = structuredClone(payload);
+      const client = data.clients.find((item) => item.id === data.orders[0].clientId)!;
+      const address = specific ? "Rua Teste, 10 · Centro · Florianópolis - SC · CEP 88000000" : client.address;
+      data.orders[0].details = {
+        ...getOrderDetails(data.orders[0]), activities: [], pending: [], checklists: [],
+        ...(specific ? { serviceLocation: {
+          useClientAddress: false, postalCode: "88000000", street: "Rua Teste", number: "10",
+          complement: "", neighborhood: "Centro", city: "Florianópolis", state: "SC",
+        } } : {}),
+        servicePoint: { latitude: gps.latitude, longitude: gps.longitude, address: stale ? "Endereço antigo" : address },
+      };
+      await db.query("select public.save_company_data($1,$2)", [JSON.stringify(data), state.revision]);
+      await identity(tech);
+      return snapshot();
+    }
+    it("calcula no servidor, ignora distância enviada pelo aparelho e preserva o ponto histórico", async () => {
+      let state = await fixture();
+      await mutate("Check-in", { location: gps, serviceDistance: { meters: 999999 } }, state.revision);
+      state = await snapshot();
+      const first = getOrderDetails(state.payload.orders[0]).activities[0];
+      expect(first.serviceDistance?.meters).toBe(0);
+      expect(first.location?.accuracy).toBe(12);
+      const checkoutGps = { ...gps, latitude: gps.latitude + 0.01 };
+      await mutate("Check-out", { location: checkoutGps }, state.revision);
+      state = await snapshot();
+      expect(getOrderDetails(state.payload.orders[0]).activities.at(-1)?.serviceDistance?.meters).toBe(distanceMeters(checkoutGps, gps));
+      await identity(owner);
+      const stored = (await db.query<{ payload: unknown }>("select payload from public.company_data where company_id=$1", [company])).rows[0].payload;
+      const changed = validateDatabase(stored);
+      changed.orders[0].details!.servicePoint!.latitude += 1;
+      await db.query("select public.save_company_data($1,$2)", [JSON.stringify(changed), state.revision]);
+      expect(getOrderDetails((await snapshot()).payload.orders[0]).activities[0].serviceDistance).toEqual(first.serviceDistance);
+    });
+    it("usa o endereço específico do atendimento, não o endereço do cliente", async () => {
+      const state = await fixture(false, true);
+      await mutate("Check-in", { location: gps }, state.revision);
+      expect(getOrderDetails((await snapshot()).payload.orders[0]).activities[0].serviceDistance).toMatchObject({
+        meters: 0, address: "Rua Teste, 10 · Centro · Florianópolis - SC · CEP 88000000",
+      });
+    });
+    it("não usa ponto desatualizado nem aceita edição de referência pelo técnico", async () => {
+      const state = await fixture(true);
+      await mutate("Check-in", { location: gps }, state.revision);
+      const after = await snapshot();
+      const details = getOrderDetails(after.payload.orders[0]);
+      expect(details.activities[0].serviceDistance).toBeUndefined();
+      await expect(mutate("report", { ...details, servicePoint: { latitude: 0, longitude: 0 } }, after.revision)).rejects.toThrow("Campos");
+      await expect(db.query("select public.mobile_update_order_without_service_distance($1,'Check-in',$2::jsonb,$3)", [payload.orders[0].id, JSON.stringify({ location: gps }), after.revision])).rejects.toThrow("permission");
+    });
+  });
+
   it("só projeta tarefas e clientes atribuídos, sem documento completo", async () => {
     await identity(tech);
     const data = await snapshot();

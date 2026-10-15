@@ -59,6 +59,7 @@ import { OrderPrintable, OrderWorkspace } from "./OrderWorkspace";
 import { ReportSettingsPanel } from "./ReportSettingsPanel";
 import { UserSettings } from "./UserSettings";
 import { PasswordSettings } from "./PasswordSettings";
+import { TravelSettings } from "./TravelSettings";
 import { QuestionnaireCatalog } from "./QuestionnaireCatalog";
 import { EquipmentBrandCatalog } from "./EquipmentBrandCatalog";
 import { EquipmentSelectionSummary } from "./EquipmentModelPicker";
@@ -107,6 +108,35 @@ const navigation: {
   },
   { id: "settings", label: "Configurações", icon: Settings, group: "SISTEMA" },
 ];
+const editorDraftKey = (scope: string) =>
+  `alpha-tec.active-editor.v1.${scope}`;
+const editorKinds: FormKind[] = [
+  "client", "equipment", "product", "service", "order", "quote", "movement",
+];
+function readEditorDraft(scope: string): Editor | null {
+  const key = editorDraftKey(scope);
+  try {
+    const value: unknown = JSON.parse(sessionStorage.getItem(key) ?? "null");
+    if (!value || typeof value !== "object" || Array.isArray(value) || !("kind" in value) ||
+      typeof value.kind !== "string" || !editorKinds.some((kind) => kind === value.kind))
+      return null;
+    if (("id" in value && typeof value.id !== "string") ||
+      ("date" in value && typeof value.date !== "string") ||
+      ("time" in value && typeof value.time !== "string") ||
+      ("clientId" in value && typeof value.clientId !== "string") ||
+      ("equipmentId" in value && typeof value.equipmentId !== "string"))
+      return null;
+    return { ...value, kind: value.kind as FormKind };
+  } catch (error) {
+    console.warn("Não foi possível restaurar o formulário em andamento.", error);
+    try {
+      sessionStorage.removeItem(key);
+    } catch (removeError) {
+      console.warn("Não foi possível remover o formulário temporário inválido.", removeError);
+    }
+    return null;
+  }
+}
 const statuses: OrderStatus[] = [
   "Aberta",
   "Em atendimento",
@@ -248,6 +278,12 @@ export default function App() {
   const [calendarView, setCalendarView] = useState("dayGridMonth");
   const [calendarTitle, setCalendarTitle] = useState("");
   const [editor, setEditor] = useState<Editor | null>(null);
+  const restoredEditorScope = useRef("");
+  const pendingEditorCleanup = useRef<{
+    scope: string;
+    editor: Editor;
+    targetVersion: number;
+  } | null>(null);
   const [clientEquipmentId, setClientEquipmentId] = useState("");
   const [detail, setDetail] = useState<{
     kind: "order" | "quote";
@@ -276,6 +312,43 @@ export default function App() {
     const timeout = setTimeout(() => setNotice(""), 4500);
     return () => clearTimeout(timeout);
   }, [notice]);
+  useEffect(() => {
+    const scope = cloud.draftScope;
+    if (cloud.mode === "unavailable") {
+      restoredEditorScope.current = "";
+      return;
+    }
+    if (!data || !scope || restoredEditorScope.current === scope) return;
+    restoredEditorScope.current = scope;
+    if (editor) return;
+    const savedEditor = readEditorDraft(scope);
+    if (!savedEditor) return;
+    requestAnimationFrame(() => setEditor(savedEditor));
+  }, [cloud.draftScope, cloud.mode, data, editor]);
+  useEffect(() => {
+    if (!editor || !cloud.draftScope) return;
+    try {
+      sessionStorage.setItem(editorDraftKey(cloud.draftScope), JSON.stringify(editor));
+    } catch (error) {
+      console.warn("Não foi possível salvar o formulário em andamento.", error);
+    }
+  }, [cloud.draftScope, editor]);
+  useEffect(() => {
+    const pending = pendingEditorCleanup.current;
+    if (!pending) return;
+    if (cloud.saveVersion < pending.targetVersion) return;
+    for (const key of [
+      editorDraftKey(pending.scope),
+      `alpha-tec.form-draft.v1.${pending.scope}.${pending.editor.kind}.${pending.editor.id ?? "new"}`,
+    ]) {
+      try {
+        sessionStorage.removeItem(key);
+      } catch (error) {
+        console.warn("Não foi possível remover o rascunho sincronizado.", error);
+      }
+    }
+    pendingEditorCleanup.current = null;
+  }, [cloud.saveVersion]);
   if (cloud.enabled && cloud.mode !== "loading") {
     return (
       <CloudAccess
@@ -419,6 +492,25 @@ export default function App() {
     setEditor({ kind, id });
     setDetail(null);
   }
+  function closeEditor(saved = false) {
+    if (saved && cloud.enabled && editor && cloud.draftScope) {
+      pendingEditorCleanup.current = {
+        scope: cloud.draftScope,
+        editor,
+        targetVersion: cloud.getSaveRequestVersion(),
+      };
+    } else if (cloud.draftScope) {
+      try {
+        sessionStorage.removeItem(editorDraftKey(cloud.draftScope));
+        sessionStorage.removeItem(
+          `alpha-tec.form-draft.v1.${cloud.draftScope}.${editor?.kind}.${editor?.id ?? "new"}`,
+        );
+      } catch (error) {
+        console.warn("Não foi possível remover o formulário temporário.", error);
+      }
+    }
+    setEditor(null);
+  }
   function quoteStatus(id: string, next: Quote["status"]) {
     act((current) => {
       const quote = current.quotes.find((item) => item.id === id)!;
@@ -492,6 +584,10 @@ export default function App() {
             order={expanded}
             data={database}
             commit={commit}
+            draftScope={cloud.draftScope}
+            cloudEnabled={cloud.enabled}
+            cloudSaveVersion={cloud.saveVersion}
+            getSaveRequestVersion={cloud.getSaveRequestVersion}
             onBack={() => navigate("orders")}
             onOpen={openFullOrder}
           />
@@ -630,6 +726,8 @@ export default function App() {
             {cloud.enabled
               ? cloud.syncState === "saving"
                 ? "Salvando na nuvem"
+                : cloud.syncState === "loading"
+                  ? "Atualizando dados"
                 : cloud.syncState === "synced"
                   ? "Nuvem sincronizada"
                   : "Supabase seguro"
@@ -674,6 +772,8 @@ export default function App() {
               {cloud.enabled
                 ? cloud.syncState === "saving"
                   ? "Salvando…"
+                  : cloud.syncState === "loading"
+                    ? "Atualizando…"
                   : cloud.syncState === "synced"
                     ? "Sincronizado"
                     : "Supabase"
@@ -1675,9 +1775,10 @@ export default function App() {
             editor={editor}
             data={database}
             commit={commit}
-            onClose={() => setEditor(null)}
+            draftScope={cloud.draftScope}
+            onClose={closeEditor}
             onSuccess={setNotice}
-            onClientEquipment={(id) => { setEditor(null); setClientEquipmentId(id); }}
+            onClientEquipment={(id) => { closeEditor(); setClientEquipmentId(id); }}
           />
         ))}
       {database.clients.find((client) => client.id === clientEquipmentId) && <ClientEquipment
@@ -2053,6 +2154,7 @@ function SettingsPanel({
     <div className="settings-page">
       {cloud && role === "owner" && <UserSettings />}
       {cloud && <PasswordSettings />}
+      <TravelSettings key={JSON.stringify([data.settings.fuelPrice, data.settings.kilometersPerLiter, data.settings.kilometerRate, data.settings.assistancePoint])} data={data} commit={commit} onSuccess={onSuccess} onError={onError} />
       <ReportSettingsPanel key={JSON.stringify(data.settings.reportSettings)} data={data} commit={commit} onSuccess={onSuccess} onError={onError} />
       <section className="settings-section">
         <div className="section-heading">
@@ -2069,9 +2171,6 @@ function SettingsPanel({
                   ...current.settings,
                   company: String(form.get("company")).trim(),
                   technician: String(form.get("technician")).trim(),
-                  kilometerRate: Math.round(
-                    Number(form.get("kilometerRate")) * 100,
-                  ),
                   logo,
                 },
               }));
@@ -2167,17 +2266,6 @@ function SettingsPanel({
                 key={data.settings.technician}
                 required
                 maxLength={100}
-              />
-            </label>
-            <label className="field">
-              Valor por quilômetro (R$)
-              <input
-                name="kilometerRate"
-                type="number"
-                min="0"
-                step="0.01"
-                defaultValue={(data.settings.kilometerRate / 100).toFixed(2)}
-                key={data.settings.kilometerRate}
               />
             </label>
             {[

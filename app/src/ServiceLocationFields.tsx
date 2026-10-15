@@ -2,8 +2,10 @@ import { useEffect, useState } from "react";
 import type { Client, OrderDetails, ServiceLocation } from "./domain";
 import { lookupPostalCode } from "./cep";
 import { errorMessage } from "./useDatabase";
+import { serviceLocationAddress } from "./domain";
+import { ServicePointPicker } from "./ServicePointPicker";
 
-export function ServiceLocationFields({ client, details }: { client?: Client; details?: OrderDetails }) {
+export function ServiceLocationFields({ client, details, initialPoint }: { client?: Client; details?: OrderDetails; initialPoint?: OrderDetails["servicePoint"] }) {
   const [location, setLocation] = useState<ServiceLocation>(() => details?.serviceLocation ?? {
     useClientAddress: true, postalCode: "", street: "", number: "",
     complement: "", neighborhood: "", city: "", state: "",
@@ -67,6 +69,7 @@ export function ServiceLocationFields({ client, details }: { client?: Client; de
       {field("city", "Cidade de atendimento", 200)}
       {field("state", "UF de atendimento", 2)}
     </>}
+    <ServicePointPicker address={serviceLocationAddress(location, client?.address ?? "")} initialPoint={initialPoint ?? details?.servicePoint} />
     <label className="field">Nome do responsável pelo atendimento
       <input name="responsibleName" defaultValue={details?.responsibleName ?? ""} maxLength={160} />
     </label>

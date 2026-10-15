@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
 import SignaturePad from "signature_pad";
 import { Capacitor } from "@capacitor/core";
+import { serviceDistanceText } from "./serviceDistance";
 import { App as NativeApp } from "@capacitor/app";
 import { ArrowLeft, CalendarDays, Check, ChevronLeft, ChevronRight, Clock3, FileText, Home, MapPin, Navigation, RefreshCw, LogOut, Camera, Pause, Play, X } from "lucide-react";
 import { supabase } from "./supabase";
@@ -337,6 +338,8 @@ function Task({ order, snapshot, busy, mutate, onDraftChange, onWorkingChange }:
     <article>
       <h1>{client.name}</h1><p>{order.code} · {order.title}</p>
       <span className="tech-status">{order.status}</span>
+      {(!original.servicePoint || original.servicePoint.address !== orderServiceAddress(order, client)) &&
+        <p role="status">O atendimento não possui ponto confirmado para este endereço. O GPS será registrado, mas a distância ficará indisponível. Solicite a confirmação do ponto pelo administrador.</p>}
       <div className="tech-timer"><Clock3 /><strong>{durationText(totals.work)}</strong><span>Atendimento</span><small>Pausas: {durationText(totals.pause)}</small></div>
       <div className="tech-tabs">{(["details", "report", "pending"] as const).map((value) => <button key={value} className={tab === value ? "active" : ""} onClick={() => setTab(value)}>{value === "details" ? "Detalhes" : value === "report" ? "Relatório" : `Pendências (${pending.length})`}</button>)}</div>
       {error && <div role="alert" className="tech-error">{error}</div>}
@@ -425,7 +428,7 @@ function Task({ order, snapshot, busy, mutate, onDraftChange, onWorkingChange }:
         {order.status !== "Finalizada" && allowedActivities(original.activities).includes("Pausa") && <label>Motivo da pausa<input disabled={blocked} value={reason} onChange={(event) => setReason(event.target.value)} maxLength={1000} /></label>}
         <div className="tech-actions">{order.status !== "Finalizada" && allowedActivities(original.activities).filter((kind) => kind !== "Deslocamento").map((kind) => <button key={kind} disabled={blocked || dirty || (kind === "Pausa" && !reason.trim()) || (kind === "Check-out" && pending.length > 0)} onClick={() => void activity(kind)}>{kind === "Pausa" ? <Pause /> : kind === "Check-out" ? <Check /> : <Play />}{locating ? "Registrando…" : kind === "Check-in" ? "Check-in · Iniciar tarefa" : kind === "Check-out" ? "Check-out · Finalizar tarefa" : kind}</button>)}</div>
         <small>O check-in inicia a tarefa e o check-out a finaliza. Ambos exigem GPS e internet. O tempo exibido exclui as pausas.</small>
-        {original.activities.map((item) => <p key={item.id}><b>{item.kind}</b> · {new Date(item.at).toLocaleString("pt-BR")}<br />{item.reason}{item.location && <small>GPS: {item.location.latitude.toFixed(5)}, {item.location.longitude.toFixed(5)} · precisão {Math.round(item.location.accuracy)} m</small>}</p>)}
+        {original.activities.map((item) => <p key={item.id}><b>{item.kind}</b> · {new Date(item.at).toLocaleString("pt-BR")}<br />{item.reason}{item.location && <small>GPS: {item.location.latitude.toFixed(5)}, {item.location.longitude.toFixed(5)} · precisão {Math.round(item.location.accuracy)} m</small>}<small>{serviceDistanceText(item)}</small></p>)}
       </section>
       {signing && <Signature title={signing === "legacy" ? "Assinatura do cliente" : draft.checklists.find((list) => list.id === signing.checklistId)?.questions.find((question) => question.id === signing.questionId)?.label ?? "Assinatura"} onClose={() => setSigning(null)} onApply={(signature) => {
         if (signing === "legacy") setDraft({ ...draft, signature });

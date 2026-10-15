@@ -6,14 +6,35 @@ import {
 } from "./domain";
 import {
   csvContent,
+  defaultReportFilters,
   filterExpenses,
   filterOrders,
   hoursOrders,
+  monitoringRows,
   questionnaireRows,
   summarizeOrders,
 } from "./reporting";
 
 describe("report calculations", () => {
+  it("monitors event dates and recorded technicians rather than the current order schedule", () => {
+    const data = demoDatabase();
+    const order = data.orders[0]!;
+    order.date = "2020-01-01";
+    order.technician = "Novo responsável";
+    order.details = orderDetailsSchema.parse({
+      activities: ["Check-in", "Pausa", "Check-out"].map((kind, index) => ({
+        id: `gps-${index}`, kind, at: `2026-10-15T${10 + index}:00:00.000Z`,
+        technician: "Técnico original", reason: "", justification: "", origin: "Android",
+      })),
+    });
+    const database = { ...data, orders: [order] };
+    const filters = { ...defaultReportFilters(), from: "2026-10-15", to: "2026-10-15", technician: "Técnico original" };
+    expect(monitoringRows(database, filters).map(({ activity }) => activity.kind)).toEqual(["Check-out", "Check-in"]);
+    expect(monitoringRows(database, { ...filters, from: "2026-10-16" })).toEqual([]);
+    expect(monitoringRows(database, { ...filters, technician: "Novo responsável" })).toEqual([]);
+    expect(monitoringRows(database, { ...filters, clientId: "outro-cliente" })).toEqual([]);
+  });
+
   it("filters tasks by date, client, technician, status, and query", () => {
     const data = demoDatabase();
     const order = data.orders[0]!;

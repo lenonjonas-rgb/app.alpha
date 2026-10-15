@@ -13,7 +13,6 @@ import {
   Plus,
   Receipt,
   Search,
-  ShieldAlert,
   Wrench,
   X,
 } from "lucide-react";
@@ -36,10 +35,13 @@ import {
   filterExpenses,
   filterOrders,
   hoursOrders,
+  monitoringRows,
   questionnaireRows,
   summarizeOrders,
+  travelCostRows,
 } from "./reporting";
 import type { ReportFilters } from "./reporting";
+import { serviceDistanceText } from "./serviceDistance";
 import "./Reports.css";
 
 const reports = [
@@ -48,6 +50,7 @@ const reports = [
   { id: "tasks", label: "Tarefas", icon: ClipboardList },
   { id: "questionnaires", label: "Questionários", icon: FileText },
   { id: "kilometers", label: "Km rodado", icon: MapPin },
+  { id: "travelCosts", label: "Custos de deslocamento", icon: Receipt },
   { id: "expenses", label: "Despesas", icon: Receipt },
   { id: "satisfaction", label: "Pesquisa de satisfação", icon: Gauge },
   { id: "monitoring", label: "Monitoramento", icon: Activity },
@@ -288,6 +291,12 @@ export function ReportsPanel({
     [orderRows, finalizedOnly],
   );
   const hoursSummary = useMemo(() => summarizeOrders(hoursRows), [hoursRows]);
+  const gpsRows = useMemo(() => monitoringRows(data, filters), [data, filters]);
+  const travelRows = useMemo(() => travelCostRows(orderRows), [orderRows]);
+  const travelTotals = travelRows.reduce((sum, row) => ({
+    kilometers: sum.kilometers + row.kilometers, fuel: sum.fuel + row.fuelCost,
+    tolls: sum.tolls + row.travel.tolls, cost: sum.cost + row.cost, charge: sum.charge + row.charge,
+  }), { kilometers: 0, fuel: 0, tolls: 0, cost: 0, charge: 0 });
   const expenseTotal = expenses.reduce((sum, item) => sum + item.value, 0);
   const kilometersCost = Math.round(
     summary.kilometers * data.settings.kilometerRate,
@@ -378,6 +387,19 @@ export function ReportsPanel({
           ]),
         );
         break;
+      case "travelCosts":
+        csv = csvContent(
+          ["Data da OS", "OS", "Cliente", "Colaborador", "Cobrança de deslocamento", "Origem", "Destino", "Calculado em", "Km ida", "Km volta", "Km total", "Km/litro", "Combustível R$/litro", "Litros estimados", "Combustível (R$)", "Pedágios totais (R$)", "Custo interno (R$)", "Tarifa R$/km", "Cobrança antes do desconto (R$)", "Saldo do deslocamento (R$)"],
+          travelRows.map((row) => [
+            row.order.date, row.order.code, clientName(row.order.clientId), row.order.technician,
+            row.travel.chargeTravel ? "Sim" : "Não", row.travel.route.origin.address, row.travel.route.destination.address, row.travel.route.calculatedAt,
+            row.travel.route.outboundMeters / 1000, row.travel.route.returnMeters / 1000, row.kilometers,
+            row.travel.kilometersPerLiter, (row.travel.fuelPrice / 100).toFixed(2), row.liters,
+            (row.fuelCost / 100).toFixed(2), (row.travel.tolls / 100).toFixed(2), (row.cost / 100).toFixed(2),
+            (row.travel.kilometerRate / 100).toFixed(2), (row.charge / 100).toFixed(2), (row.balance / 100).toFixed(2),
+          ]),
+        );
+        break;
       case "hours":
         csv = csvContent(
           ["Data", "OS", "Cliente", "Colaborador", "Deslocamento", "Pausa", "Trabalho"],
@@ -415,7 +437,15 @@ export function ReportsPanel({
         break;
       case "monitoring":
         name = `monitoramento-${localDay()}.csv`;
-        csv = csvContent(["Colaborador", "Data", "GPS", "Internet", "Bateria", "Versão do aplicativo"], []);
+        csv = csvContent(
+          ["OS", "Cliente", "Colaborador", "Atividade", "Data/hora", "Origem", "Latitude GPS", "Longitude GPS", "Precisão GPS (m)", "Distância do atendimento (m)", "Endereço de referência", "Latitude de referência", "Longitude de referência", "Situação"],
+          gpsRows.map(({ order, activity }) => [
+            order.code, clientName(order.clientId), activity.technician, activity.kind, activity.at, activity.origin,
+            activity.location?.latitude ?? "", activity.location?.longitude ?? "", activity.location?.accuracy ?? "",
+            activity.serviceDistance?.meters ?? "", activity.serviceDistance?.address ?? "",
+            activity.serviceDistance?.latitude ?? "", activity.serviceDistance?.longitude ?? "", serviceDistanceText(activity),
+          ]),
+        );
         break;
       case "downloads":
         csv = csvContent(
@@ -466,10 +496,7 @@ export function ReportsPanel({
           </div>
           <div className="report-actions">
             {report === "expenses" && (
-              <button
-                className="button secondary"
-                onClick={() => setExpenseFormOpen(true)}
-              >
+              <button className="button secondary" onClick={() => setExpenseFormOpen(true)}>
                 <Plus size={16} />
                 Adicionar despesa
               </button>
@@ -531,7 +558,9 @@ export function ReportsPanel({
               >
                 <option value="">Todos</option>
                 {[
-                  ...new Set(data.orders.map((order) => order.technician)),
+                  ...new Set(report === "monitoring"
+                    ? data.orders.flatMap((order) => getOrderDetails(order).activities.map((activity) => activity.technician))
+                    : data.orders.map((order) => order.technician)),
                 ]
                   .filter(Boolean)
                   .sort((left, right) => left.localeCompare(right, "pt-BR"))
@@ -616,6 +645,32 @@ export function ReportsPanel({
                 />
               </span>
             </label>
+          </div>
+        )}
+
+        {report === "travelCosts" && (
+          <div className="report-content">
+            <h3>Custos internos de deslocamento</h3>
+            <p>Estimativas pelas rotas e preços registrados em cada OS, com ou sem cobrança. Período pela data da OS. Pedágios são totais de ida e volta, informados manualmente. Cobrança antes do desconto geral; saldo não é lucro total do atendimento.</p>
+            <p>{orderRows.length - travelRows.length} OS sem cálculo de rota não entram nos totais. Este relatório não soma novamente despesas de combustível lançadas manualmente.</p>
+            <div className="report-metrics">
+              <div className="report-metric"><small>Km ida e volta</small><strong>{formatKilometers(travelTotals.kilometers)}</strong></div>
+              <div className="report-metric"><small>Combustível estimado</small><strong>{currency(travelTotals.fuel)}</strong></div>
+              <div className="report-metric"><small>Pedágios</small><strong>{currency(travelTotals.tolls)}</strong></div>
+              <div className="report-metric"><small>Custo interno total</small><strong>{currency(travelTotals.cost)}</strong></div>
+              <div className="report-metric"><small>Deslocamento cobrado</small><strong>{currency(travelTotals.charge)}</strong></div>
+              <div className="report-metric"><small>Saldo do deslocamento</small><strong>{currency(travelTotals.charge - travelTotals.cost)}</strong></div>
+            </div>
+            <div className="table-scroll"><table>
+              <thead><tr><th>Data</th><th>OS / cliente</th><th>Colaborador</th><th>Cobrar?</th><th>Km ida + volta</th><th>Consumo estimado</th><th>Combustível</th><th>Pedágios</th><th>Custo interno</th><th>Cobrança</th><th>Saldo</th></tr></thead>
+              <tbody>{travelRows.map((row) => <tr key={row.order.id}>
+                <td>{displayDate(row.order.date)}</td>
+                <td><button className="record-link" onClick={() => onOpenOrder(row.order.id)}>{row.order.code}</button><small>{clientName(row.order.clientId)}</small></td>
+                <td>{row.order.technician}</td><td>{row.travel.chargeTravel ? "Sim" : "Não"}</td>
+                <td>{formatKilometers(row.kilometers)} km</td><td>{row.liters.toLocaleString("pt-BR", { maximumFractionDigits: 3 })} L</td>
+                <td>{currency(row.fuelCost)}</td><td>{currency(row.travel.tolls)}</td><td>{currency(row.cost)}</td><td>{currency(row.charge)}</td><td>{currency(row.balance)}</td>
+              </tr>)}</tbody>
+            </table>{!travelRows.length && <Empty title="Nenhum cálculo de deslocamento salvo para estes filtros" />}</div>
           </div>
         )}
 
@@ -914,14 +969,27 @@ export function ReportsPanel({
         )}
 
         {report === "monitoring" && (
-          <div className="report-content empty-report">
-            <ShieldAlert size={26} />
-            <h3>Monitoramento de dispositivos não conectado</h3>
-            <p>
-              Não coletamos localização, bateria ou dados de rede. Esses
-              indicadores só podem ser exibidos após integração explícita com
-              aplicativo/dispositivo e consentimento de monitoramento.
-            </p>
+          <div className="report-content">
+            <h3>Check-ins e check-outs por localização</h3>
+            <p>O período considera a data do registro. Distância em linha reta até o ponto confirmado do atendimento, com precisão do GPS separada. Não é distância percorrida, prova de presença ou rastreamento contínuo. Sem dados de bateria ou rede.</p>
+            <div className="table-wrap">
+              <table>
+                <thead><tr>
+                  <th>OS / cliente</th><th>Colaborador</th><th>Atividade</th><th>Data/hora</th><th>GPS / precisão</th><th>Distância do atendimento</th><th>Referência registrada</th>
+                </tr></thead>
+                <tbody>{gpsRows.map(({ order, activity }) => <tr key={`${order.id}-${activity.id}`}>
+                  <td><button className="record-link" onClick={() => onOpenOrder(order.id)}>{order.code}</button><small>{clientName(order.clientId)}</small></td>
+                  <td>{activity.technician}</td><td>{activity.kind}</td>
+                  <td>{new Date(activity.at).toLocaleString("pt-BR")}</td>
+                  <td>{activity.location ? <a target="_blank" rel="noopener noreferrer" href={`https://www.google.com/maps/search/?api=1&query=${activity.location.latitude},${activity.location.longitude}`}>
+                    {activity.location.latitude.toFixed(5)}, {activity.location.longitude.toFixed(5)} (±{Math.round(activity.location.accuracy)} m)
+                  </a> : "Não registrado"}</td>
+                  <td>{serviceDistanceText(activity)}</td>
+                  <td>{activity.serviceDistance ? <>{activity.serviceDistance.address}<small>{activity.serviceDistance.latitude.toFixed(6)}, {activity.serviceDistance.longitude.toFixed(6)}</small></> : "Não registrada"}</td>
+                </tr>)}</tbody>
+              </table>
+              {!gpsRows.length && <Empty title="Nenhum check-in ou check-out no período e filtros selecionados" />}
+            </div>
           </div>
         )}
 

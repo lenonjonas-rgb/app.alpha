@@ -5,6 +5,7 @@ import { isValidCpf } from "./cpf";
 import { orderTypeQuestionnaireSchema, questionnaireDisplaySchema, questionnaireTemplateSchema, questionDefinitionSchema, requiresJustification, signatureSchema } from "./questionnaireSchema";
 import type { QuestionnaireTemplate } from "./questionnaireSchema";
 import { reportSettingsSchema } from "./reportSettings";
+import { servicePointSchema, travelSchema, travelValues } from "./travel";
 export type { QuestionnaireTemplate, QuestionDefinition } from "./questionnaireSchema";
 
 const id = z.string().min(1);
@@ -66,7 +67,7 @@ const productSchema = z.object({
   minimum: z.number().int().nonnegative(),
 });
 const serviceSchema = z.object({ id, name: text, price: money });
-const lineSchema = z.object({
+export const lineSchema = z.object({
   id,
   kind: z.enum(["produto", "servico"]),
   referenceId: id,
@@ -116,6 +117,7 @@ const checklistSchema = z.object({
   footer: z.string().max(10000).optional(),
   display: questionnaireDisplaySchema.optional(),
 });
+export { servicePointSchema } from "./travel";
 const activitySchema = z.object({
   id,
   kind: z.enum(["Deslocamento", "Check-in", "Pausa", "Retorno", "Check-out"]),
@@ -124,6 +126,9 @@ const activitySchema = z.object({
   reason: z.string().max(1000),
   justification: z.string().max(1000),
   origin: z.enum(["Web local", "Android"]),
+  serviceDistance: servicePointSchema.extend({
+    meters: z.number().int().nonnegative().max(20015115),
+  }).optional(),
   location: z
     .object({
       latitude: z.number().min(-90).max(90),
@@ -159,6 +164,8 @@ export const orderDetailsSchema = z.object({
   report: z.string().max(10000).default(""),
   externalCode: z.string().max(100).default(""),
   serviceLocation: serviceLocationSchema.optional(),
+  servicePoint: servicePointSchema.optional(),
+  travel: travelSchema.optional(),
   responsibleName: z.string().trim().max(160).optional(),
   responsiblePhone: z.string().trim().max(40).optional(),
   tags: z.array(text).default([]),
@@ -258,6 +265,9 @@ export const databaseSchema = z.object({
     company: text,
     technician: text,
     kilometerRate: money.default(0),
+    fuelPrice: money.default(0),
+    kilometersPerLiter: z.number().nonnegative().max(1000).default(0),
+    assistancePoint: servicePointSchema.optional(),
     logo: z
       .string()
       .max(1_500_000)
@@ -297,8 +307,10 @@ export type Checklist = z.infer<typeof checklistSchema>;
 export type Attachment = z.infer<typeof attachmentSchema>;
 export type ServiceLocation = z.infer<typeof serviceLocationSchema>;
 export function orderServiceAddress(order: Order, client: Pick<Client, "address">): string {
-  const location = order.details?.serviceLocation;
-  if (!location || location.useClientAddress) return client.address;
+  return serviceLocationAddress(order.details?.serviceLocation, client.address);
+}
+export function serviceLocationAddress(location: ServiceLocation | undefined, clientAddress: string): string {
+  if (!location || location.useClientAddress) return clientAddress;
   return [
     [location.street, location.number].filter(Boolean).join(", "),
     location.complement, location.neighborhood,
@@ -386,11 +398,12 @@ export function orderValues(details: OrderDetails) {
     0,
   );
   const costs = details.costs.reduce((sum, item) => sum + item.value, 0);
+  const travel = details.travel ? travelValues(details.travel).charge : 0;
   const discount =
     details.discountMode === "%"
-      ? Math.round(((items + costs) * details.discount) / 100)
+      ? Math.round(((items + costs + travel) * details.discount) / 100)
       : Math.round(details.discount);
-  return { items, costs, discount, total: items + costs - discount };
+  return { items, costs, travel, discount, total: items + costs + travel - discount };
 }
 export function activityTotals(activities: Activity[], now = Date.now()) {
   const totals = { travel: 0, pause: 0, work: 0 };
@@ -622,6 +635,7 @@ export function replicateOrder(
   assertSingleEquipmentQuestionnaire(originalDetails.checklists);
   const details = {
     ...originalDetails,
+    travel: undefined,
     archived: false,
     createdAt: new Date().toISOString(),
     report: "",

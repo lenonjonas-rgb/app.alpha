@@ -1,11 +1,13 @@
 import {
   activityTotals,
   getOrderDetails,
+  localDay,
   orderPending,
   orderValues,
 } from "./domain";
 import type { Database, Expense, Order } from "./domain";
 import { questionAnswerText } from "./questionnaireAnswers";
+import { travelValues } from "./travel";
 
 export type ReportFilters = {
   from: string;
@@ -67,6 +69,26 @@ export function filterOrders(data: Database, filters: ReportFilters): Order[] {
         `${left.date}T${left.time}`,
       ),
     );
+}
+
+export function monitoringRows(data: Database, filters: ReportFilters) {
+  return filterOrders(data, { ...filters, from: "", to: "", technician: "" }).flatMap((order) =>
+    getOrderDetails(order).activities
+      .filter((activity) => {
+        const day = localDay(new Date(activity.at));
+        return (activity.kind === "Check-in" || activity.kind === "Check-out") &&
+          (!filters.from || day >= filters.from) && (!filters.to || day <= filters.to) &&
+          (!filters.technician || activity.technician === filters.technician);
+      })
+      .map((activity) => ({ order, activity })),
+  ).sort((first, second) => second.activity.at.localeCompare(first.activity.at));
+}
+
+export function travelCostRows(orders: Order[]) {
+  return orders.flatMap((order) => {
+    const travel = getOrderDetails(order).travel;
+    return travel ? [{ order, travel, ...travelValues(travel) }] : [];
+  });
 }
 
 export function summarizeOrders(orders: Order[], now = Date.now()) {

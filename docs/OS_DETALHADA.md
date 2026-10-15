@@ -80,13 +80,43 @@ Regras de validade/revogacao, acesso publico ou autenticado, identificacao/anomi
 - A contagem de horas inclui intervalos maiores que 24 horas. Horarios e autoria sao informados localmente, sem garantia de autenticidade.
 - Assinatura local nao verifica identidade, nao envia codigo por email e nao fornece certificacao juridica.
 - Anexos locais pequenos consomem a cota de localStorage; nao ha armazenamento remoto. Exportar backup e usar dados ficticios permanece necessario.
+- Formularios abertos e edicoes incompletas da OS sao guardados como rascunhos temporarios na sessao do navegador e podem ser restaurados apos atualizar ou reabrir a pagina. Campos e selecoes sao recuperados; arquivos ainda nao enviados nos formularios de cadastro nao sao preservados. Ao cancelar ou apos confirmar a sincronizacao, o rascunho correspondente e removido.
+- No modo de banco seguro, um cache temporario por usuario/empresa pode exibir os dados enquanto o servidor e revalidado em segundo plano. O cache e validado pela associacao ativa da conta, atualizado apos sincronizacao e removido ao sair; novas gravacoes aguardam a confirmacao do banco remoto.
 - Replica copia orientacoes, itens e estrutura de questionarios, mas limpa relato, respostas, fotos, assinatura, atividades e pendencias manuais.
 - Atualizacao em 10/10/2026: catalogo proprio compartilhado/versionado, padroes por tipo de tarefa e copias independentes dos modelos nas OS. Alteracoes no catalogo nao modificam respostas antigas.
 - Perguntas novas de assinatura possuem desenho e nome independentes. Assinaturas legadas preservam a compatibilidade com a assinatura geral. Impressao e relatorios resolvem fotos/assinaturas por pergunta.
 - CPF/CNPJ, data, hora, numero, check e opcoes recebem validacao de formato/digitos e referencias; isso nao certifica identidade ou validade juridica. Perguntas obrigatorias bloqueiam check-out somente quando o modelo associado exige preenchimento para check-out. A opcao e definida no editor e copiada para a tarefa, sem alterar associacoes anteriores. Pendencias manuais e a exigencia de associacao por tipo permanecem obrigatorias. Novas tarefas com configuracao de questionario bloqueiam finalizacao manual com pendencias, preservando a regra administrativa legada.
 - No login do tecnico, a aba Relatorio mostra apenas os questionarios associados; sem questionario, apresenta relato, quilometragem, anexos e assinatura do relatorio padrao. Dados padrao anteriores permanecem salvos quando ocultos.
 - Tipo Sim ou Não: o editor define a resposta que solicita justificativa (Sim ou Nao). Essa resposta exibe texto obrigatorio e foto opcional, via camera ou upload de imagem. Justificativas vazias bloqueiam check-out em questionarios obrigatorios; os opcionais preservam a dispensa. Administracao, impressao e CSV incluem justificativa/foto. Trocar para a outra resposta limpa a justificativa e o vinculo da foto; replicar tambem limpa esses dados, mantendo a configuracao.
-- Envio real, GPS, notificacoes push, calculo de rotas/km, PDF de servidor e cobranca dependem de backend/provedores e nao foram implementados como controles falsos.
+- Envio real, notificacoes push, calculo de rotas/km, PDF de servidor e cobranca dependem de backend/provedores e nao foram implementados como controles falsos.
+
+## Distancia do GPS no check-in e check-out
+
+1. Nos dados basicos da OS, confira o endereco efetivo do atendimento (do cliente ou especifico).
+2. Em **Ponto do atendimento para monitoramento**, abra o mapa, aproxime e clique no local exato ou informe latitude e longitude. Selecione **Confirmar ponto deste endereco** e salve a OS.
+3. Os proximos check-ins e check-outs capturam o GPS do dispositivo e registram a distancia em metros ate esse ponto. No aplicativo do tecnico, o servidor calcula o resultado, sem confiar em distancias enviadas pelo aparelho.
+4. Consulte **Controle de horas** na OS ou **Relatorios > Monitoramento**. Ambos exibem GPS/precisao, distancia, referencia historica e exportam CSV; a impressao da OS inclui essas informacoes. No Monitoramento, as datas filtram o momento da atividade e o colaborador e o registrado no evento, mesmo que a OS tenha sido reagendada ou reatribuida.
+
+- Distancia em linha reta pela formula de Haversine, nao rota ou quilometragem percorrida. A precisao do GPS (ex.: +/-16 m) e uma incerteza separada; o valor nao comprova presenca. Nao ha bloqueio por raio nem rastreamento continuo.
+- Cada evento guarda o ponto/endereco utilizado naquele momento. Alterar o ponto ou endereco nao recalcula eventos passados. Mudar o endereco exige nova confirmacao; registros antigos sem referencia continuam explicitamente indisponiveis, nunca zero ficticio.
+- Sem permissao/sinal de GPS, o registro de check-in/check-out informa o erro. Sem ponto confirmado, o GPS pode ser registrado mas a distancia nao fica disponivel.
+- O mapa usa mosaicos do OpenStreetMap, com atribuicao; nao envia o endereco para geocodificacao. Latitude/longitude manuais permitem confirmar um ponto mesmo se os mosaicos nao carregarem.
+- O registro administrativo Web local captura o GPS do dispositivo do administrador e preserva essa origem, sem se passar por registro do tecnico no aplicativo. Data/autoria administrativas continuam informadas manualmente.
+- Publicacao: aplicar `supabase/migrations/20261015010000_service_distance.sql` depois das migracoes anteriores e publicar a versao web/aplicativo atualizada. Sem essa migracao, o RPC antigo nao grava a distancia no servidor. O aplicativo Android instalado precisa receber a compilacao atualizada para exibir os novos campos; nao foram publicados nesta entrega.
+- Validacao local: 199 testes passando, incluindo calculo geografico, calculo do servidor sem confiar no aparelho, preservacao da referencia historica e filtros por data/autoria do evento. No navegador foram conferidos clique no mapa, confirmacao/remocao, recuperacao do ponto apos atualizar, persistencia apos salvar, invalidacao por mudanca de endereco e conteudo CSV com registro simulado de 1112 m e precisao de 16 m. GPS fisico e publicacao remota nao foram testados.
+
+## Cobranca e custo interno de deslocamento
+
+- Configuracoes possui preco do combustivel (R$/litro), rendimento (km/litro), tarifa de cobranca (R$/km) e ponto confirmado de saida da assistencia.
+- Em **Valores** da OS, no modo edicao, **Calcular rota e custos** consulta ida e volta de carro separadamente pelo Google Maps. Apos calcular, escolha **Cobranca de deslocamento: Sim/Nao**, informe os pedagios totais de ida e volta e salve.
+- Com **Sim**, somente `km totais x tarifa/km + pedagios` entra no total cobrado, antes do desconto geral existente. Com **Nao**, nada de deslocamento e cobrado.
+- Nos dois casos o custo de combustivel e `(km totais / km por litro) x preco por litro`; o custo interno total soma tambem os pedagios. O campo legado **Custos adicionais** continua sendo acrescimo cobrado da OS: nao e usado para inserir combustivel e nao deve receber o mesmo pedagio novamente.
+- Precos, pontos, rotas, data do calculo e escolha de cobranca ficam na OS. Mudar os padroes nao altera calculos antigos. Recalcular aplica as configuracoes atuais; remover o calculo e replicar a OS nao reutilizam custos/cobrancas anteriores.
+- **Relatorios > Custos de deslocamento** e seu CSV mostram custos e cobranca separadamente, com filtros por data da OS, cliente, colaborador e busca. OS sem calculo nao recebem custo zero ficticio; ficam fora dos totais, com quantidade informada. Custos estimados nao sao somados novamente as despesas manuais.
+- Documento do cliente (impressao, previa e exportacao TXT) mostra o deslocamento cobrado apenas quando Sim. Consumo, preco do combustivel e custo interno permanecem fora desse documento.
+- Falha no Google, configuracao ausente, ponto antigo e acesso indevido geram erro explicito, sem substituir por distancia em linha reta. Se havia calculo anterior, ele e preservado. Pontos alterados exibem aviso na OS ate novo calculo.
+- Consulte o README para habilitar Routes API/faturamento, secret Google no Supabase, migracao `20261015020000_travel_route_limits.sql` e deploy da funcao `travel-route`. Nenhuma chave privada e salva no navegador. Novos calculos exigem banco seguro e acesso administrativo.
+- Validacao local: 227 testes passando, incluindo formulas de 70 km, Sim/Nao, arredondamento, precos historicos, visibilidade do documento e duas pernas independentes da API simulada, alem do limite SQL por empresa. Navegador: configuracoes persistidas, cobranca Sim/Nao salva, rascunho recuperado apos atualizar, custo R$62 preservado nos dois casos, cobranca R$195 somente em Sim, documento sem custos internos, filtros e CSV. Os testes de navegador usaram rotas ficticias e restauraram a base demo; nao houve consulta paga ao Google nem publicacao remota.
 
 ## Validacao desta entrega
 

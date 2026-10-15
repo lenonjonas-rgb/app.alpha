@@ -1,14 +1,18 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
+import { z } from "zod";
 import { Minus, Plus, Save, Trash2 } from "lucide-react";
 import {
   currency,
   localDay,
+  equipmentSelectionSchema,
+  lineSchema,
   makeId,
   nextCode,
   orderDetailsSchema,
   getOrderDetails,
   serviceLocationSchema,
+  servicePointSchema,
   shiftDay,
   subtotal,
 } from "./domain";
@@ -59,6 +63,112 @@ export type Editor = {
   clientId?: string;
   equipmentId?: string;
 };
+type SavedFormControl = {
+  name: string;
+  value: string;
+  checked?: boolean;
+  selected?: string[];
+};
+type SavedFormDraft = Record<string, SavedFormControl[]>;
+function formDraftKey(scope: string, editor: Editor) {
+  return `alpha-tec.form-draft.v1.${scope}.${editor.kind}.${editor.id ?? "new"}`;
+}
+function readFormDraft(key: string): SavedFormDraft | null {
+  try {
+    const value: unknown = JSON.parse(sessionStorage.getItem(key) ?? "null");
+    if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+    const draft = value as Record<string, unknown>;
+    for (const [name, controls] of Object.entries(draft)) {
+      if (!Array.isArray(controls) || !controls.every((control) =>
+        control && typeof control === "object" &&
+        "name" in control && control.name === name &&
+        "value" in control && typeof control.value === "string",
+      )) return null;
+    }
+    return draft as SavedFormDraft;
+  } catch (error) {
+    console.warn("Não foi possível restaurar os campos do formulário.", error);
+    try {
+      sessionStorage.removeItem(key);
+    } catch (removeError) {
+      console.warn("Não foi possível remover os campos temporários inválidos.", removeError);
+    }
+    return null;
+  }
+}
+function savedFormValue(draft: SavedFormDraft | null, name: string, fallback: string) {
+  return draft?.[name]?.[0]?.value ?? fallback;
+}
+function savedServicePoint(draft: SavedFormDraft | null) {
+  const value = savedFormValue(draft, "servicePoint", "");
+  if (!value) return undefined;
+  try {
+    return servicePointSchema.parse(JSON.parse(value));
+  } catch (cause) {
+    console.warn("Ponto do atendimento inválido no rascunho. Confirme o ponto novamente.", cause);
+    return undefined;
+  }
+}
+function savedFormArray<T>(
+  draft: SavedFormDraft | null,
+  name: string,
+  schema: z.ZodType<T>,
+): T[] | null {
+  try {
+    const parsed = z.array(schema).safeParse(JSON.parse(savedFormValue(draft, name, "null")));
+    return parsed.success ? parsed.data : null;
+  } catch {
+    return null;
+  }
+}
+function saveFormDraft(form: HTMLFormElement, key: string) {
+  const draft: SavedFormDraft = {};
+  Array.from(form.elements).forEach((element) => {
+    if (!(element instanceof HTMLInputElement || element instanceof HTMLSelectElement || element instanceof HTMLTextAreaElement)) return;
+    if (!element.name || ["file", "password", "submit", "reset", "button"].includes(element.type)) return;
+    const controls = draft[element.name] ?? [];
+    if (element instanceof HTMLInputElement && ["checkbox", "radio"].includes(element.type)) {
+      controls.push({ name: element.name, value: element.value, checked: element.checked });
+    } else if (element instanceof HTMLSelectElement && element.multiple) {
+      controls.push({ name: element.name, value: element.value, selected: Array.from(element.selectedOptions, (option) => option.value) });
+    } else {
+      controls.push({ name: element.name, value: element.value });
+    }
+    draft[element.name] = controls;
+  });
+  try {
+    sessionStorage.setItem(key, JSON.stringify(draft));
+  } catch (error) {
+    console.warn("Não foi possível salvar os campos temporários do formulário.", error);
+  }
+}
+function restoreFormDraft(form: HTMLFormElement, draft: SavedFormDraft) {
+  Object.entries(draft).forEach(([name, savedControls]) => {
+    const controls = Array.from(form.elements).filter((element) =>
+      (element instanceof HTMLInputElement || element instanceof HTMLSelectElement || element instanceof HTMLTextAreaElement) &&
+      element.name === name,
+    );
+    savedControls.forEach((saved, index) => {
+      const element = controls[index];
+      if (!(element instanceof HTMLInputElement || element instanceof HTMLSelectElement || element instanceof HTMLTextAreaElement)) return;
+      if (element instanceof HTMLInputElement && ["checkbox", "radio"].includes(element.type)) {
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "checked")?.set?.call(element, saved.checked ?? false);
+        element.dispatchEvent(new Event("change", { bubbles: true }));
+      } else if (element instanceof HTMLSelectElement && element.multiple) {
+        Array.from(element.options).forEach((option) => { option.selected = saved.selected?.includes(option.value) ?? false; });
+        element.dispatchEvent(new Event("change", { bubbles: true }));
+      } else {
+        const prototype = element instanceof HTMLInputElement
+          ? HTMLInputElement.prototype
+          : element instanceof HTMLTextAreaElement
+            ? HTMLTextAreaElement.prototype
+            : HTMLSelectElement.prototype;
+        Object.getOwnPropertyDescriptor(prototype, "value")?.set?.call(element, saved.value);
+        element.dispatchEvent(new Event(element instanceof HTMLSelectElement ? "change" : "input", { bubbles: true }));
+      }
+    });
+  });
+}
 const getText = (form: FormData, key: string) =>
   String(form.get(key) ?? "").trim();
 const getNumber = (form: FormData, key: string) => Number(getText(form, key));
@@ -293,6 +403,7 @@ export function EditorModal({
   editor,
   data,
   commit,
+  draftScope,
   onClose,
   onSuccess,
   onClientEquipment,
@@ -300,33 +411,45 @@ export function EditorModal({
   editor: Editor;
   data: Database;
   commit: (update: Database | ((data: Database) => Database)) => void;
-  onClose: () => void;
+  draftScope: string;
+  onClose: (saved?: boolean) => void;
   onSuccess: (text: string) => void;
   onClientEquipment?: (clientId: string) => void;
 }) {
   const [error, setError] = useState("");
+  const [draftRecovered, setDraftRecovered] = useState(false);
+  const formRef = useRef<HTMLFormElement>(null);
+  const draftKey = formDraftKey(draftScope || "local", editor);
+  const [savedDraft] = useState(() => draftScope ? readFormDraft(draftKey) : null);
+  const [draftReady, setDraftReady] = useState(() => !savedDraft);
   const technicians = useTechnicians(editor.kind === "order");
   const [assignedTechnicianId, setAssignedTechnicianId] = useState(() =>
     editor.kind === "order"
-      ? (data.orders.find((record) => record.id === editor.id)?.technicianUserId ?? "")
+      ? savedFormValue(savedDraft, "technicianUserId", data.orders.find((record) => record.id === editor.id)?.technicianUserId ?? "")
       : "",
   );
   const [clientId, setClientId] = useState(() =>
     editor.kind === "order"
-      ? (data.orders.find((record) => record.id === editor.id)?.clientId ?? editor.clientId ?? "")
+      ? savedFormValue(savedDraft, "clientId", data.orders.find((record) => record.id === editor.id)?.clientId ?? editor.clientId ?? "")
       : "",
   );
-  const [lines, setLines] = useState<Line[]>(
-    () => data.quotes.find((record) => record.id === editor.id)?.items ?? [],
-  );
+  const [lines, setLines] = useState<Line[]>(() => {
+    const saved = savedFormArray(savedDraft, "draftLines", lineSchema);
+    return saved ?? data.quotes.find((record) => record.id === editor.id)?.items ?? [];
+  });
   const [discount, setDiscount] = useState(
-    () =>
-      (data.quotes.find((record) => record.id === editor.id)?.discount ?? 0) /
-      100,
+    () => {
+      const initial = (data.quotes.find((record) => record.id === editor.id)?.discount ?? 0) / 100;
+      const saved = Number(savedFormValue(savedDraft, "discount", String(initial)));
+      return Number.isFinite(saved) && saved >= 0 ? saved : initial;
+    },
   );
-  const [catalogId, setCatalogId] = useState("");
-  const [orderType, setOrderType] = useState<Order["type"]>(() => data.orders.find((record) => record.id === editor.id)?.type ?? "Corretiva");
-  const [questionnaireId, setQuestionnaireId] = useState(() => editor.id ? "" : data.orderTypeQuestionnaires.find((item) => item.type === "Corretiva")?.questionnaireId ?? "");
+  const [catalogId, setCatalogId] = useState(() => savedFormValue(savedDraft, "catalogId", ""));
+  const [orderType, setOrderType] = useState<Order["type"]>(() => {
+    const saved = savedFormValue(savedDraft, "type", data.orders.find((record) => record.id === editor.id)?.type ?? "Corretiva");
+    return orderTypes.find((type) => type === saved) ?? "Corretiva";
+  });
+  const [questionnaireId, setQuestionnaireId] = useState(() => savedFormValue(savedDraft, "questionnaireId", editor.id ? "" : data.orderTypeQuestionnaires.find((item) => item.type === "Corretiva")?.questionnaireId ?? ""));
   const client = data.clients.find((record) => record.id === editor.id);
   const equipment = data.equipment.find((record) => record.id === editor.id);
   const product = data.products.find((record) => record.id === editor.id);
@@ -334,13 +457,18 @@ export function EditorModal({
   const order = data.orders.find((record) => record.id === editor.id);
   const quote = data.quotes.find((record) => record.id === editor.id);
   const generalChecklists = order ? getOrderDetails(order).checklists.filter((item) => !item.equipmentId) : [];
-  const [generalChecklistId, setGeneralChecklistId] = useState("");
+  const [generalChecklistId, setGeneralChecklistId] = useState(() => savedFormValue(savedDraft, "generalChecklistId", ""));
   const [equipmentOpen, setEquipmentOpen] = useState(false);
   const [orderEquipment, setOrderEquipment] = useState<OrderEquipmentSelection[]>(() => {
     const ids = order ? [order.equipmentId, ...getOrderDetails(order).equipmentIds] : [editor.equipmentId ?? ""];
-    return [...new Set(ids.filter(Boolean))].map((equipmentId) => ({
+    const fallback = [...new Set(ids.filter(Boolean))].map((equipmentId) => ({
       equipmentId, questionnaireId: order ? "" : equipmentDefaultQuestionnaire(data, equipmentId, orderType),
     }));
+    const selectionSchema = z.array(z.object({ equipmentId: z.string(), questionnaireId: z.string(), checklistId: z.string().optional() }));
+    const saved = savedFormArray(savedDraft, "draftOrderEquipment", selectionSchema.element);
+    return saved
+      ? saved.filter((selection) => data.equipment.some((item) => item.id === selection.equipmentId && item.clientId === clientId))
+      : fallback;
   });
   const clientEquipment = data.equipment.filter((item) => item.clientId === clientId);
   const equipmentQuestionnaires = data.questionnaires.filter((item) => !item.archived && item.display.equipment);
@@ -348,12 +476,13 @@ export function EditorModal({
   function equipmentSelection(equipmentId: string): OrderEquipmentSelection {
     return { equipmentId, questionnaireId: previousEquipmentIds.includes(equipmentId) ? "" : equipmentDefaultQuestionnaire(data, equipmentId, orderType) };
   }
-  const [modelId, setModelId] = useState(equipment?.model?.modelId ?? "");
-  const [equipmentName, setEquipmentName] = useState(equipment?.name ?? "");
-  const [equipmentCategory, setEquipmentCategory] = useState(equipment?.category ?? "Cardio");
-  const [selectedModels, setSelectedModels] = useState<EquipmentSelection[]>(() =>
-    editor.kind === "order" && order ? getOrderDetails(order).equipmentModels : quote?.equipmentModels ?? [],
-  );
+  const [modelId, setModelId] = useState(savedFormValue(savedDraft, "modelId", equipment?.model?.modelId ?? ""));
+  const [equipmentName, setEquipmentName] = useState(savedFormValue(savedDraft, "name", equipment?.name ?? ""));
+  const [equipmentCategory, setEquipmentCategory] = useState(savedFormValue(savedDraft, "category", equipment?.category ?? "Cardio"));
+  const [selectedModels, setSelectedModels] = useState<EquipmentSelection[]>(() => {
+    const saved = savedFormArray(savedDraft, "draftSelectedModels", equipmentSelectionSchema);
+    return saved ?? (editor.kind === "order" && order ? getOrderDetails(order).equipmentModels : quote?.equipmentModels ?? []);
+  });
   const titles: Record<FormKind, string> = {
     client: "cliente",
     equipment: "equipamento",
@@ -363,6 +492,34 @@ export function EditorModal({
     quote: "orçamento",
     movement: "movimentação de estoque",
   };
+  useEffect(() => {
+    const form = formRef.current;
+    if (!form || !draftScope) return;
+    const draft = readFormDraft(draftKey);
+    const save = () => saveFormDraft(form, draftKey);
+    form.addEventListener("input", save);
+    form.addEventListener("change", save);
+    let restoreFrame = 0;
+    if (draft) {
+      restoreFrame = requestAnimationFrame(() => {
+        setDraftRecovered(true);
+        restoreFormDraft(form, draft);
+        restoreFrame = requestAnimationFrame(() => {
+          restoreFormDraft(form, draft);
+          setDraftReady(true);
+        });
+      });
+    }
+    return () => {
+      cancelAnimationFrame(restoreFrame);
+      form.removeEventListener("input", save);
+      form.removeEventListener("change", save);
+    };
+  }, [draftKey, draftScope]);
+  useEffect(() => {
+    if (!draftReady || !draftScope || !formRef.current) return;
+    saveFormDraft(formRef.current, draftKey);
+  }, [draftKey, draftReady, draftScope, discount, lines, orderEquipment, selectedModels]);
 
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -532,6 +689,9 @@ export function EditorModal({
             });
             const details = {
               ...previousDetails,
+              servicePoint: getText(form, "servicePoint")
+                ? servicePointSchema.parse(JSON.parse(getText(form, "servicePoint")))
+                : undefined,
               equipmentModels: selectedModels,
               equipmentIds: equipmentLinks.equipmentIds,
               serviceLocation,
@@ -600,7 +760,7 @@ export function EditorModal({
         }
       });
       onSuccess("Registro salvo.");
-      onClose();
+      onClose(true);
     } catch (cause) {
       setError(errorMessage(cause));
       if (editor.kind === "order" && orderEquipment.length > 0) setEquipmentOpen(true);
@@ -654,8 +814,12 @@ export function EditorModal({
       wide={editor.kind === "quote"}
       onClose={onClose}
     >
-      <form onSubmit={submit}>
+      <form ref={formRef} onSubmit={submit}>
+        <input type="hidden" name="draftLines" value={JSON.stringify(lines)} readOnly />
+        <input type="hidden" name="draftOrderEquipment" value={JSON.stringify(orderEquipment)} readOnly />
+        <input type="hidden" name="draftSelectedModels" value={JSON.stringify(selectedModels)} readOnly />
         <div className="modal-body">
+          {draftRecovered && <p className="full" role="status">Rascunho recuperado automaticamente. Arquivos ainda não salvos não são recuperados.</p>}
           {error && (
             <div role="alert" className="error-message">
               {error}
@@ -670,6 +834,7 @@ export function EditorModal({
             )}
             {editor.kind === "equipment" && (
               <>
+                <input type="hidden" name="modelId" value={modelId} readOnly />
                 <EquipmentModelPicker data={data} value={modelId} onChange={(id) => {
                   setModelId(id);
                   if (id) {
@@ -868,6 +1033,7 @@ export function EditorModal({
                   key={clientId}
                   client={data.clients.find((item) => item.id === clientId)}
                   details={order?.clientId === clientId ? getOrderDetails(order) : undefined}
+                  initialPoint={savedServicePoint(savedDraft)}
                 />
                 {clientEquipment.length > 0 && <section className="field full order-equipment-picker">
                   <button type="button" className="button secondary" aria-expanded={equipmentOpen} aria-controls="order-client-equipment" onClick={() => setEquipmentOpen(!equipmentOpen)}>
@@ -981,7 +1147,7 @@ export function EditorModal({
                 </label>
                 {(order || orderEquipment.length === 0) && <label className="field full">
                   {order ? "Questionário geral da tarefa" : "Questionário"}
-                  <select aria-label={order ? "Questionário geral da tarefa" : "Questionário"} value={questionnaireId} onChange={(event) => setQuestionnaireId(event.target.value)}>
+                  <select name="questionnaireId" aria-label={order ? "Questionário geral da tarefa" : "Questionário"} value={questionnaireId} onChange={(event) => setQuestionnaireId(event.target.value)}>
                     <option value="">{order ? "Preservar questionários atuais, sem adicionar" : "Sem questionário"}</option>
                     {data.questionnaires.filter((item) => !item.archived).map((item) => <option key={item.id} value={item.id}>{item.title}</option>)}
                   </select>
@@ -989,7 +1155,7 @@ export function EditorModal({
                 </label>}
                 {order && generalChecklists.length > 1 && <label className="field full">
                   Questionário geral a substituir
-                  <select value={generalChecklistId} required={Boolean(questionnaireId)} onChange={(event) => setGeneralChecklistId(event.target.value)}>
+                  <select name="generalChecklistId" value={generalChecklistId} required={Boolean(questionnaireId)} onChange={(event) => setGeneralChecklistId(event.target.value)}>
                     <option value="">Selecione o vínculo atual</option>
                     {generalChecklists.map((checklist) => <option key={checklist.id} value={checklist.id}>{checklist.title}</option>)}
                   </select>
@@ -1053,6 +1219,7 @@ export function EditorModal({
                     <label className="field">
                       Produto ou serviço
                       <select
+                        name="catalogId"
                         value={catalogId}
                         onChange={(event) => setCatalogId(event.target.value)}
                       >
