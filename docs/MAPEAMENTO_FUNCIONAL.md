@@ -122,8 +122,21 @@ Abas observadas: Geral, Equipamentos, Valores e Anexos.
 - As configuracoes/automacoes mostram estados: aberta, a caminho, em execucao, pausada e finalizada, com ou sem pendencia.
 - Transicoes e permissoes de cada estado nao foram testadas.
 - Relatorio de tarefas oferece copiar link, finalizar, enviar pesquisa, enviar por email, faturar OS e detalhar tarefa.
+- No menu **Copiar link**, a tela apresenta duas opcoes: **OS Digital** e **Pesquisa de Satisfacao**. Conforme a descricao funcional informada, a primeira gera um link para o cliente visualizar o relatorio da OS ou baixar o PDF; a segunda gera um link para responder a pesquisa de satisfacao, com respostas que podem apoiar o acompanhamento dos tecnicos.
+- Sao dois compartilhamentos com finalidades e dados diferentes: o primeiro expoe o documento do atendimento; o segundo apresenta ao cliente perguntas para avaliar o atendimento recebido e o servico prestado, com feedback associado ao atendimento/tecnico. A pesquisa deve capturar a percepcao do cliente sobre a qualidade/solucao do servico e sua experiencia com o tecnico; nao e o questionario tecnico de execucao. A imagem e a descricao nao permitem confirmar formato dos links, autenticacao, validade/revogacao, perguntas exatas, escala, regra de respostas ou calculo dos indicadores.
 - O botao Detalhar tarefa foi acionado, mas nao disponibilizou conteudo novo na aba compartilhada. Detalhes de historico/execucao permanecem pendentes.
 - Fotos, assinatura, relato, pausas, equipamentos, anexos e valores aparecem entre os campos configuraveis da OS digital. Sua coleta em uma tarefa real nao foi executada.
+
+### 3.4 Mapa de integracao: links para cliente
+
+| Funcao de referencia | Fluxo a integrar | Situacao atual no Alpha Tec |
+| --- | --- | --- |
+| OS Digital | Gerar um link compartilhavel da OS; permitir ao cliente consultar o relatorio e baixar/imprimir o PDF | A tela da OS tem impressao local e o botao **Copiar link interno** aponta para `#orders/{id}`. Nao e um link publico; o documento exportado pela aba Envios e somente texto local. PDF publico/servidor e portal do cliente nao estao implementados. |
+| Pesquisa de Satisfacao | Gerar um link com perguntas para o cliente avaliar o atendimento e o servico recebido; registrar a resposta vinculada a OS e ao tecnico para consulta/indicadores | Ha catalogo e respostas de questionarios tecnicos, mas isso nao equivale a uma pesquisa publica para avaliacao do atendimento pelo cliente. O relatorio de satisfacao ainda nao tem respostas integradas e o envio real nao esta implementado. |
+
+Para compor os fluxos no sistema, a integracao precisa manter separados: (1) o acesso de leitura ao relatorio da OS, incluindo a versao PDF; e (2) o formulario que o cliente responde para avaliar o atendimento e o registro dessa resposta. Como contrato funcional inicial, mapear a OS, cliente, tecnico responsavel, link/identificador de compartilhamento, estado e datas de envio/resposta; para a pesquisa, mapear tambem as respostas e a data de submissao. Os indicadores por tecnico devem ser derivados das avaliacoes recebidas dos clientes, nao dos questionarios de execucao preenchidos pelo tecnico.
+
+Antes da implementacao, confirmar com o produto as regras de acesso e validade/revogacao dos links, se a pesquisa identifica o cliente ou permite anonimato, se admite uma ou varias respostas por atendimento, quais perguntas/escala serao usadas e como serao calculados os indicadores. A evidencia atual nao confirma essas regras.
 
 ## 4. Projetos
 

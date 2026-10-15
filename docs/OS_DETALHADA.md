@@ -51,6 +51,25 @@ O resumo da tarefa possui abas Tarefa, Monitoramento, Equipamentos, Orcamentos e
 9. Copiar link interno gera `#orders/{id}`. O link depende dos dados da mesma origem/navegador e nao deve ser apresentado como link publico para clientes.
 10. Imprimir prepara documento com dados, orientacoes, relato, equipamentos, questionarios, pendencias, atividades, valores, orcamentos, fotos/anexos e assinatura, independentemente da aba aberta.
 
+## Integracao pendente: compartilhamento com o cliente
+
+A referencia funcional tem duas opcoes no menu **Copiar link**:
+
+- **OS Digital**: link para o cliente visualizar o relatorio do atendimento ou baixar o PDF.
+- **Pesquisa de Satisfacao**: link para o cliente avaliar o atendimento e o servico recebido. As respostas devem ser relacionadas a OS e ao tecnico responsavel para acompanhar a percepcao dos clientes sobre a qualidade/solucao do servico e sua experiencia com o tecnico. Nao se trata dos questionarios tecnicos preenchidos durante a execucao.
+
+Esses fluxos ainda nao existem como compartilhamento publico no Alpha Tec. O botao atual copia somente uma rota interna `#orders/{id}`, dependente dos dados locais da mesma origem/navegador. A impressao da OS e local; em **Envios**, a exportacao e texto local, e OS digital/pesquisa aparecem como nao enviadas. O catalogo de questionarios serve para coleta tecnica durante a execucao, nao para respostas de satisfacao do cliente. O relatorio de satisfacao nao recebe respostas integradas.
+
+Mapa de dados a considerar na integracao:
+
+| Registro | Dados que devem ser relacionados |
+| --- | --- |
+| Compartilhamento da OS | OS, cliente, tecnico responsavel, identificador do link, estado e datas de criacao/envio/acesso; documento renderizado com opcao de leitura e PDF |
+| Compartilhamento da pesquisa | OS, cliente, tecnico responsavel, identificador do link, estado e datas de criacao/envio/resposta; formulario de avaliacao do atendimento |
+| Resposta de satisfacao | Pesquisa, atendimento, tecnico, avaliacao e comentarios do cliente, data de submissao; base para indicadores e filtros por tecnico/periodo |
+
+Regras de validade/revogacao, acesso publico ou autenticado, identificacao/anominato do respondente, limite de respostas, perguntas/escala e calculo dos indicadores nao foram confirmadas pela referencia. Definir essas regras antes de disponibilizar links externos; nao reutilizar o link interno nem confundir respostas do tecnico ao questionario de execucao com feedback do cliente.
+
 ## Regras locais e limites
 
 - Campos novos opcionais preservam compatibilidade com a base anterior e backups da versao 1.
