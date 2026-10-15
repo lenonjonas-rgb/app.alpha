@@ -45,13 +45,14 @@ export function travelRouteHandler(env: Environment, fetcher: typeof fetch = fet
     const authorization = request.headers.get("Authorization");
     if (!authorization?.match(/^Bearer \S+$/i)) return response(401, { error: "Entre na conta para calcular rotas." });
     const headers = { apikey: env.publicKey, Authorization: authorization, "Content-Type": "application/json" };
-    async function api(path: string, body?: object) {
+    async function api(path: string, body?: object, readResponse = true) {
       const result = await fetcher(`${env.url}${path}`, {
         method: body ? "POST" : "GET",
         headers,
         body: body ? JSON.stringify(body) : undefined, signal: AbortSignal.timeout(15000),
       });
       if (!result.ok) throw new Error("Não foi possível consultar a empresa ou reservar o cálculo. Verifique o acesso, a migração de rotas e aguarde alguns segundos antes de repetir.");
+      if (!readResponse) return;
       return await result.json() as unknown;
     }
     let userId: string;
@@ -78,7 +79,7 @@ export function travelRouteHandler(env: Environment, fetcher: typeof fetch = fet
         if (typeof fields.address !== "string" || fields.address.trim().length < 8 || fields.address.length > 2000 ||
           Object.keys(fields).some((key) => !["action", "address"].includes(key)))
           throw new Error("Informe um endereço completo de até 2000 caracteres.");
-        try { await api("/rest/v1/rpc/reserve_address_lookup", {}); }
+        try { await api("/rest/v1/rpc/reserve_address_lookup", {}, false); }
         catch { return response(429, { error: "Não foi possível autorizar a consulta de endereço. Aguarde um minuto se atingiu o limite e confira se a migração de geocodificação foi aplicada." }); }
         try { return response(200, await geocodeAddress(fields.address, env.googleKey, fetcher)); }
         catch (cause) { return response(502, { error: cause instanceof Error ? cause.message : "Não foi possível localizar o endereço." }); }
@@ -102,7 +103,7 @@ export function travelRouteHandler(env: Environment, fetcher: typeof fetch = fet
       if (destination.address !== serviceAddress(details, client))
         throw new Error("O endereço mudou. Confirme novamente o ponto do atendimento e salve a OS.");
     } catch (cause) { return response(400, { error: cause instanceof Error ? cause.message : "Confira os pontos cadastrados." }); }
-    try { await api("/rest/v1/rpc/reserve_travel_route", {}); }
+    try { await api("/rest/v1/rpc/reserve_travel_route", {}, false); }
     catch { return response(429, { error: "Cálculo não autorizado ou muito frequente. Aguarde 10 segundos e verifique se a migração de rotas foi aplicada." }); }
     async function leg(from: Point, to: Point) {
       const location = (value: Point) => ({ location: { latLng: { latitude: value.latitude, longitude: value.longitude } } });

@@ -46,13 +46,13 @@ describe("geocodificação Google protegida", () => {
     await expect(geocodeAddress(address, env.googleKey, async () => json({}, 403))).rejects.toThrow("Geocoding API");
   });
 
-  function setup(role = "owner", limited = false) {
+  function setup(role = "owner", limited = false, reservationStatus = 204) {
     const fetcher = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url.endsWith("/auth/v1/user")) return json({ id: "00000000-0000-4000-8000-000000000001" });
       if (url.includes("/company_memberships?"))
         return json([{ company_id: "10000000-0000-4000-8000-000000000001", role }]);
-      if (url.endsWith("/rpc/reserve_address_lookup")) return json(null, limited ? 400 : 200);
+      if (url.endsWith("/rpc/reserve_address_lookup")) return limited ? json(null, 400) : new Response(null, { status: reservationStatus });
       if (url.startsWith("https://maps.googleapis.com/"))
         return json({ status: "OK", results: [found()] });
       throw new Error("Unexpected request");
@@ -66,6 +66,10 @@ describe("geocodificação Google protegida", () => {
     expect(await response.json()).toMatchObject({ address, source: "Google Maps" });
     expect(fetcher.mock.calls.map((call) => String(call[0])).some((url) => url.endsWith("/rpc/reserve_address_lookup"))).toBe(true);
     expect(fetcher.mock.calls.map((call) => String(call[0])).some((url) => url.includes("/company_data"))).toBe(false);
+  });
+  it("aceita também reserva bem-sucedida com corpo vazio e status 200", async () => {
+    const { handler } = setup("owner", false, 200);
+    expect((await handler(request())).status).toBe(200);
   });
   it("não permite que técnico consuma a API paga", async () => {
     const { handler, fetcher } = setup("technician");

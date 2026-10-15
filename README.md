@@ -278,6 +278,8 @@ npx supabase functions deploy travel-route
 
 A funcao valida o JWT em `/auth/v1/user` e exige papel owner/admin na mesma empresa. Para rotas, o navegador envia apenas o ID da OS e o servidor consulta os pontos salvos via RLS com o token do chamador; ao Google sao enviadas as coordenadas. Para geocodificacao, o navegador envia o endereco em preenchimento (que ainda pode nao estar salvo), e o servidor envia esse texto ao Google. Nao sao enviados nomes de clientes, valores ou documento da empresa pela consulta; nao inclua dados pessoais extras no campo de endereco. A chave Google nunca e retornada. Pedagios sao informados manualmente, nao consultados automaticamente. Sem secret, migracao, API habilitada ou funcao publicada, o erro e exibido e nao e criado um ponto/calculo ficticio. Republique a funcao existente e a versao web atualizada para ativar a busca automatica; chamadas reais pagas ao provedor nao fazem parte dos testes.
 
+As RPCs de reserva de consultas/rotas retornam `void`: respostas HTTP bem-sucedidas sem corpo (200/204) sao aceitas sem tentar ler JSON. Se uma versao antiga mostrar erro de autorizacao mesmo com a migracao aplicada, republique `travel-route` com a correcao; nao e necessario executar novamente as migracoes. Limites e recusas HTTP continuam bloqueando chamadas ao Google.
+
 ## Estrutura
 
 - `app/src/domain.ts`: tipos, esquemas, regras, valores monetarios em centavos e dados ficticios.

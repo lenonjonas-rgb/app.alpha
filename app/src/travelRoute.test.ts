@@ -21,7 +21,7 @@ function setup({ role = "owner", stale = false, found = true, googleStatus = 200
       orders: found ? [{ id: "order-1", clientId: "client", details: { servicePoint: { ...destination, address: stale ? "Antigo" : destination.address, ...(geocoded ? { source: "Google Maps" } : {}) } } }] : [],
       clients: [{ id: "client", address: destination.address }],
     } }]);
-    if (url.endsWith("/rpc/reserve_travel_route")) return json(null, reserveStatus);
+    if (url.endsWith("/rpc/reserve_travel_route")) return new Response(null, { status: reserveStatus });
     if (url.startsWith("https://routes.googleapis.com/")) {
       legs.push({ body: JSON.parse(String(init?.body)), headers: new Headers(init?.headers) });
       return json(noRoutes ? { routes: [] } : { routes: [{ distanceMeters: legs.length === 1 ? 30000 : 40000 }] }, googleStatus);
@@ -83,6 +83,11 @@ describe("Google Maps Routes protegido no servidor", () => {
     const { handler, legs } = setup({ reserveStatus: 400 });
     expect((await handler(request())).status).toBe(429);
     expect(legs).toHaveLength(0);
+  });
+  it("aceita a reserva SQL sem corpo com status 204 antes de calcular as duas pernas", async () => {
+    const { handler, legs } = setup({ reserveStatus: 204 });
+    expect((await handler(request())).status).toBe(200);
+    expect(legs).toHaveLength(2);
   });
   it("sem chave configurada e sem sessão não faz chamadas externas", async () => {
     const fetcher = vi.fn();
