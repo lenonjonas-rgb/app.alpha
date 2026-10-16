@@ -23,24 +23,37 @@ describe("consulta de CNPJ", () => {
     expect(isValidCnpj("ABCDEF123456")).toBe(false);
   });
 
-  it("consulta e normaliza os dados cadastrais públicos", async () => {
+  it("consulta e normaliza cadastro público, incluindo inscrições estaduais", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(
         JSON.stringify({
-          cnpj: "11222333000181",
+          cnpj_raiz: "11222333",
           razao_social: "Empresa Exemplo LTDA",
-          nome_fantasia: "Exemplo",
-          descricao_situacao_cadastral: "Ativa",
-          data_inicio_atividade: "2020-01-02",
-          logradouro: "Rua das Flores",
-          numero: "10",
-          bairro: "Centro",
-          municipio: "São Paulo",
-          uf: "SP",
-          cep: "01001000",
-          ddd_telefone_1: "1133334444",
-          email: "contato@example.test",
-          cnae_fiscal: 1234567,
+          socios: [{ nome: "Pessoa física que não deve ser salva" }],
+          natureza_juridica: { descricao: "Sociedade Empresária Limitada" },
+          porte: { descricao: "Microempresa" },
+          simples: { simples_optante: "Sim" },
+          mei: { optante: "Não" },
+          estabelecimento: {
+            cnpj: "11222333000181",
+            nome_fantasia: "Exemplo",
+            situacao_cadastral: "Ativa",
+            data_inicio_atividade: "2020-01-02",
+            tipo_logradouro: "Rua",
+            logradouro: "das Flores",
+            numero: "10",
+            bairro: "Centro",
+            cep: "01001000",
+            ddd1: "11",
+            telefone1: "33334444",
+            email: "contato@example.test",
+            cidade: { nome: "São Paulo" },
+            estado: { sigla: "SP" },
+            cnae_fiscal: 1234567,
+            cnae_fiscal_descricao: "Atividade principal",
+            cnae_fiscal_secundaria: [{ cnae_fiscal: 7654321, descricao: "Atividade secundária" }],
+            inscricoes_estaduais: [{ inscricao_estadual: "123456789", ativo: true, estado: { sigla: "SP" } }],
+          },
         }),
         { status: 200, headers: { "Content-Type": "application/json" } },
       ),
@@ -49,7 +62,7 @@ describe("consulta de CNPJ", () => {
     try {
       const company = await lookupCompanyByCnpj("11.222.333/0001-81");
       expect(fetchMock).toHaveBeenCalledWith(
-        "https://brasilapi.com.br/api/cnpj/v1/11222333000181",
+        "https://publica.cnpj.ws/cnpj/11222333000181",
         { signal: undefined },
       );
       expect(company).toMatchObject({
@@ -57,17 +70,35 @@ describe("consulta de CNPJ", () => {
         legalName: "Empresa Exemplo LTDA",
         tradeName: "Exemplo",
         registrationStatus: "Ativa",
-        address: "Rua das Flores, 10 · Centro · São Paulo - SP · CEP 01001000",
+        address: "Rua das Flores 10 · Centro · São Paulo - SP · CEP 01001000",
+        addressDetails: {
+          street: "Rua das Flores",
+          number: "10",
+          complement: "",
+          district: "Centro",
+          postalCode: "01001000",
+          municipality: "",
+          city: "São Paulo",
+          state: "SP",
+        },
         phone: "1133334444",
         email: "contato@example.test",
-        raw: { cnae_fiscal: 1234567 },
+        stateRegistrations: [{ state: "SP", number: "123456789", active: true }],
+        mainCnae: "1234567",
+        mainCnaeDescription: "Atividade principal",
+        secondaryCnaes: ["7654321 - Atividade secundária"],
+        legalNature: "Sociedade Empresária Limitada",
+        companySize: "Microempresa",
+        simpleNationalOptIn: true,
+        meiOptIn: false,
       });
+      expect(company.raw).not.toHaveProperty("socios");
     } finally {
       vi.unstubAllGlobals();
     }
   });
 
-  it("usa CNPJ.ws automaticamente quando a BrasilAPI falha", async () => {
+  it("usa BrasilAPI como alternativa se CNPJ.ws falhar", async () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(
@@ -76,24 +107,19 @@ describe("consulta de CNPJ", () => {
       .mockResolvedValueOnce(
         new Response(
           JSON.stringify({
-            cnpj_raiz: "67029106",
+            cnpj: "67029106000199",
             razao_social: "ALPHA TEC LTDA",
-            estabelecimento: {
-              cnpj: "67029106000199",
-              nome_fantasia: "",
-              situacao_cadastral: "Ativa",
-              data_inicio_atividade: "2026-05-25",
-              tipo_logradouro: "AVENIDA",
-              logradouro: "MAR MAX SCHRAMM",
-              numero: "2499",
-              bairro: "JARDIM ATLANTICO",
-              cep: "88095000",
-              ddd1: "47",
-              telefone1: "92701075",
-              email: "contato@example.test",
-              cidade: { nome: "Florianópolis" },
-              estado: { sigla: "SC" },
-            },
+            nome_fantasia: "",
+            descricao_situacao_cadastral: "Ativa",
+            data_inicio_atividade: "2026-05-25",
+            logradouro: "MAR MAX SCHRAMM",
+            numero: "2499",
+            bairro: "JARDIM ATLANTICO",
+            cep: "88095000",
+            municipio: "Florianópolis",
+            uf: "SC",
+            ddd_telefone_1: "4792701075",
+            email: "contato@example.test",
           }),
           { status: 200, headers: { "Content-Type": "application/json" } },
         ),
@@ -103,8 +129,13 @@ describe("consulta de CNPJ", () => {
       const company = await lookupCompanyByCnpj("67.029.106/0001-99");
       expect(fetchMock).toHaveBeenCalledTimes(2);
       expect(fetchMock).toHaveBeenNthCalledWith(
-        2,
+        1,
         "https://publica.cnpj.ws/cnpj/67029106000199",
+        { signal: undefined },
+      );
+      expect(fetchMock).toHaveBeenNthCalledWith(
+        2,
+        "https://brasilapi.com.br/api/cnpj/v1/67029106000199",
         { signal: undefined },
       );
       expect(company).toMatchObject({
@@ -112,7 +143,7 @@ describe("consulta de CNPJ", () => {
         legalName: "ALPHA TEC LTDA",
         registrationStatus: "Ativa",
         address:
-          "AVENIDA MAR MAX SCHRAMM 2499 · JARDIM ATLANTICO · Florianópolis - SC · CEP 88095000",
+          "MAR MAX SCHRAMM, 2499 · JARDIM ATLANTICO · Florianópolis - SC · CEP 88095000",
         phone: "4792701075",
         email: "contato@example.test",
       });

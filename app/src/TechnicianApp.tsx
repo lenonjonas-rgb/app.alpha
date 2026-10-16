@@ -152,7 +152,7 @@ export default function TechnicianApp() {
   const orders = snapshot?.payload.orders.filter((order) => !getOrderDetails(order).archived) ?? [];
   const order = orders.find((item) => item.id === selected);
   const day = agendaDate || today;
-  const todayOrders = technicianAgendaOrders(orders, "day", today, today);
+  const todayOrders = technicianAgendaOrders(orders, "home", today, today);
   const overdue = technicianAgendaOrders(orders, "overdue", today, today);
   const current = technicianAgendaOrders(orders, "running", today, today);
   const visibleOrders = page === "home" ? todayOrders : technicianAgendaOrders(orders, agendaFilter, day, today);

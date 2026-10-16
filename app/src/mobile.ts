@@ -15,11 +15,12 @@ export const mobileSnapshotSchema = z.object({
 }).transform((value) => ({ ...value, payload: validateDatabase(value.payload) }));
 export type MobileSnapshot = z.infer<typeof mobileSnapshotSchema>;
 
-export type TechnicianAgendaFilter = "day" | "overdue" | "running";
+export type TechnicianAgendaFilter = "home" | "day" | "overdue" | "running";
 
 export function technicianAgendaOrders(orders: Order[], filter: TechnicianAgendaFilter, date: string, today: string) {
   return orders.filter((order) => {
     if (getOrderDetails(order).archived) return false;
+    if (filter === "home") return order.date === today && order.status !== "Finalizada";
     if (filter === "overdue") return order.date < today && order.status !== "Finalizada";
     if (filter === "running") return order.status === "Em atendimento" || order.status === "Pausada";
     return order.date === date;

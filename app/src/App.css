@@ -1549,6 +1549,14 @@ td .record-link strong {
 .settings-page {
   max-width: 850px;
 }
+.settings-categories {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 18px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--line);
+}
 .settings-section {
   padding: 25px 0;
   border-top: 1px solid var(--line);
@@ -1971,6 +1979,9 @@ td .record-link strong {
   }
   .settings-section {
     padding-block: 22px;
+  }
+  .settings-categories {
+    gap: 7px;
   }
   .module-tabs {
     gap: 18px;

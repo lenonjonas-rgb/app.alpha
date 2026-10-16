@@ -1,0 +1,28 @@
+services:
+  fiscal:
+    build: .
+    restart: unless-stopped
+    init: true
+    env_file: .env
+    environment:
+      DATA_DIR: /var/lib/alpha-fiscal
+      SCHEMA_DIR: /schemas
+    ports:
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - fiscal-data:/var/lib/alpha-fiscal
+      - ./schemas:/schemas:ro
+    read_only: true
+    tmpfs:
+      - /tmp:mode=1777,noexec,nosuid,size=16m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+volumes:
+  fiscal-data:

@@ -15,6 +15,7 @@ const other = "00000000-0000-4000-8000-000000000003";
 const company = "10000000-0000-4000-8000-000000000001";
 const db = new PGlite();
 const payload = demoDatabase();
+payload.finance.accounts.push({ id: "private-bank", name: "Banco financeiro privado", bank: "Teste", agency: "1234", account: "99999", kind: "Corrente", active: true });
 payload.orders[0].technicianUserId = tech;
 payload.orders[0].status = "Aberta";
 payload.orders[0].details = getOrderDetails(payload.orders[0]);
@@ -36,7 +37,7 @@ const gps = { latitude: -23.5, longitude: -46.6, accuracy: 12 };
 
 beforeAll(async () => {
   await db.exec(`
-    create role anon; create role authenticated;
+    create role anon; create role authenticated; create role service_role;
     create schema auth;
     create table auth.users(id uuid primary key,email text);
     create function auth.uid() returns uuid language sql stable as
@@ -44,7 +45,7 @@ beforeAll(async () => {
     grant usage on schema auth to anon,authenticated;
     grant execute on function auth.uid() to anon,authenticated;
   `);
-  for (const file of ["20261008010000_tenant_auth_and_company_data.sql", "20261009010000_android_technicians.sql", "20261009020000_technician_link_validation.sql", "20261010010000_questionnaires.sql", "20261011010000_questionnaire_checkout_requirement.sql", "20261011020000_yes_no_question_justification.sql", "20261015010000_service_distance.sql", "20261015020000_travel_route_limits.sql", "20261015030000_address_lookup_limits.sql"]) {
+  for (const file of ["20261008010000_tenant_auth_and_company_data.sql", "20261009010000_android_technicians.sql", "20261009020000_technician_link_validation.sql", "20261010010000_questionnaires.sql", "20261011010000_questionnaire_checkout_requirement.sql", "20261011020000_yes_no_question_justification.sql", "20261015010000_service_distance.sql", "20261015020000_travel_route_limits.sql", "20261015030000_address_lookup_limits.sql", "20261015040000_finance_history_guards.sql"]) {
     await db.exec(await readFile(new URL(`../../supabase/migrations/${file}`, import.meta.url), "utf8"));
   }
   await db.query("insert into auth.users values ($1,'owner@example.test'),($2,'tech@example.test'),($3,'other@example.test')", [owner, tech, other]);
@@ -157,6 +158,7 @@ describe("RPC Android e isolamento de dados", () => {
     expect(data.payload.orders.map((order) => order.id)).toEqual([payload.orders[0].id]);
     expect(data.payload.clients.map((client) => client.id)).toEqual([payload.orders[0].clientId]);
     expect(data.payload.settings.registrationData).toEqual({});
+    expect(data.payload.finance).toEqual({ accounts: [], entries: [], invoices: [] });
     const raw = await db.query("select * from public.company_data");
     expect(raw.rows).toEqual([]);
     await expect(db.query("select public.list_company_technicians()")).rejects.toThrow();

@@ -1,0 +1,27 @@
+{
+  "name": "alpha-fiscal",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=24.13.0" },
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "build": "tsc",
+    "start": "node dist/server.js",
+    "schemas:nfse": "node scripts/install-nfse-schemas.mjs",
+    "schemas:nfe-events": "node scripts/install-nfe-event-schemas.mjs",
+    "test": "tsx --test test/*.test.ts"
+  },
+  "dependencies": {
+    "@sinete/da": "0.3.0",
+    "@xmldom/xmldom": "^0.8.11",
+    "fflate": "^0.8.2",
+    "xml-crypto": "^6.1.2",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@types/node": "^24.13.3",
+    "tsx": "^4.20.6",
+    "typescript": "~6.0.2"
+  }
+}

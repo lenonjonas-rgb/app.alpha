@@ -66,10 +66,15 @@ import { EquipmentSelectionSummary } from "./EquipmentModelPicker";
 import { ClientEquipment } from "./ClientEquipment";
 import { roleLabels } from "./userAccess";
 import type { CompanyRole } from "./userAccess";
+import { formatCnpj, isValidCnpj, lookupCompanyByCnpj, normalizeCnpj } from "./cnpj";
+import type { CompanyRegistration } from "./cnpj";
 import "./App.css";
 
 const ReportsPanel = lazy(() =>
   import("./Reports").then((module) => ({ default: module.ReportsPanel })),
+);
+const FinancePanel = lazy(() =>
+  import("./FinancePanel").then((module) => ({ default: module.FinancePanel })),
 );
 
 type View =
@@ -80,6 +85,7 @@ type View =
   | "stock"
   | "quotes"
   | "reports"
+  | "finance"
   | "questionnaires"
   | "settings";
 const navigation: {
@@ -97,6 +103,7 @@ const navigation: {
   },
   { id: "quotes", label: "Orçamentos", icon: LayoutList, group: "OPERAÇÃO" },
   { id: "reports", label: "Relatórios", icon: BarChart3, group: "GESTÃO" },
+  { id: "finance", label: "Financeiro", icon: ArrowRightLeft, group: "GESTÃO" },
   { id: "clients", label: "Clientes", icon: Users, group: "CADASTROS" },
   { id: "equipment", label: "Equipamentos", icon: Wrench, group: "CADASTROS" },
   { id: "questionnaires", label: "Questionários", icon: FileText, group: "CADASTROS" },
@@ -823,7 +830,7 @@ export default function App() {
                               : database.settings.company}
               </p>
             </div>
-            {view !== "settings" && view !== "reports" && view !== "questionnaires" && (
+            {view !== "settings" && view !== "reports" && view !== "questionnaires" && view !== "finance" && (
               <button
                 className="button primary"
                 onClick={() => openEditor(newKind)}
@@ -867,7 +874,7 @@ export default function App() {
               ))}
             </section>
           )}
-          {view !== "settings" && view !== "reports" && view !== "questionnaires" && (
+          {view !== "settings" && view !== "reports" && view !== "questionnaires" && view !== "finance" && (
             <section className="module-section">
               <div className="module-toolbar">
                 <label className="search-field">
@@ -1725,6 +1732,10 @@ export default function App() {
               />
             </Suspense>
           )}
+          {view === "finance" && <Suspense fallback={<p role="status">Carregando financeiro…</p>}>
+            <FinancePanel data={database} commit={commit} onSuccess={setNotice} onOpenOrder={openFullOrder}
+              initialTab={location.hash === "#finance/fiscal" ? "Fiscal" : undefined} />
+          </Suspense>}
           {view === "questionnaires" && <QuestionnaireCatalog data={database} commit={commit} onSuccess={setNotice} />}
           {view === "settings" && (
             <SettingsPanel
@@ -1734,6 +1745,7 @@ export default function App() {
               onError={setError}
               cloud={cloud.enabled}
               role={cloud.role}
+              onOpenFiscal={() => { location.hash = "finance/fiscal"; }}
             />
           )}
         </main>
@@ -2121,6 +2133,7 @@ function SettingsPanel({
   onError,
   cloud = false,
   role = null,
+  onOpenFiscal,
 }: {
   data: Database;
   commit: (update: Database | ((data: Database) => Database)) => void;
@@ -2128,9 +2141,15 @@ function SettingsPanel({
   onError: (text: string) => void;
   cloud?: boolean;
   role?: CompanyRole | null;
+  onOpenFiscal: () => void;
 }) {
+  const [category, setCategory] = useState("empresa");
   const [logo, setLogo] = useState(data.settings.logo);
   const [logoLoading, setLogoLoading] = useState(false);
+  const [companyCnpj, setCompanyCnpj] = useState(data.settings.cnpj);
+  const [companyLookup, setCompanyLookup] = useState<CompanyRegistration | null>(null);
+  const [companyLookupBusy, setCompanyLookupBusy] = useState(false);
+  const [companyLookupError, setCompanyLookupError] = useState("");
   async function importBackup(file?: File) {
     if (!file) return;
     try {
@@ -2152,14 +2171,155 @@ function SettingsPanel({
   }
   return (
     <div className="settings-page">
-      {cloud && role === "owner" && <UserSettings />}
-      {cloud && <PasswordSettings />}
-      <TravelSettings key={JSON.stringify([data.settings.fuelPrice, data.settings.kilometersPerLiter, data.settings.kilometerRate, data.settings.assistancePoint, data.settings.assistanceAddress])} data={data} commit={commit} onSuccess={onSuccess} onError={onError} />
-      <ReportSettingsPanel key={JSON.stringify(data.settings.reportSettings)} data={data} commit={commit} onSuccess={onSuccess} onError={onError} />
-      <section className="settings-section">
+      <nav className="settings-categories" aria-label="Categorias de configurações">
+        {[
+          ["empresa", "Empresa"],
+          ["acesso", "Usuários e acesso"],
+          ["atendimento", "Atendimento e deslocamento"],
+          ["relatorios", "Relatórios"],
+          ["fiscal", "Fiscal e certificado"],
+          ["dados", "Dados e backup"],
+        ].map(([id, label]) => (
+          <button
+            key={id}
+            type="button"
+            className={`button ${category === id ? "primary" : "secondary"}`}
+            aria-pressed={category === id}
+            onClick={() => setCategory(id)}
+          >
+            {label}
+          </button>
+        ))}
+      </nav>
+      {category === "acesso" && <section className="settings-section">
+        <div className="section-heading"><h2>Usuários e acesso</h2></div>
+        {cloud && role === "owner" && <UserSettings />}
+        {cloud && <PasswordSettings />}
+        {!cloud && <p>Gerenciamento de usuários e senhas fica disponível quando a autenticação em nuvem está configurada.</p>}
+      </section>}
+      {category === "atendimento" && <TravelSettings key={JSON.stringify([data.settings.fuelPrice, data.settings.kilometersPerLiter, data.settings.kilometerRate, data.settings.assistancePoint, data.settings.assistanceAddress])} data={data} commit={commit} onSuccess={onSuccess} onError={onError} />}
+      {category === "relatorios" && <ReportSettingsPanel key={JSON.stringify(data.settings.reportSettings)} data={data} commit={commit} onSuccess={onSuccess} onError={onError} />}
+      {category === "fiscal" && <section className="settings-section">
+        <div className="section-heading"><h2>Fiscal e certificado digital</h2></div>
+        <p>Configure os dados fiscais da empresa, o certificado A1, referências, matrizes tributárias e numeração na área Fiscal.</p>
+        <p>O certificado é enviado somente ao backend fiscal seguro e armazenado criptografado. Não selecione nem envie o A1 enquanto o backend não estiver conectado.</p>
+        <button type="button" className="button primary" onClick={onOpenFiscal}>Abrir configurações fiscais</button>
+      </section>}
+      {category === "empresa" && <section className="settings-section">
         <div className="section-heading">
           <h2>Identidade da empresa</h2>
         </div>
+        <form
+          onSubmit={(event) => {
+            event.preventDefault();
+            const cnpj = normalizeCnpj(companyCnpj);
+            if (!isValidCnpj(cnpj)) {
+              setCompanyLookup(null);
+              setCompanyLookupError("Informe um CNPJ válido para consultar.");
+              return;
+            }
+            setCompanyLookupBusy(true);
+            setCompanyLookup(null);
+            setCompanyLookupError("");
+            void lookupCompanyByCnpj(cnpj, AbortSignal.timeout(15000))
+              .then(setCompanyLookup)
+              .catch((cause: unknown) => setCompanyLookupError(errorMessage(cause)))
+              .finally(() => setCompanyLookupBusy(false));
+          }}
+        >
+          <h3>Consultar cadastro pelo CNPJ</h3>
+          <p>A consulta envia o CNPJ digitado às fontes públicas <a href="https://docs.cnpj.ws/referencia-de-api/api-publica/consultando-cnpj" target="_blank" rel="noreferrer">CNPJ.ws</a> e, se necessário, <a href="https://brasilapi.com.br/docs" target="_blank" rel="noreferrer">BrasilAPI</a>. Confira os dados retornados; a pesquisa não salva alterações automaticamente.</p>
+          <div className="form-grid">
+            <label className="field">CNPJ da empresa
+              <input
+                inputMode="numeric"
+                autoComplete="off"
+                value={companyCnpj}
+                onChange={(event) => {
+                  setCompanyCnpj(normalizeCnpj(event.target.value).slice(0, 14));
+                  setCompanyLookup(null);
+                  setCompanyLookupError("");
+                }}
+                placeholder="00.000.000/0000-00"
+                maxLength={14}
+                required
+              />
+            </label>
+          </div>
+          {companyLookupBusy && <p role="status">Consultando cadastro público do CNPJ…</p>}
+          {companyLookupError && <p role="alert" className="error-message">{companyLookupError}</p>}
+          {companyLookup && normalizeCnpj(companyLookup.cnpj) === normalizeCnpj(companyCnpj) && (
+            <div className="cnpj-result">
+              <strong>{companyLookup.tradeName || companyLookup.legalName}</strong>
+              <span>{companyLookup.legalName}</span>
+              <span>{formatCnpj(companyLookup.cnpj)} · {companyLookup.registrationStatus || "Situação não informada"}</span>
+              {companyLookup.address && <span>{companyLookup.address}</span>}
+              {companyLookup.phone && <span>Telefone(s): {companyLookup.phone}</span>}
+              {companyLookup.email && <span>E-mail: {companyLookup.email}</span>}
+              {companyLookup.stateRegistrations?.length ? <span>Inscrições estaduais: {companyLookup.stateRegistrations.map((item) =>
+                `${item.state}: ${item.number} (${item.active === null ? "situação não informada" : item.active ? "ativa" : "inativa"})`).join(" · ")}</span> :
+                <span>A fonte consultada não retornou inscrição estadual; confirme com a SEFAZ/contabilidade.</span>}
+              {companyLookup.mainCnae && <span>CNAE principal: {companyLookup.mainCnae}{companyLookup.mainCnaeDescription ? ` - ${companyLookup.mainCnaeDescription}` : ""}</span>}
+              {companyLookup.secondaryCnaes?.length ? <span>CNAEs secundários: {companyLookup.secondaryCnaes.join(" · ")}</span> : null}
+              {companyLookup.legalNature && <span>Natureza jurídica: {companyLookup.legalNature}</span>}
+              {companyLookup.companySize && <span>Porte: {companyLookup.companySize}</span>}
+              <span>Simples Nacional: {companyLookup.simpleNationalOptIn === null || companyLookup.simpleNationalOptIn === undefined ? "não informado" : companyLookup.simpleNationalOptIn ? "optante" : "não optante"}</span>
+              <span>MEI: {companyLookup.meiOptIn === null || companyLookup.meiOptIn === undefined ? "não informado" : companyLookup.meiOptIn ? "optante" : "não optante"}</span>
+              <small>A consulta pública não comprova a situação fiscal e pode omitir IE/telefones/e-mails. Inscrição municipal e regime tributário precisam ser confirmados separadamente. Este cadastro não atualiza o emitente em Financeiro &gt; Fiscal; revise também os dados fiscais e o A1 nessa área antes de emitir.</small>
+              <button
+                type="button"
+                className="button secondary"
+                disabled={companyLookupBusy}
+                onClick={() => {
+                  try {
+                    const replacingCompany = data.settings.cnpj &&
+                      normalizeCnpj(data.settings.cnpj) !== normalizeCnpj(companyLookup.cnpj);
+                    if (replacingCompany && !window.confirm("O CNPJ consultado é diferente do cadastro atual. Substituir os dados cadastrais salvos da empresa?"))
+                      return;
+                    commit((current) => ({
+                      ...current,
+                      settings: {
+                        ...current.settings,
+                        cnpj: companyLookup.cnpj,
+                        legalName: companyLookup.legalName || (replacingCompany ? "" : current.settings.legalName),
+                        tradeName: companyLookup.tradeName || (replacingCompany ? "" : current.settings.tradeName),
+                        registrationStatus: companyLookup.registrationStatus || (replacingCompany ? "" : current.settings.registrationStatus),
+                        openingDate: companyLookup.openingDate || (replacingCompany ? "" : current.settings.openingDate),
+                        address: companyLookup.address || (replacingCompany ? "" : current.settings.address),
+                        addressDetails: companyLookup.addressDetails ?? (replacingCompany
+                          ? { street: "", number: "", complement: "", district: "", postalCode: "", municipality: "", city: "", state: "" }
+                          : current.settings.addressDetails),
+                        phone: companyLookup.phone || (replacingCompany ? "" : current.settings.phone),
+                        email: companyLookup.email || (replacingCompany ? "" : current.settings.email),
+                        stateRegistrations: companyLookup.stateRegistrations?.length
+                          ? companyLookup.stateRegistrations : replacingCompany ? [] : current.settings.stateRegistrations,
+                        mainCnae: companyLookup.mainCnae || (replacingCompany ? "" : current.settings.mainCnae),
+                        mainCnaeDescription: companyLookup.mainCnaeDescription || (replacingCompany ? "" : current.settings.mainCnaeDescription),
+                        secondaryCnaes: companyLookup.secondaryCnaes?.length
+                          ? companyLookup.secondaryCnaes : replacingCompany ? [] : current.settings.secondaryCnaes,
+                        legalNature: companyLookup.legalNature || (replacingCompany ? "" : current.settings.legalNature),
+                        companySize: companyLookup.companySize || (replacingCompany ? "" : current.settings.companySize),
+                        simpleNationalOptIn: companyLookup.simpleNationalOptIn ?? (replacingCompany ? null : current.settings.simpleNationalOptIn),
+                        meiOptIn: companyLookup.meiOptIn ?? (replacingCompany ? null : current.settings.meiOptIn),
+                        registrationData: companyLookup.raw,
+                      },
+                    }));
+                    setCompanyCnpj(companyLookup.cnpj);
+                    onSuccess("Dados cadastrais atualizados. Confira e complete as informações fiscais antes de emitir.");
+                    onError("");
+                  } catch (cause) {
+                    onError(errorMessage(cause));
+                  }
+                }}
+              >
+                Aplicar dados ao cadastro da empresa
+              </button>
+            </div>
+          )}
+          <button className="button secondary" type="submit" disabled={companyLookupBusy || !isValidCnpj(companyCnpj)}>
+            {companyLookupBusy ? "Consultando…" : "Consultar CNPJ"}
+          </button>
+        </form>
         <form
           onSubmit={(event) => {
             event.preventDefault();
@@ -2277,6 +2437,12 @@ function SettingsPanel({
               ["Endereço cadastral", data.settings.address],
               ["Telefone cadastral", data.settings.phone],
               ["E-mail cadastral", data.settings.email],
+              ["CNAE principal", data.settings.mainCnae ? `${data.settings.mainCnae} ${data.settings.mainCnaeDescription}` : ""],
+              ["CNAEs secundários", data.settings.secondaryCnaes.join(" · ")],
+              ["Natureza jurídica", data.settings.legalNature],
+              ["Porte", data.settings.companySize],
+              ["Simples Nacional", data.settings.simpleNationalOptIn === null ? "" : data.settings.simpleNationalOptIn ? "Optante" : "Não optante"],
+              ["MEI", data.settings.meiOptIn === null ? "" : data.settings.meiOptIn ? "Optante" : "Não optante"],
             ]
               .filter(([, value]) => value)
               .map(([label, value]) => (
@@ -2285,6 +2451,12 @@ function SettingsPanel({
                   <input value={value} readOnly />
                 </label>
               ))}
+            {data.settings.stateRegistrations.map((registration, index) => (
+              <label className="field" key={`${registration.state}-${registration.number}-${index}`}>
+                Inscrição estadual ({registration.state}, {registration.active ? "ativa" : "inativa"})
+                <input value={registration.number} readOnly />
+              </label>
+            ))}
           </div>
           <button
             disabled={logoLoading}
@@ -2295,8 +2467,8 @@ function SettingsPanel({
             Salvar configurações
           </button>
         </form>
-      </section>
-      <section className="settings-section">
+      </section>}
+      {category === "dados" && <><section className="settings-section">
         <div className="section-heading">
           <h2>{cloud ? "Exportação da base" : "Backup e restauração"}</h2>
           <span className="tag">
@@ -2373,6 +2545,7 @@ function SettingsPanel({
               try {
                 commit({
                   version: 1,
+                  finance: { accounts: [], entries: [], invoices: [] },
                   clients: [],
                   equipment: [],
                   equipmentBrands: [],
@@ -2418,7 +2591,7 @@ function SettingsPanel({
             Restaurar demonstração
           </button>
         </div>
-      </section>}
+      </section>}</>}
     </div>
   );
 }

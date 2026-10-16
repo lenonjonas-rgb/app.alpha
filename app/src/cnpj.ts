@@ -7,7 +7,33 @@ export type CompanyRegistration = {
   address: string;
   phone: string;
   email: string;
+  addressDetails?: CompanyAddressRegistration;
+  stateRegistrations?: StateRegistration[];
+  mainCnae?: string;
+  mainCnaeDescription?: string;
+  secondaryCnaes?: string[];
+  legalNature?: string;
+  companySize?: string;
+  simpleNationalOptIn?: boolean | null;
+  meiOptIn?: boolean | null;
   raw: Record<string, unknown>;
+};
+
+export type StateRegistration = {
+  state: string;
+  number: string;
+  active: boolean | null;
+};
+
+export type CompanyAddressRegistration = {
+  street: string;
+  number: string;
+  complement: string;
+  district: string;
+  postalCode: string;
+  municipality: string;
+  city: string;
+  state: string;
 };
 
 type BrasilApiCnpjResponse = {
@@ -21,17 +47,27 @@ type BrasilApiCnpjResponse = {
   complemento?: unknown;
   bairro?: unknown;
   municipio?: unknown;
+  codigo_municipio?: unknown;
   uf?: unknown;
   cep?: unknown;
   ddd_telefone_1?: unknown;
   ddd_telefone_2?: unknown;
   email?: unknown;
+  cnae_fiscal?: unknown;
+  cnae_fiscal_descricao?: unknown;
+  cnaes_secundarios?: unknown;
+  opcao_pelo_simples?: unknown;
+  opcao_pelo_mei?: unknown;
 };
 
 type CnpjWsResponse = {
   cnpj?: unknown;
   razao_social?: unknown;
   estabelecimento?: unknown;
+  natureza_juridica?: unknown;
+  porte?: unknown;
+  simples?: unknown;
+  mei?: unknown;
 };
 
 type CnpjWsEstablishment = {
@@ -50,6 +86,10 @@ type CnpjWsEstablishment = {
   ddd2?: unknown;
   telefone2?: unknown;
   email?: unknown;
+  cnae_fiscal?: unknown;
+  cnae_fiscal_descricao?: unknown;
+  cnae_fiscal_secundaria?: unknown;
+  inscricoes_estaduais?: unknown;
   cidade?: unknown;
   estado?: unknown;
 };
@@ -99,15 +139,76 @@ function text(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
 }
 
+function scalar(value: unknown): string {
+  return typeof value === "string" || typeof value === "number" ? String(value).trim() : "";
+}
+
 function object(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : {};
 }
 
+function companyOnlyData(raw: Record<string, unknown>): Record<string, unknown> {
+  const result = structuredClone(raw);
+  for (const key of ["socios", "qsa", "representantes", "responsaveis"]) delete result[key];
+  const establishment = result.estabelecimento;
+  if (establishment && typeof establishment === "object" && !Array.isArray(establishment)) {
+    const data = { ...object(establishment) };
+    for (const key of ["socios", "qsa", "representantes", "responsaveis"]) delete data[key];
+    result.estabelecimento = data;
+  }
+  return result;
+}
+
 function joinPhone(ddd: unknown, phone: unknown): string {
   const number = text(phone);
   return number ? `${text(ddd)}${number}` : "";
+}
+
+function verifiedCnpj(value: unknown, requestedCnpj: string): string {
+  const returnedCnpj = normalizeCnpj(text(value));
+  if (returnedCnpj && returnedCnpj !== requestedCnpj)
+    throw new Error("A fonte retornou um CNPJ diferente do consultado.");
+  return returnedCnpj || requestedCnpj;
+}
+
+function nullableBoolean(value: unknown): boolean | null {
+  if (typeof value === "boolean") return value;
+  if (typeof value === "string") {
+    const normalized = value.trim().toLocaleLowerCase("pt-BR");
+    if (["sim", "true", "1"].includes(normalized)) return true;
+    if (["não", "nao", "false", "0"].includes(normalized)) return false;
+  }
+  return null;
+}
+
+function stateRegistrations(value: unknown): StateRegistration[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item) => {
+    const registration = object(item);
+    const state = object(registration.estado);
+    const number = text(registration.inscricao_estadual);
+    const abbreviation = text(state.sigla || registration.estado);
+    if (!number || !abbreviation) return [];
+    return [{
+      state: abbreviation,
+      number,
+      active: nullableBoolean(registration.ativo),
+    }];
+  });
+}
+
+function mapSecondaryCnaes(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item) => {
+    if (typeof item === "string" || typeof item === "number") return [String(item)];
+    const cnae = object(item);
+    const number = cnae.codigo ?? cnae.id ?? cnae.cnae_fiscal;
+    const description = text(cnae.descricao);
+    if (number === undefined || number === null) return [];
+    return [`${number}${description ? ` - ${description}` : ""}`];
+  });
 }
 
 function mapBrasilApiResponse(
@@ -127,19 +228,36 @@ function mapBrasilApiResponse(
     [text(result.municipio), text(result.uf)].filter(Boolean).join(" - "),
     text(result.cep) ? `CEP ${text(result.cep)}` : "",
   ].filter(Boolean);
+  const addressDetails: CompanyAddressRegistration = {
+    street: text(result.logradouro),
+    number: text(result.numero),
+    complement: text(result.complemento),
+    district: text(result.bairro),
+    postalCode: text(result.cep),
+    municipality: scalar(result.codigo_municipio),
+    city: text(result.municipio),
+    state: text(result.uf),
+  };
 
   return {
-    cnpj: normalizeCnpj(text(result.cnpj)) || normalizedCnpj,
+    cnpj: verifiedCnpj(result.cnpj, normalizedCnpj),
     legalName,
     tradeName,
     registrationStatus: text(result.descricao_situacao_cadastral),
     openingDate: text(result.data_inicio_atividade),
     address: addressParts.join(" · "),
+    addressDetails,
     phone: [text(result.ddd_telefone_1), text(result.ddd_telefone_2)]
       .filter(Boolean)
       .join(" / "),
     email: text(result.email),
-    raw,
+    stateRegistrations: stateRegistrations(raw.inscricoes_estaduais),
+    mainCnae: scalar(result.cnae_fiscal),
+    mainCnaeDescription: text(result.cnae_fiscal_descricao),
+    secondaryCnaes: mapSecondaryCnaes(result.cnaes_secundarios),
+    simpleNationalOptIn: nullableBoolean(result.opcao_pelo_simples),
+    meiOptIn: nullableBoolean(result.opcao_pelo_mei),
+    raw: companyOnlyData(raw),
   };
 }
 
@@ -156,6 +274,10 @@ function mapCnpjWsResponse(
 
   const city = object(establishment.cidade);
   const state = object(establishment.estado);
+  const legalNature = object(result.natureza_juridica);
+  const companySize = object(result.porte);
+  const simpleNational = object(result.simples);
+  const mei = object(result.mei);
   const addressParts = [
     [
       text(establishment.tipo_logradouro),
@@ -169,14 +291,25 @@ function mapCnpjWsResponse(
     [text(city.nome), text(state.sigla)].filter(Boolean).join(" - "),
     text(establishment.cep) ? `CEP ${text(establishment.cep)}` : "",
   ].filter(Boolean);
+  const addressDetails: CompanyAddressRegistration = {
+    street: [text(establishment.tipo_logradouro), text(establishment.logradouro)].filter(Boolean).join(" "),
+    number: text(establishment.numero),
+    complement: text(establishment.complemento),
+    district: text(establishment.bairro),
+    postalCode: text(establishment.cep),
+    municipality: scalar(city.id),
+    city: text(city.nome),
+    state: text(state.sigla),
+  };
 
   return {
-    cnpj: normalizeCnpj(text(establishment.cnpj || result.cnpj)) || normalizedCnpj,
+    cnpj: verifiedCnpj(establishment.cnpj || result.cnpj, normalizedCnpj),
     legalName,
     tradeName,
     registrationStatus: text(establishment.situacao_cadastral),
     openingDate: text(establishment.data_inicio_atividade),
     address: addressParts.join(" · "),
+    addressDetails,
     phone:
       [
         joinPhone(establishment.ddd1, establishment.telefone1),
@@ -185,7 +318,15 @@ function mapCnpjWsResponse(
         .filter(Boolean)
         .join(" / "),
     email: text(establishment.email),
-    raw,
+    stateRegistrations: stateRegistrations(establishment.inscricoes_estaduais),
+    mainCnae: scalar(establishment.cnae_fiscal),
+    mainCnaeDescription: text(establishment.cnae_fiscal_descricao),
+    secondaryCnaes: mapSecondaryCnaes(establishment.cnae_fiscal_secundaria),
+    legalNature: text(legalNature.descricao),
+    companySize: text(companySize.descricao),
+    simpleNationalOptIn: nullableBoolean(simpleNational.simples_optante),
+    meiOptIn: nullableBoolean(mei.optante),
+    raw: companyOnlyData(raw),
   };
 }
 
@@ -199,14 +340,14 @@ export async function lookupCompanyByCnpj(
 
   const endpoints = [
     {
-      name: "BrasilAPI",
-      url: `https://brasilapi.com.br/api/cnpj/v1/${encodeURIComponent(normalizedCnpj)}`,
-      map: mapBrasilApiResponse,
-    },
-    {
       name: "CNPJ.ws",
       url: `https://publica.cnpj.ws/cnpj/${encodeURIComponent(normalizedCnpj)}`,
       map: mapCnpjWsResponse,
+    },
+    {
+      name: "BrasilAPI",
+      url: `https://brasilapi.com.br/api/cnpj/v1/${encodeURIComponent(normalizedCnpj)}`,
+      map: mapBrasilApiResponse,
     },
   ];
   const failures: string[] = [];

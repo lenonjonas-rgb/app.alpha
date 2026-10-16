@@ -1,0 +1,14 @@
+.finance-panel { display: grid; gap: 20px; min-width: 0; }
+.finance-metrics { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
+.finance-metrics > div { display: grid; gap: 8px; padding: 20px; border: 1px solid var(--line, #e5e7eb); border-radius: 14px; background: white; }
+.finance-metrics strong { font-size: 1.4rem; }
+.finance-tabs, .finance-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.finance-table { overflow-x: auto; background: white; border: 1px solid var(--line, #e5e7eb); border-radius: 12px; }
+.finance-table table { width: 100%; border-collapse: collapse; }
+.finance-table th, .finance-table td { padding: 14px; text-align: left; border-bottom: 1px solid var(--line, #e5e7eb); vertical-align: top; }
+.finance-table th { font-size: .8rem; white-space: nowrap; }
+.finance-table details { min-width: 160px; margin-top: 10px; }
+.finance-table summary { cursor: pointer; }
+.finance-billing-group { min-width: 0; padding: 16px; border: 1px solid var(--line, #e5e7eb); border-radius: 12px; }
+.finance-billing-group legend { font-weight: 600; }
+@media (max-width: 700px) { .finance-metrics { grid-template-columns: 1fr; } }

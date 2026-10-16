@@ -252,6 +252,33 @@ export function CloudAccess({
                 {registration.address && <span>{registration.address}</span>}
                 {registration.phone && <span>{registration.phone}</span>}
                 {registration.email && <span>{registration.email}</span>}
+                {registration.stateRegistrations?.length ? (
+                  <span>
+                    Inscrições estaduais: {registration.stateRegistrations.map((item) =>
+                      `${item.state}: ${item.number} (${item.active === null ? "situação não informada" : item.active ? "ativa" : "inativa"})`).join(" · ")}
+                  </span>
+                ) : (
+                  <span>Inscrição estadual não retornada pela fonte pública; confirme com a SEFAZ/contabilidade.</span>
+                )}
+                {registration.mainCnae && (
+                  <span>
+                    CNAE principal: {registration.mainCnae}
+                    {registration.mainCnaeDescription ? ` - ${registration.mainCnaeDescription}` : ""}
+                  </span>
+                )}
+                {registration.secondaryCnaes?.length ? (
+                  <span>CNAEs secundários: {registration.secondaryCnaes.join(" · ")}</span>
+                ) : null}
+                {registration.legalNature && <span>Natureza jurídica: {registration.legalNature}</span>}
+                {registration.companySize && <span>Porte: {registration.companySize}</span>}
+                <span>
+                  Simples Nacional: {registration.simpleNationalOptIn === null || registration.simpleNationalOptIn === undefined
+                    ? "não informado" : registration.simpleNationalOptIn ? "optante" : "não optante"}
+                </span>
+                <span>
+                  MEI: {registration.meiOptIn === null || registration.meiOptIn === undefined
+                    ? "não informado" : registration.meiOptIn ? "optante" : "não optante"}
+                </span>
                 {registration.openingDate && (
                   <span>Início das atividades: {registration.openingDate}</span>
                 )}
@@ -280,7 +307,9 @@ export function CloudAccess({
             </button>
             <small>
               Sua conta será administradora. Os dados públicos cadastrais
-              encontrados serão salvos no perfil da empresa.
+              encontrados serão salvos no perfil da empresa. IE, telefone e e-mail
+              podem estar ausentes; confirme os dados fiscais, especialmente IM e
+              regime tributário, com a contabilidade antes de emitir.
             </small>
           </form>
         )}

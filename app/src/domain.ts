@@ -6,6 +6,7 @@ import { orderTypeQuestionnaireSchema, questionnaireDisplaySchema, questionnaire
 import type { QuestionnaireTemplate } from "./questionnaireSchema";
 import { reportSettingsSchema } from "./reportSettings";
 import { servicePointSchema, travelSchema, travelValues } from "./travel";
+import { financeSchema, validateFinance } from "./financeSchema";
 export type { QuestionnaireTemplate, QuestionDefinition } from "./questionnaireSchema";
 
 const id = z.string().min(1);
@@ -248,6 +249,7 @@ const expenseSchema = z.object({
 });
 export const databaseSchema = z.object({
   version: z.literal(1),
+  finance: financeSchema.prefault({}),
   clients: z.array(clientSchema),
   equipment: z.array(equipmentSchema),
   equipmentBrands: z.array(equipmentBrandSchema).default([]),
@@ -284,8 +286,30 @@ export const databaseSchema = z.object({
     registrationStatus: z.string().max(200).default(""),
     openingDate: z.string().max(30).default(""),
     address: z.string().max(1000).default(""),
+    addressDetails: z.object({
+      street: z.string().max(60),
+      number: z.string().max(20),
+      complement: z.string().max(60),
+      district: z.string().max(60),
+      postalCode: z.string().max(8),
+      municipality: z.string().max(7),
+      city: z.string().max(60),
+      state: z.string().max(2),
+    }).default({ street: "", number: "", complement: "", district: "", postalCode: "", municipality: "", city: "", state: "" }),
     phone: z.string().max(100).default(""),
     email: z.string().max(320).default(""),
+    stateRegistrations: z.array(z.object({
+      state: z.string().max(2),
+      number: z.string().max(30),
+      active: z.boolean().nullable(),
+    })).default([]),
+    mainCnae: z.string().max(30).default(""),
+    mainCnaeDescription: z.string().max(500).default(""),
+    secondaryCnaes: z.array(z.string().max(500)).max(1000).default([]),
+    legalNature: z.string().max(200).default(""),
+    companySize: z.string().max(100).default(""),
+    simpleNationalOptIn: z.boolean().nullable().default(null),
+    meiOptIn: z.boolean().nullable().default(null),
     registrationData: z.record(z.string(), z.unknown()).default({}),
   }),
 });
@@ -733,8 +757,17 @@ export function emptyDatabase(
       registrationStatus: registration?.registrationStatus ?? "",
       openingDate: registration?.openingDate ?? "",
       address: registration?.address ?? "",
+      addressDetails: registration?.addressDetails ?? { street: "", number: "", complement: "", district: "", postalCode: "", municipality: "", city: "", state: "" },
       phone: registration?.phone ?? "",
       email: registration?.email ?? "",
+      stateRegistrations: registration?.stateRegistrations ?? [],
+      mainCnae: registration?.mainCnae ?? "",
+      mainCnaeDescription: registration?.mainCnaeDescription ?? "",
+      secondaryCnaes: registration?.secondaryCnaes ?? [],
+      legalNature: registration?.legalNature ?? "",
+      companySize: registration?.companySize ?? "",
+      simpleNationalOptIn: registration?.simpleNationalOptIn ?? null,
+      meiOptIn: registration?.meiOptIn ?? null,
       registrationData: registration?.raw ?? {},
     },
   });
@@ -742,6 +775,7 @@ export function emptyDatabase(
 
 export function validateDatabase(input: unknown): Database {
   const data = databaseSchema.parse(input);
+  validateFinance(data.finance, new Set(data.clients.map((item) => item.id)), new Map(data.orders.map((item) => [item.id, item.clientId])));
   for (const collection of [
     data.clients,
     data.equipment,

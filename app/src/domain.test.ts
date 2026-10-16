@@ -48,8 +48,20 @@ describe("dados locais", () => {
       registrationStatus: "Ativa",
       openingDate: "2020-01-02",
       address: "Rua das Flores, 10",
+      addressDetails: {
+        street: "Rua das Flores", number: "10", complement: "", district: "Centro",
+        postalCode: "01001000", municipality: "3550308", city: "São Paulo", state: "SP",
+      },
       phone: "1133334444",
       email: "contato@example.test",
+      stateRegistrations: [{ state: "SC", number: "123456789", active: true }],
+      mainCnae: "1234567",
+      mainCnaeDescription: "Atividade principal",
+      secondaryCnaes: ["7654321 - Atividade secundária"],
+      legalNature: "Sociedade Empresária Limitada",
+      companySize: "Microempresa",
+      simpleNationalOptIn: true,
+      meiOptIn: false,
       raw: { cnae_fiscal: 1234567 },
     };
     const data = emptyDatabase(
@@ -64,8 +76,20 @@ describe("dados locais", () => {
       registrationStatus: "Ativa",
       openingDate: "2020-01-02",
       address: "Rua das Flores, 10",
+      addressDetails: {
+        street: "Rua das Flores", number: "10", complement: "", district: "Centro",
+        postalCode: "01001000", municipality: "3550308", city: "São Paulo", state: "SP",
+      },
       phone: "1133334444",
       email: "contato@example.test",
+      stateRegistrations: [{ state: "SC", number: "123456789", active: true }],
+      mainCnae: "1234567",
+      mainCnaeDescription: "Atividade principal",
+      secondaryCnaes: ["7654321 - Atividade secundária"],
+      legalNature: "Sociedade Empresária Limitada",
+      companySize: "Microempresa",
+      simpleNationalOptIn: true,
+      meiOptIn: false,
       registrationData: { cnae_fiscal: 1234567 },
     });
   });

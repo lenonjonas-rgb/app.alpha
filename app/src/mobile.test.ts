@@ -19,6 +19,16 @@ const archivedOrder: Order = {
 };
 
 describe("app técnico", () => {
+  it("oculta finalizadas no início sem remover o histórico da agenda", () => {
+    const orders = [...agendaOrders, { ...archivedOrder, date: today }];
+    expect(technicianAgendaOrders(orders, "home", today, today).map((order) => order.id)).toEqual([
+      `${today}-Aberta`, `${today}-Em atendimento`, `${today}-Pausada`,
+    ]);
+    const completed = agendaOrders.find((order) => order.date === today && order.status === "Finalizada")!;
+    expect(technicianAgendaOrders(orders, "day", today, today)).toContain(completed);
+    const finished = orders.map((order) => ({ ...order, status: "Finalizada" as const }));
+    expect(technicianAgendaOrders(finished, "home", today, today)).toEqual([]);
+  });
   it("mostra somente tarefas da data selecionada, inclusive finalizadas, sem arquivadas", () => {
     const orders = [...agendaOrders, archivedOrder];
     expect(technicianAgendaOrders(orders, "day", today, today).map((order) => order.id)).toEqual(
