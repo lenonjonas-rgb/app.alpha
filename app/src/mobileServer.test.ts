@@ -8,6 +8,10 @@ import { questionnaireDisplaySchema } from "./questionnaireSchema";
 import { linkClientEquipment, saveEquipmentBrand, saveEquipmentModel, selectEquipmentModel } from "./equipmentCatalogData";
 import { mobileSnapshotSchema, technicianAgendaOrders } from "./mobile";
 import { distanceMeters } from "./serviceDistance";
+import { saveFinanceInstallments } from "./financeInstallments";
+import { settleFinanceEntry } from "./finance";
+import { generateRecurringEntries, previewRecurringEntries, saveFinanceRecurrence } from "./financeRecurrences";
+import { purchasing, receivePurchaseOrder, savePurchaseOrder, saveSupplier } from "./purchasing";
 
 const owner = "00000000-0000-4000-8000-000000000001";
 const tech = "00000000-0000-4000-8000-000000000002";
@@ -16,6 +20,37 @@ const company = "10000000-0000-4000-8000-000000000001";
 const db = new PGlite();
 const payload = demoDatabase();
 payload.finance.accounts.push({ id: "private-bank", name: "Banco financeiro privado", bank: "Teste", agency: "1234", account: "99999", kind: "Corrente", active: true });
+payload.finance.management = { categories: [{ id: "private-category", name: "Receita privada", kind: "Receber", active: true }],
+  costCenters: [], classifications: [], openingBalances: [{ accountId: "private-bank", date: "2026-10-01", amount: 10000 }] };
+payload.finance.banking = { transactions: [{ id: "private-transaction", accountId: "private-bank", externalId: "private-ref",
+  date: "2026-10-01", description: "Extrato privado", amount: 10000, importedAt: "2026-10-01T12:00:00Z", fileName: "private.csv" }], matches: [] };
+payload.finance.accounts.push({ id: "private-destination", name: "Destino privado", bank: "Teste", agency: "", account: "", kind: "Caixa", active: true });
+payload.finance.transfers = [{ id: "private-transfer", fromAccountId: "private-bank", toAccountId: "private-destination",
+  date: "2026-10-01", amount: 1000, description: "Transferencia privada", createdAt: "2026-10-01T12:00:00Z" }];
+payload.finance.banking.transactions.push({ id: "private-transfer-transaction", accountId: "private-bank", externalId: "private-transfer-ref",
+  date: "2026-10-01", description: "Extrato da transferencia privada", amount: -1000, importedAt: "2026-10-01T12:00:00Z", fileName: "private.csv" });
+payload.finance.banking.transferMatches = [{ id: "private-transfer-match", transactionId: "private-transfer-transaction",
+  transferId: "private-transfer", leg: "outgoing", createdAt: "2026-10-01T12:00:00Z", reversed: false }];
+payload.finance = saveFinanceInstallments(payload, { id: "private-plan", kind: "Pagar", party: "Fornecedor privado",
+  description: "Parcelamento privado", amount: 10000, issuedOn: "2026-10-01", dueOn: "2026-10-31", accountId: "private-bank",
+  paymentMethod: "Pix", canceled: false, settlements: [] }, ["2026-10-31", "2026-11-30", "2026-12-31"], true).finance;
+payload.finance = settleFinanceEntry(payload, "private-plan:1", { id: "private-adjusted-settlement", amount: 1000,
+  date: "2026-10-01", accountId: "private-bank", adjustment: { interest: 100, fine: 50, discount: 10,
+    reason: "Ajuste financeiro privado", confirmedAt: "2026-10-01T12:00:00Z" } }, true).finance;
+payload.finance = saveFinanceRecurrence(payload, { id: "private-recurrence", kind: "Pagar", party: "Fornecedor privado",
+  description: "Recorrencia privada", amount: 5000, accountId: "private-bank", paymentMethod: "Pix",
+  firstDueOn: "2026-10-31", endsOn: "2026-12-31", createdAt: "2026-10-01T12:00:00Z", events: [] }, true).finance;
+payload.finance = generateRecurringEntries(payload, payload.finance.recurrences![0], "2026-10", "2026-10",
+  previewRecurringEntries(payload, "private-recurrence", "2026-10", "2026-10"), true).finance;
+payload.finance = saveSupplier(payload, { id: "private-supplier", name: "Fornecedor de compra privado", document: "",
+  phone: "11999999999", email: "private@example.test", address: "Endereco privado", active: true }).finance;
+payload.finance = savePurchaseOrder(payload, { id: "private-purchase", supplierId: "private-supplier",
+  supplierName: "Fornecedor de compra privado", supplierDocument: "", description: "Pedido privado",
+  orderedOn: "2026-10-01", createdAt: "2026-10-01T12:00:00Z", accountId: "private-bank", paymentMethod: "Pix",
+  items: [{ description: "Peca privada", quantity: 1, unitCost: 1000 }],
+  schedule: [{ dueOn: "2026-10-31", amount: 1000 }] }, true).finance;
+payload.finance = receivePurchaseOrder(payload, purchasing(payload).orders[0], {
+  date: "2026-10-01", reference: "NF privada", notes: "Conferencia privada completa" }, true).finance;
 payload.orders[0].technicianUserId = tech;
 payload.orders[0].status = "Aberta";
 payload.orders[0].details = getOrderDetails(payload.orders[0]);
@@ -51,7 +86,10 @@ beforeAll(async () => {
   await db.query("insert into auth.users values ($1,'owner@example.test'),($2,'tech@example.test'),($3,'other@example.test')", [owner, tech, other]);
   await db.query("insert into public.companies (id,name,created_by) values ($1,'Alpha Tec',$2)", [company, owner]);
   await db.query("insert into public.company_memberships (user_id,company_id,role,display_name) values ($1,$4,'owner','Admin'),($2,$4,'technician','Técnico'),($3,$4,'technician','Outro')", [owner, tech, other, company]);
-  await db.query("insert into public.company_data(company_id,payload) values ($1,$2)", [company, JSON.stringify(payload)]);
+  const initial = { ...payload, finance: { ...payload.finance,
+    entries: payload.finance.entries.map((entry) => ({ ...entry, settlements: [] })) } };
+  await db.query("insert into public.company_data(company_id,payload) values ($1,$2)", [company, JSON.stringify(initial)]);
+  await db.query("update public.company_data set payload=$1 where company_id=$2", [JSON.stringify(payload), company]);
 }, 30000);
 afterAll(async () => { await db.close(); });
 

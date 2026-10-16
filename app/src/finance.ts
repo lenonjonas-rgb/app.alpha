@@ -1,6 +1,6 @@
 import { getOrderDetails, localDay, makeId, orderValues, validateDatabase } from "./domain";
 import type { Database, OrderDetails } from "./domain";
-import { bankAccountSchema, billingKinds, financeEntrySchema } from "./financeSchema";
+import { bankAccountSchema, billingKinds, financeEntrySchema, financeSettlementSchema } from "./financeSchema";
 import type { BankAccount, BillingKind, BillingTerms, FinanceEntry, Invoice } from "./financeSchema";
 import type { BillingItem } from "./financeSchema";
 import { travelValues } from "./travel";
@@ -115,7 +115,7 @@ export function saveFinanceEntry(data: Database, input: FinanceEntry) {
   const entry = financeEntrySchema.parse(input);
   if (data.finance.entries.some((item) => item.id === entry.id))
     throw new Error("Esta conta já foi cadastrada.");
-  if (entry.invoiceId || entry.settlements.length || entry.canceled || entry.retention)
+  if (entry.invoiceId || entry.settlements.length || entry.canceled || entry.retention || entry.installment || entry.recurrence || entry.purchaseId)
     throw new Error("Uma nova conta deve iniciar em aberto e sem faturamento manual.");
   activeAccount(data, entry.accountId);
   return validateDatabase({ ...data, finance: { ...data.finance, entries: [...data.finance.entries, entry] } });
@@ -184,13 +184,17 @@ export function billOrders(data: Database, ids: string[], options: Partial<Recor
   return validateDatabase({ ...data, finance: { ...data.finance, invoices: [...data.finance.invoices, ...invoices], entries: [...data.finance.entries, ...entries] } });
 }
 
-export function settleFinanceEntry(data: Database, id: string, settlement: Omit<FinanceEntry["settlements"][number], "reversed">) {
+export function settleFinanceEntry(data: Database, id: string, input: Omit<FinanceEntry["settlements"][number], "reversed">, confirmedAdjustment = false) {
+  const settlement = financeSettlementSchema.parse({ ...input, reversed: false });
   const entry = data.finance.entries.find((item) => item.id === id);
   if (!entry || entry.canceled) throw new Error("Conta indisponível para baixa.");
+  if (settlement.adjustment && !confirmedAdjustment) throw new Error("Confirme o principal, os ajustes e o valor efetivo da baixa.");
+  if (settlement.adjustment && (entry.invoiceId || entry.retention))
+    throw new Error("Ajustes de baixa estão disponíveis somente para contas manuais sem retenções ou faturamento de OS.");
   if (settlement.date > localDay()) throw new Error("A data da baixa não pode estar no futuro.");
   activeAccount(data, settlement.accountId);
   if (settlement.amount > entryBalance(entry)) throw new Error("O valor da baixa excede o saldo da conta.");
-  const updated = financeEntrySchema.parse({ ...entry, settlements: [...entry.settlements, { ...settlement, reversed: false }] });
+  const updated = financeEntrySchema.parse({ ...entry, settlements: [...entry.settlements, settlement] });
   return validateDatabase({ ...data, finance: { ...data.finance, entries: data.finance.entries.map((item) => item.id === id ? updated : item) } });
 }
 

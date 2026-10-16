@@ -11,4 +11,11 @@
 .finance-table summary { cursor: pointer; }
 .finance-billing-group { min-width: 0; padding: 16px; border: 1px solid var(--line, #e5e7eb); border-radius: 12px; }
 .finance-billing-group legend { font-weight: 600; }
+.finance-management { display: grid; gap: 18px; min-width: 0; }
+.finance-management h2 { margin-bottom: 8px; }
+.finance-filters { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; align-items: end; }
+.finance-filters .button { justify-self: start; }
+.finance-table caption { padding: 14px; text-align: left; font-weight: 600; }
+.finance-classification { display: block; margin-top: 8px; color: var(--muted, #64748b); }
+@media (max-width: 700px) { .finance-filters { grid-template-columns: 1fr; } }
 @media (max-width: 700px) { .finance-metrics { grid-template-columns: 1fr; } }
