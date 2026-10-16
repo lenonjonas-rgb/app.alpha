@@ -65,7 +65,7 @@ export function pendingBillingOrders(data: Database) {
   return data.orders.filter((order) => {
     if (order.status !== "Finalizada" || getOrderDetails(order).archived) return false;
     const pending = pendingBillingValues(data, order);
-    return pending.products + pending.services > 0 || !activeInvoices(data, order.id).length;
+    return pending.products + pending.services > 0;
   });
 }
 

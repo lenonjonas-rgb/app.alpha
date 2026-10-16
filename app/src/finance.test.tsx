@@ -109,6 +109,32 @@ describe("financeiro", () => {
     data.orders[0].details!.archived = true;
     expect(pendingBillingOrders(data).some((item) => item.id === data.orders[0].id)).toBe(false);
   });
+  it.each(["sem itens", "itens gratuitos", "desconto integral"] as const)("oculta OS com total zero: %s", (scenario) => {
+    const data = fixture(false);
+    const order = data.orders[0];
+    order.details!.discount = scenario === "desconto integral" ? 100 : 0;
+    order.details!.items = scenario === "sem itens" ? [] : [{
+      id: "service", kind: "servico", referenceId: data.services[0].id, name: "Serviço",
+      quantity: 1, price: scenario === "desconto integral" ? 10000 : 0, discount: 0,
+    }];
+    expect(pendingBillingValues(data, order)).toEqual({ products: 0, services: 0 });
+    expect(pendingBillingOrders(data).map((item) => item.id)).not.toContain(order.id);
+    const html = renderToStaticMarkup(<FinancePanel data={data} commit={() => {}} onSuccess={() => {}} onOpenOrder={() => {}} />);
+    expect(html).not.toContain(order.code);
+    expect(() => billOrders(data, [order.id], options)).toThrow("não está mais disponível");
+  });
+  it.each(["produto", "servico"] as const)("exibe OS com apenas um centavo pendente de %s", (kind) => {
+    const data = fixture(false);
+    const order = data.orders[0];
+    order.details!.discount = 0;
+    order.details!.items = [{
+      id: "item", kind, referenceId: kind === "produto" ? data.products[0].id : data.services[0].id,
+      name: "Item mínimo", quantity: 1, price: 1, discount: 0,
+    }];
+    expect(pendingBillingOrders(data).map((item) => item.id)).toContain(order.id);
+    const html = renderToStaticMarkup(<FinancePanel data={data} commit={() => {}} onSuccess={() => {}} onOpenOrder={() => {}} />);
+    expect(html).toContain(order.code);
+  });
   it.each([true, false])("fatura exatamente o valor da OS, sem incluir custo interno (cobrar=%s)", (chargeTravel) => {
     const data = fixture(chargeTravel);
     if (!chargeTravel) { data.orders[0].details!.discountMode = "R$"; data.orders[0].details!.discount = 0; data.orders[0].details!.costs = [{ id: "extra", name: "Serviço adicional", value: 3000 }]; }
@@ -144,7 +170,7 @@ describe("financeiro", () => {
     expect(() => billOrders(data, [order.id], options)).toThrow("pedágios pendentes");
     order.details!.travel = undefined;
     order.details!.discount = 0;
-    expect(() => billOrders(data, [order.id], options)).toThrow("maior que zero");
+    expect(() => billOrders(data, [order.id], options)).toThrow("não está mais disponível");
   });
   it("exige banco ativo e permite editar e inativar sem excluir referências", () => {
     const data = fixture();
