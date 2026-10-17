@@ -18,6 +18,7 @@ import { FinanceFiscalStatus } from "./FinanceFiscalStatus";
 import type { z } from "zod";
 import { FinanceClassificationFields, FinanceManagementPanel } from "./FinanceManagementPanel";
 import type { ManagementTab } from "./FinanceManagementPanel";
+import type { CompanyRole } from "./userAccess";
 import { classifyFinanceEntry, financeManagement } from "./financeManagement";
 import { BankReconciliationPanel } from "./BankReconciliationPanel";
 import { FinanceTransfersPanel } from "./FinanceTransfersPanel";
@@ -31,8 +32,9 @@ type Editor = { kind: "bank"; account?: BankAccount } | { kind: "entry"; directi
 type Commit = (update: Database | ((current: Database) => Database)) => void;
 const tabs: Tab[] = ["Painel gerencial", "Fluxo de caixa", "A faturar", "Contas a receber", "Contas a pagar", "Compras e fornecedores", "Recorrências", "Bancos", "Transferências", "Conciliação bancária", "Faturamentos", "Relatórios", "Cadastros gerenciais", "Fiscal", "Remessas"];
 
-export function FinancePanel({ data, commit, onSuccess, onOpenOrder, initialTab }: {
+export function FinancePanel({ data, commit, onSuccess, onOpenOrder, initialTab, approvalActor }: {
   data: Database; commit: Commit; onSuccess: (message: string) => void; onOpenOrder: (id: string) => void; initialTab?: Tab;
+  approvalActor?: { userId: string | null; name: string; role: CompanyRole | null };
 }) {
   const [tab, setTab] = useState<Tab>(initialTab ?? "A faturar");
   const [editor, setEditor] = useState<Editor | null>(null);
@@ -113,7 +115,7 @@ export function FinancePanel({ data, commit, onSuccess, onOpenOrder, initialTab 
     {tab === "Conciliação bancária" && <BankReconciliationPanel data={data} commit={commit} onSuccess={onSuccess} />}
     {tab === "Transferências" && <FinanceTransfersPanel data={data} commit={commit} onSuccess={onSuccess} />}
     {tab === "Recorrências" && <FinanceRecurrencesPanel data={data} commit={commit} onSuccess={onSuccess} />}
-    {tab === "Compras e fornecedores" && <PurchasingPanel data={data} commit={commit} onSuccess={onSuccess} />}
+    {tab === "Compras e fornecedores" && <PurchasingPanel data={data} commit={commit} onSuccess={onSuccess} approvalActor={approvalActor} />}
     {tab === "Fiscal" && <FiscalPanel data={data} commit={commit} />}
     {tab === "Remessas" && <RemittancePanel data={data} />}
     {tab === "A faturar" && <>
@@ -142,7 +144,7 @@ export function FinancePanel({ data, commit, onSuccess, onOpenOrder, initialTab 
       <div className="section-heading">
         <label className="field">Buscar conta<input type="search" value={query} onChange={(event) => setQuery(event.target.value)} /></label>
         <label className="field">Situação<select value={status} onChange={(event) => setStatus(event.target.value)}>
-          {["Todas", "Em aberto", "Atrasada", "Parcial", "Recebida", "Paga", "Cancelada"].map((item) => <option key={item}>{item}</option>)}
+          {["Todas", "Em aberto", "Atrasada", "Parcial", "Recebida", "Paga", "Compensada", "Cancelada"].map((item) => <option key={item}>{item}</option>)}
         </select></label>
         <button className="button primary" onClick={() => open({ kind: "entry", direction })}><Plus size={17} />Nova conta a {direction.toLowerCase()}</button>
       </div>
@@ -150,6 +152,7 @@ export function FinancePanel({ data, commit, onSuccess, onOpenOrder, initialTab 
         <tbody>{entries.map((entry) => <tr key={entry.id}>
           <td>{entry.party}</td><td>{entry.description}
             {entry.purchaseId && <small className="finance-classification">Pedido de compra: {entry.purchaseId}</small>}
+            {entry.purchaseReturnCreditId && <small className="finance-classification">Crédito de devolução de compra: {entry.purchaseReturnCreditId}</small>}
             {entry.recurrence && <small className="finance-classification">Recorrência: {entry.recurrence.id} · Mês {entry.recurrence.period}</small>}
             {entry.installment && <details><summary>Parcela {entry.installment.number}/{entry.installment.count}</summary>
               <p>Grupo: {entry.installment.planId}<br />Total original: {currency(entry.installment.total)}.
@@ -167,6 +170,9 @@ export function FinancePanel({ data, commit, onSuccess, onOpenOrder, initialTab 
             {!entry.canceled && <button className="text-button" disabled={fiscalBusy || linked(entry.id)?.cancellationAllowed === false}
               onClick={() => void cancel(entry)}>Cancelar</button>}
           </div>
+            {!!entry.purchaseReturnOffsets?.length && <details><summary>Abatimentos por devolução</summary>
+              {entry.purchaseReturnOffsets.map((offset) => <p key={offset.returnId}>Devolução {offset.returnId} · {currency(offset.amount)}</p>)}
+            </details>}
             {!!entry.settlements.length && <details><summary>Baixas ({entry.settlements.length})</summary>{entry.settlements.map((settlement) =>
               <div key={settlement.id}>{displayDate(settlement.date)} · {currency(settlementCashAmount(settlement))} · {data.finance.accounts.find((account) => account.id === settlement.accountId)?.name}
                 {settlement.adjustment && <p>Principal liquidado: {currency(settlement.amount)} · Juros: {currency(settlement.adjustment.interest)} ·

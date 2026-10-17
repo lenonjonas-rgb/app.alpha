@@ -16,6 +16,8 @@ import {
   servicePointSchema,
   shiftDay,
   subtotal,
+  stockAvailable,
+  stockLocationBalance,
 } from "./domain";
 import type {
   Client,
@@ -51,6 +53,7 @@ import { TravelPanel } from "./TravelPanel";
 import { assertTravelReady, routeTolls, sameTravelEndpoint, travelEndpoint, travelSchema } from "./travel";
 import type { Travel } from "./travel";
 import { assistanceEndpoint, calculateTravelRoute } from "./travelClient";
+import { addMaintenanceContractCharge, maintenanceContractLifecycle } from "./maintenanceContracts";
 
 export type FormKind =
   | "client"
@@ -67,6 +70,7 @@ export type Editor = {
   time?: string;
   clientId?: string;
   equipmentId?: string;
+  contractId?: string;
 };
 type SavedFormControl = {
   name: string;
@@ -460,6 +464,12 @@ export function EditorModal({
       ? savedFormValue(savedDraft, "clientId", data.orders.find((record) => record.id === editor.id)?.clientId ?? editor.clientId ?? "")
       : "",
   );
+  const [orderDate, setOrderDate] = useState(() =>
+    editor.kind === "order" ? savedFormValue(savedDraft, "date", data.orders.find((record) => record.id === editor.id)?.date ?? editor.date ?? localDay()) : "",
+  );
+  const [contractId, setContractId] = useState(() =>
+    editor.kind === "order" ? savedFormValue(savedDraft, "maintenanceContractId", editor.contractId ?? data.orders.find((record) => record.id === editor.id)?.details?.maintenanceContract?.id ?? "") : "",
+  );
   const [lines, setLines] = useState<Line[]>(() => {
     const saved = savedFormArray(savedDraft, "draftLines", lineSchema);
     return saved ?? data.quotes.find((record) => record.id === editor.id)?.items ?? [];
@@ -500,6 +510,9 @@ export function EditorModal({
       : fallback;
   });
   const clientEquipment = data.equipment.filter((item) => item.clientId === clientId);
+  const contractOptions = editor.kind === "order" ? data.maintenanceContracts.filter((item) =>
+    item.clientId === clientId && maintenanceContractLifecycle(item) === "Ativo" &&
+    item.startsOn <= orderDate && item.endsOn >= orderDate) : [];
   const equipmentQuestionnaires = data.questionnaires.filter((item) => !item.archived && item.display.equipment);
   const previousEquipmentIds = order ? [order.equipmentId, ...getOrderDetails(order).equipmentIds].filter(Boolean) : [];
   function equipmentSelection(equipmentId: string): OrderEquipmentSelection {
@@ -676,6 +689,11 @@ export function EditorModal({
                       reason: "Saldo inicial",
                       balance: record.stock,
                       at: new Date().toISOString(),
+                      locationId: current.inventory!.defaultLocationId,
+                      source: { type: "opening" as const },
+                      unitCost: record.cost,
+                      averageCostBefore: record.cost,
+                      averageCostAfter: record.cost,
                     },
                   ]
                 : [];
@@ -730,6 +748,18 @@ export function EditorModal({
             const previousDetails = existing ? getOrderDetails(existing) : orderDetailsSchema.parse({ createdAt: new Date().toISOString() });
             const equipmentLinks = orderEquipmentQuestionnaires(current, clientId, orderEquipment, previousDetails.checklists,
               existing ? [existing.equipmentId, ...previousDetails.equipmentIds].filter(Boolean) : []);
+            const selectedContractId = existing?.details?.maintenanceContract?.id ?? getText(form, "maintenanceContractId");
+            const selectedContract = selectedContractId
+              ? current.maintenanceContracts.find((item) => item.id === selectedContractId && item.clientId === getText(form, "clientId") &&
+                (existing?.details?.maintenanceContract ? true :
+                  maintenanceContractLifecycle(item) === "Ativo" && item.startsOn <= date && item.endsOn >= date))
+              : undefined;
+            if (selectedContractId && !selectedContract)
+              throw new Error("O contrato não está ativo para este cliente e data da OS.");
+            if (selectedContract && (date < selectedContract.startsOn || date > selectedContract.endsOn))
+              throw new Error("A data da OS vinculada deve estar dentro da vigência do contrato.");
+            if (selectedContract && ![equipmentLinks.equipmentId, ...equipmentLinks.equipmentIds].some((id) => selectedContract.equipmentIds.includes(id)))
+              throw new Error("Selecione na OS ao menos uma unidade coberta pelo contrato.");
             const useClientAddress = form.get("useClientAddress") === "on";
             const selectedClient = current.clients.find((item) => item.id === getText(form, "clientId"));
             if (useClientAddress && !selectedClient?.address.trim())
@@ -741,6 +771,7 @@ export function EditorModal({
               throw new Error("Os endereços mudaram. Calcule o deslocamento novamente antes de salvar.");
             const details = {
               ...previousDetails,
+              ...(!existing && selectedContract ? addMaintenanceContractCharge(previousDetails, selectedContract) : {}),
               servicePoint,
               travel: submittedTravel,
               equipmentModels: selectedModels,
@@ -994,7 +1025,7 @@ export function EditorModal({
                   />
                 </label>
                 <label className="field">
-                  Custo (R$)
+                  {product ? "Custo médio atual (R$)" : "Custo inicial (R$)"}
                   <input
                     type="number"
                     name="cost"
@@ -1003,7 +1034,9 @@ export function EditorModal({
                     max="1000000"
                     step="0.01"
                     required
+                    readOnly={!!product}
                   />
+                  {product && <small>Atualizado automaticamente pelos recebimentos; custos históricos não são reescritos.</small>}
                 </label>
                 {!product && (
                   <label className="field">
@@ -1077,6 +1110,7 @@ export function EditorModal({
                   onChange={(id) => {
                     if (id === clientId) return;
                     setClientId(id);
+                    setContractId("");
                     setOrderEquipment([]);
                     setEquipmentOpen(false);
                   }}
@@ -1150,10 +1184,23 @@ export function EditorModal({
                   <input
                     type="date"
                     name="date"
-                    defaultValue={order?.date ?? editor.date ?? localDay()}
+                    value={orderDate}
+                    onChange={(event) => { setOrderDate(event.target.value); setContractId(""); }}
                     required
                   />
                 </label>
+                {order?.details?.maintenanceContract ? <p className="field full">
+                  Contrato vinculado: {data.maintenanceContracts.find((item) => item.id === order.details?.maintenanceContract?.id)?.name ?? "histórico"} ·
+                  valor registrado nesta OS: {currency(order.details.maintenanceContract.monthlyAmount)}
+                </p> : <fieldset className="full"><legend>Contrato mensal (opcional)</legend>
+                  {contractOptions.map((item) => <label key={item.id} className="checkbox-field">
+                    <input type="checkbox" name="maintenanceContractId" value={item.id} checked={contractId === item.id}
+                      onChange={(event) => setContractId(event.target.checked ? item.id : "")} />
+                    {item.name} · {currency(item.monthlyAmount)}
+                  </label>)}
+                  {!contractOptions.length && <small>Não há contratos ativos para este cliente e esta data. Selecione também uma unidade coberta.</small>}
+                  <small>Ao marcar um contrato, seu valor mensal é incluído como serviço adicional nos valores desta OS e segue o faturamento já existente.</small>
+                </fieldset>}
                 <label className="field">
                   Horário *
                   <input
@@ -1323,9 +1370,9 @@ export function EditorModal({
                         <input
                           aria-label={`Quantidade de ${item.name}`}
                           type="number"
-                          min="0.01"
+                          min={item.kind === "produto" ? "1" : "0.01"}
                           max="10000"
-                          step="0.01"
+                          step={item.kind === "produto" ? "1" : "0.01"}
                           required
                           value={item.quantity}
                           onChange={(event) =>
@@ -1444,6 +1491,9 @@ export function MovementModal({
   onClose: () => void;
 }) {
   const product = data.products.find((item) => item.id === productId)!;
+  const location = data.inventory!.locations.find((item) => item.id === data.inventory!.defaultLocationId)!;
+  const physical = stockLocationBalance(data, product.id, location.id);
+  const available = stockAvailable(data, product.id, location.id);
   const [direction, setDirection] = useState("entrada");
   const [quantity, setQuantity] = useState(1);
   const [error, setError] = useState("");
@@ -1467,7 +1517,7 @@ export function MovementModal({
           <div className="movement-product">
             <strong>{product.name}</strong>
             <span>
-              {product.code} · Saldo atual: {product.stock}
+              {product.code} · {location.name} · Físico: {physical} · Disponível: {available}
             </span>
           </div>
           {error && (
@@ -1510,7 +1560,7 @@ export function MovementModal({
             <div className="balance-preview">
               <small>Saldo após movimentação</small>
               <strong>
-                {product.stock +
+                {physical +
                   (direction === "entrada" ? quantity : -quantity)}
               </strong>
             </div>
@@ -1520,6 +1570,109 @@ export function MovementModal({
                 name="reason"
                 placeholder="Compra, consumo na OS, devolução..."
                 maxLength={300}
+                required
+              />
+            </label>
+          </div>
+        </div>
+        <FormButtons onClose={onClose} />
+      </form>
+    </Modal>
+  );
+}
+
+export function InventoryCountModal({
+  data,
+  productId,
+  onSave,
+  onClose,
+}: {
+  data: Database;
+  productId: string;
+  onSave: (locationId: string, quantity: number, reason: string) => void;
+  onClose: () => void;
+}) {
+  const product = data.products.find((item) => item.id === productId)!;
+  const locations = data.inventory!.locations.filter((item) => item.active);
+  const [locationId, setLocationId] = useState(data.inventory!.defaultLocationId);
+  const initialLocation = locations.find((item) => item.id === data.inventory!.defaultLocationId) ?? locations[0];
+  const [quantity, setQuantity] = useState(stockLocationBalance(data, product.id, initialLocation.id));
+  const [error, setError] = useState("");
+  const physical = stockLocationBalance(data, product.id, locationId);
+  const difference = quantity - physical;
+  return (
+    <Modal title="Contagem física de estoque" onClose={onClose}>
+      <form
+        onSubmit={(event) => {
+          event.preventDefault();
+          try {
+            onSave(
+              locationId,
+              quantity,
+              getText(new FormData(event.currentTarget), "reason"),
+            );
+            onClose();
+          } catch (cause) {
+            setError(errorMessage(cause));
+          }
+        }}
+      >
+        <div className="modal-body">
+          <div className="movement-product">
+            <strong>{product.name}</strong>
+            <span>{product.code}</span>
+          </div>
+          {error && (
+            <div className="error-message" role="alert">
+              {error}
+            </div>
+          )}
+          <div className="form-grid">
+            <label className="field full">
+              Depósito *
+              <select
+                value={locationId}
+                onChange={(event) => {
+                  const nextLocationId = event.target.value;
+                  setLocationId(nextLocationId);
+                  setQuantity(stockLocationBalance(data, product.id, nextLocationId));
+                }}
+                required
+              >
+                {locations.map((item) => (
+                  <option key={item.id} value={item.id}>{item.name}</option>
+                ))}
+              </select>
+            </label>
+            <div className="balance-preview">
+              <small>Saldo no sistema</small>
+              <strong>{physical}</strong>
+            </div>
+            <label className="field">
+              Quantidade contada *
+              <input
+                autoFocus
+                type="number"
+                value={quantity}
+                onChange={(event) => setQuantity(Number(event.target.value))}
+                min="0"
+                max="1000000000"
+                step="1"
+                required
+              />
+            </label>
+            <div className="balance-preview">
+              <small>Ajuste a registrar</small>
+              <strong className={difference < 0 ? "overdue" : difference > 0 ? "positive" : ""}>
+                {difference > 0 ? "+" : ""}{difference}
+              </strong>
+            </div>
+            <label className="field full">
+              Justificativa *
+              <textarea
+                name="reason"
+                placeholder="Informe a causa da divergência ou o método da contagem."
+                maxLength={700}
                 required
               />
             </label>

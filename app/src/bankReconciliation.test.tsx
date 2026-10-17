@@ -4,7 +4,8 @@ import { demoDatabase, localDay, validateDatabase } from "./domain";
 import { saveBankAccount, saveFinanceEntry, settleFinanceEntry, reverseSettlement } from "./finance";
 import { parseBankStatement } from "./bankStatement";
 import { activeBankMatch, banking, importStatement, matchBankSettlement, previewStatementImport, settleAndMatch,
-  settlementCandidates, unmatchBankSettlement } from "./bankReconciliation";
+  settlementCandidates, unmatchBankSettlement, matchBankSettlementGroup, transactionReconciled,
+  activeBankReconciliationGroup } from "./bankReconciliation";
 import { managementReport } from "./financeManagement";
 import { FinancePanel } from "./FinancePanel";
 import type { ParsedStatement } from "./bankStatement";
@@ -20,6 +21,9 @@ function fixture() {
 const csv = (body = `id-1;${today};Recebimento;100,00`) => `id;data;descricao;valor\r\n${body}\r\n`;
 function statement(amount = 10000): ParsedStatement {
   return { format: "CSV", bank: "", account: "", lines: [{ externalId: "id-1", date: today, description: "Recebimento", amount }] };
+}
+function daysBefore(value: string, days: number) {
+  return new Date(Date.parse(`${value}T12:00:00Z`) - days * 86_400_000).toISOString().slice(0, 10);
 }
 function imported(data = fixture(), amount = 10000) { return importStatement(data, "bank", statement(amount), "extrato.csv", true); }
 function settled(data = fixture(), amount = 10000) {
@@ -143,6 +147,60 @@ describe("importação e conciliação", () => {
     data = matchBankSettlement(data, transaction.id, "entry", "payment");
     expect(banking(data).matches).toHaveLength(2);
     expect(banking(data).matches[0].reversed).toBe(true);
+  });
+  it("concilia varios movimientos y bajas por total exacto dentro de tres dias", () => {
+    let data = fixture();
+    const firstDate = today, secondDate = daysBefore(today, 2);
+    data = importStatement(data, "bank", { format: "CSV", bank: "", account: "", lines: [
+      { externalId: "group-1", date: firstDate, description: "Crédito lote A", amount: 4000 },
+      { externalId: "group-2", date: secondDate, description: "Crédito lote B", amount: 6000 },
+    ] }, "grupo.csv", true);
+    data = saveFinanceEntry(data, { ...data.finance.entries[0], id: "entry-a", amount: 2500, settlements: [] });
+    data = saveFinanceEntry(data, { ...data.finance.entries[0], id: "entry-b", amount: 7500, settlements: [] });
+    data = settleFinanceEntry(data, "entry-a", { id: "settlement-a", date: daysBefore(today, 1), amount: 2500, accountId: "bank" });
+    data = settleFinanceEntry(data, "entry-b", { id: "settlement-b", date: secondDate, amount: 7500, accountId: "bank" });
+    const [firstTransaction, secondTransaction] = banking(data).transactions;
+    const group = {
+      transactionIds: [firstTransaction.id, secondTransaction.id],
+      settlements: [{ entryId: "entry-a", settlementId: "settlement-a" }, { entryId: "entry-b", settlementId: "settlement-b" }],
+    };
+    expect(() => matchBankSettlementGroup(data, group.transactionIds, group.settlements, false)).toThrow("Confirme");
+    data = matchBankSettlementGroup(data, group.transactionIds, group.settlements, true);
+    const savedGroup = banking(data).reconciliationGroups![0];
+    expect(activeBankReconciliationGroup(data, savedGroup)).toBe(true);
+    expect(transactionReconciled(data, firstTransaction.id)).toBe(true);
+    expect(transactionReconciled(data, secondTransaction.id)).toBe(true);
+    const settlementReversed = reverseSettlement(data, "entry-a", "settlement-a");
+    expect(activeBankReconciliationGroup(settlementReversed, savedGroup)).toBe(false);
+    expect(transactionReconciled(settlementReversed, firstTransaction.id)).toBe(false);
+    expect(transactionReconciled(settlementReversed, secondTransaction.id)).toBe(false);
+    expect(managementReport(data, { start: secondDate, end: today, accountId: "", categoryId: "", costCenterId: "" }).totals.received).toBe(10000);
+    expect(() => matchBankSettlementGroup(data, group.transactionIds, group.settlements, true)).toThrow("já conciliado");
+    const undone = unmatchBankSettlement(data, savedGroup.id);
+    expect(undone.finance.entries).toEqual(data.finance.entries);
+    expect(transactionReconciled(undone, firstTransaction.id)).toBe(false);
+    expect(transactionReconciled(undone, secondTransaction.id)).toBe(false);
+    expect(banking(undone).reconciliationGroups![0].reversed).toBe(true);
+  });
+  it("recusa diferença de total e grupo com datas fora da janela de três dias", () => {
+    let data = imported(settled());
+    const transaction = banking(data).transactions[0];
+    data = importStatement(data, "bank", { format: "CSV", bank: "", account: "", lines: [
+      { externalId: "extra", date: today, description: "Crédito adicional", amount: 1 },
+    ] }, "grupo.csv", true);
+    const secondTransaction = banking(data).transactions[1];
+    const extraEntry = { ...data.finance.entries[0], id: "entry-extra", settlements: [] };
+    data = saveFinanceEntry(data, extraEntry);
+    data = settleFinanceEntry(data, extraEntry.id, { id: "settlement-extra", date: today, amount: 1, accountId: "bank" });
+    const settlement = [{ entryId: extraEntry.id, settlementId: "settlement-extra" }];
+    expect(() => matchBankSettlementGroup(data, [transaction.id, secondTransaction.id], settlement, true)).toThrow("exatamente");
+    const tooFar = structuredClone(data);
+    const farEntry = saveFinanceEntry(tooFar, { ...tooFar.finance.entries[0], id: "entry-far", settlements: [] });
+    const farSettlement = settleFinanceEntry(farEntry, "entry-far", {
+      id: "settlement-far", date: daysBefore(today, 4), amount: 1, accountId: "bank",
+    });
+    expect(() => matchBankSettlementGroup(farSettlement, [transaction.id, secondTransaction.id],
+      [{ entryId: "entry-far", settlementId: "settlement-far" }], true)).toThrow("tres dias");
   });
   it("estornar baixa invalida conciliação sem apagar histórico e permite nova baixa", () => {
     const source = imported(settled()), transaction = banking(source).transactions[0];

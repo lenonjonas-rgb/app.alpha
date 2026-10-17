@@ -5,7 +5,8 @@ import type { Database } from "./domain";
 import type { BankTransaction } from "./bankingSchema";
 import { activeBankMatch, banking, importStatement, matchBankSettlement, previewStatementImport, settleAndMatch,
   settlementCandidates, unmatchBankSettlement, activeTransferMatch, matchBankTransfer, transferCandidates,
-  transactionReconciled, unmatchBankTransfer } from "./bankReconciliation";
+  transactionReconciled, unmatchBankTransfer, activeBankReconciliationGroup, groupSettlementCandidates,
+  matchBankSettlementGroup, reconciliationTransactionCandidates } from "./bankReconciliation";
 import { parseBankStatement, statementTemplate } from "./bankStatement";
 import type { ParsedStatement } from "./bankStatement";
 import { entryBalance } from "./finance";
@@ -23,9 +24,12 @@ export function BankReconciliationPanel({ data, commit, onSuccess }: {
   const [busy, setBusy] = useState(false);
   const [pendingOnly, setPendingOnly] = useState(true);
   const [transactionId, setTransactionId] = useState("");
+  const [initialMode, setInitialMode] = useState<"existing" | "group">("existing");
   const sequence = useRef(0);
   const current = banking(data);
   const activeMatch = (id: string) => current.matches.find((item) => item.transactionId === id && activeBankMatch(data, item));
+  const activeGroup = (id: string) => (current.reconciliationGroups ?? []).find((group) =>
+    group.transactionIds.includes(id) && activeBankReconciliationGroup(data, group));
   const transactions = current.transactions.filter((item) => (!accountId || item.accountId === accountId) && (!pendingOnly || !transactionReconciled(data, item.id)))
     .sort((a, b) => b.date.localeCompare(a.date));
   const transaction = current.transactions.find((item) => item.id === transactionId);
@@ -44,8 +48,8 @@ export function BankReconciliationPanel({ data, commit, onSuccess }: {
   return <section className="finance-management" aria-label="Conciliação bancária">
     <h2>Conciliação bancária por arquivo</h2>
     <p>Importação local de CSV padronizado ou OFX de conta bancária em BRL. Não conecta ao banco, não registra boleto/Pix e não movimenta dinheiro.
-      Cada movimento é conciliado individualmente com uma baixa ou ponta de transferência de mesmo banco, tipo, data e valor.</p>
-    <p>Aplique as migrações de proteção do histórico de conciliação e de vínculos de transferência antes de publicar.
+      Baixas podem ser conciliadas individualmente ou em grupo por soma exata; transferências continuam por ponta.</p>
+    <p>Aplique as migrações de proteção do histórico de conciliação, grupos e vínculos de transferência antes de publicar.
       Não use extratos de produção sem conferir conta, moeda e datas.</p>
     {error && <p className="error-message" role="alert">{error}</p>}
     <div className="finance-filters">
@@ -99,24 +103,46 @@ export function BankReconciliationPanel({ data, commit, onSuccess }: {
     <div className="finance-table"><table><thead><tr><th>Banco / Data</th><th>Descrição / ID</th><th>Valor</th><th>Situação</th><th>Ações / histórico</th></tr></thead>
       <tbody>{transactions.map((item) => {
         const match = activeMatch(item.id);
+        const group = activeGroup(item.id);
         const transferMatch = (current.transferMatches ?? []).find((link) => link.transactionId === item.id && activeTransferMatch(data, link));
         const transferHistory = (current.transferMatches ?? []).filter((link) => link.transactionId === item.id);
         const history = current.matches.filter((link) => link.transactionId === item.id);
+        const groupHistory = (current.reconciliationGroups ?? []).filter((link) => link.transactionIds.includes(item.id));
         return <tr key={item.id}><td>{data.finance.accounts.find((bank) => bank.id === item.accountId)?.name}<br />{displayDate(item.date)}</td>
           <td>{item.description}<br /><small>{item.externalId} · {item.fileName}</small></td><td>{currency(item.amount)}</td>
           <td>{transferMatch ? `Conciliado · transferência (${transferMatch.leg === "outgoing" ? "saída" : "entrada"})` :
-            match ? "Conciliado" : history.length || transferHistory.length ? "Pendente · vínculo desfeito ou operação estornada" : "Pendente"}</td>
-          <td>{transferMatch ? <button className="text-button" onClick={() => {
+            group ? `Conciliado · grupo (${group.transactionIds.length} movimentos / ${group.settlements.length} baixas)` :
+              match ? "Conciliado" : history.length || transferHistory.length || groupHistory.length ?
+                "Pendente · vínculo desfeito ou operação estornada" : "Pendente"}</td>
+          <td>{group ? <button className="text-button" onClick={() => {
+            if (window.confirm("Desfazer toda a conciliação agrupada? Os movimentos e baixas continuarão registrados."))
+              act((latest) => unmatchBankSettlement(latest, group.id), "Conciliação agrupada desfeita; movimentos e baixas preservados.");
+          }}>Desfazer grupo</button> : transferMatch ? <button className="text-button" onClick={() => {
             if (window.confirm("Desfazer somente o vínculo desta ponta com o extrato? A transferência e a conciliação da outra ponta serão preservadas."))
               act((latest) => unmatchBankTransfer(latest, transferMatch.id), "Vínculo desfeito; transferência preservada.");
           }}>Desfazer vínculo</button> : match ? <button className="text-button" onClick={() => {
             if (window.confirm("Desfazer somente o vínculo com o extrato? A baixa continuará registrada e não será estornada."))
               act((latest) => unmatchBankSettlement(latest, match.id), "Vínculo desfeito; baixa preservada.");
-          }}>Desfazer vínculo</button> : <button className="button secondary" onClick={() => setTransactionId(item.id)}>Conciliar</button>}
+          }}>Desfazer vínculo</button> : <><button className="button secondary" onClick={() => {
+            setInitialMode("existing"); setTransactionId(item.id);
+          }}>Conciliar</button>
+            <button className="text-button" onClick={() => {
+              setInitialMode("group"); setTransactionId(item.id);
+            }}>Agrupar</button></>}
             {!!history.length && <details><summary>Histórico ({history.length})</summary>{history.map((link) => {
               const entry = data.finance.entries.find((entry) => entry.id === link.entryId);
               return <p key={link.id}>{entry?.party} · {entry?.description}<br />{link.createdAt} ·{" "}
                 {activeBankMatch(data, link) ? "Ativo" : link.reversed ? "Vínculo desfeito" : "Baixa estornada/cancelada"}</p>;
+            })}</details>}
+            {!!groupHistory.length && <details><summary>Histórico de grupos ({groupHistory.length})</summary>{groupHistory.map((link) => {
+              const active = activeBankReconciliationGroup(data, link);
+              return <div key={link.id}><p>{link.transactionIds.length} movimento(s) · {link.settlements.length} baixa(s)<br />
+                {link.createdAt} · {active ? "Ativo" : link.reversed ? "Conciliação desfeita" : "Baixa cancelada/estornada"}</p>
+                {link.settlements.map((reference) => {
+                  const entry = data.finance.entries.find((candidate) => candidate.id === reference.entryId);
+                  return <p key={`${reference.entryId}:${reference.settlementId}`}>{entry?.party} · {entry?.description} · baixa {reference.settlementId}</p>;
+                })}
+              </div>;
             })}</details>}
             {!!transferHistory.length && <details><summary>Histórico de transferência ({transferHistory.length})</summary>{transferHistory.map((link) => {
               const transfer = data.finance.transfers?.find((transfer) => transfer.id === link.transferId);
@@ -128,19 +154,23 @@ export function BankReconciliationPanel({ data, commit, onSuccess }: {
     <p>Desfazer vínculo não estorna baixa. Estornar a baixa em Contas a pagar/receber torna o movimento pendente novamente e mantém o histórico.
       Transferências exigem vínculo separado em cada conta; uma ponta pode ficar pendente até importar o outro extrato.
       Estornar a transferência invalida ambos os vínculos, sem apagar o histórico.
-      Divisão/agrupamento de movimentos, datas diferentes entre pontas e tarifas automáticas ainda não são suportados.</p>
-    {transaction && <ReconciliationEditor key={transaction.id} data={data} transaction={transaction} onClose={() => setTransactionId("")}
+      Conciliações agrupadas exigem totais exatos e datas dentro de três dias; tarifas e diferenças não são ajustadas automaticamente.</p>
+    {transaction && <ReconciliationEditor key={`${transaction.id}:${initialMode}`} data={data} transaction={transaction}
+      initialMode={initialMode} onClose={() => setTransactionId("")}
       onSave={(update) => { commit(update); setTransactionId(""); setError(""); onSuccess("Conciliação salva. Aguarde Sincronizado quando conectado."); }} />}
   </section>;
 }
 
-function ReconciliationEditor({ data, transaction, onSave, onClose }: {
-  data: Database; transaction: BankTransaction; onSave: Commit; onClose: () => void;
+function ReconciliationEditor({ data, transaction, initialMode, onSave, onClose }: {
+  data: Database; transaction: BankTransaction; initialMode: "existing" | "group"; onSave: Commit; onClose: () => void;
 }) {
-  const [mode, setMode] = useState<"existing" | "settle" | "transfer">("existing");
+  const [mode, setMode] = useState<"existing" | "settle" | "transfer" | "group">(initialMode);
+  const [groupTransactions, setGroupTransactions] = useState([transaction.id]);
   const [error, setError] = useState("");
   const candidates = settlementCandidates(data, transaction);
   const transfers = transferCandidates(data, transaction);
+  const groupTransactionsAvailable = reconciliationTransactionCandidates(data, transaction, groupTransactions);
+  const groupCandidates = groupSettlementCandidates(data, groupTransactions);
   const open = data.finance.entries.filter((item) => !item.canceled && item.kind === (transaction.amount > 0 ? "Receber" : "Pagar") &&
     entryBalance(item) >= Math.abs(transaction.amount));
   return <Modal title="Conciliar movimento bancário" onClose={onClose}>
@@ -149,7 +179,14 @@ function ReconciliationEditor({ data, transaction, onSave, onClose }: {
       const form = new FormData(event.currentTarget);
       try {
         if (form.get("confirm") !== "on") throw new Error("Confirme a conferência do movimento.");
-        if (mode === "transfer") {
+        if (mode === "group") {
+          const transactionIds = form.getAll("groupTransaction").map(String);
+          const settlementRefs = form.getAll("groupSettlement").map((value) => {
+            const [entryId, settlementId] = JSON.parse(String(value)) as [string, string];
+            return { entryId, settlementId };
+          });
+          onSave((latest) => matchBankSettlementGroup(latest, transactionIds, settlementRefs, true));
+        } else if (mode === "transfer") {
           const transferId = String(form.get("transferId") ?? "");
           onSave((latest) => matchBankTransfer(latest, transaction.id, transferId, true));
         } else if (mode === "existing") {
@@ -167,8 +204,12 @@ function ReconciliationEditor({ data, transaction, onSave, onClose }: {
         <p className="full">{displayDate(transaction.date)} · {transaction.description} · {currency(transaction.amount)}</p>
         {error && <p className="error-message full" role="alert">{error}</p>}
         <label className="field full">Operação<select value={mode} onChange={(event) => {
-          setMode(event.target.value === "transfer" ? "transfer" : event.target.value === "settle" ? "settle" : "existing"); setError("");
+          const nextMode = event.target.value === "group" ? "group" : event.target.value === "transfer" ? "transfer" :
+            event.target.value === "settle" ? "settle" : "existing";
+          setMode(nextMode); setError("");
+          if (nextMode === "group") setGroupTransactions([transaction.id]);
         }}><option value="existing">Vincular baixa já registrada (não duplica pagamento)</option>
+          <option value="group">Agrupar movimentos e baixas existentes</option>
           <option value="settle">Registrar nova baixa e conciliar</option>
           <option value="transfer">Vincular transferência interna (sem nova baixa)</option></select></label>
         {mode === "transfer" ? <>
@@ -181,6 +222,24 @@ function ReconciliationEditor({ data, transaction, onSave, onClose }: {
             Confira a outra ponta no extrato da respectiva conta.</p>
           {!transfers.length && <p className="full">Nenhuma transferência ativa livre com mesma conta, data e valor exatos.
             Registre a operação em Transferências ou confira as divergências; não crie uma baixa fictícia.</p>}
+        </> : mode === "group" ? <>
+          <fieldset className="field full"><legend>Movimentos do extrato (mesmo banco e sentido)</legend>
+            {groupTransactionsAvailable.map((candidate) => <label className="checkbox-field" key={candidate.id}>
+              <input type="checkbox" name="groupTransaction" value={candidate.id} checked={groupTransactions.includes(candidate.id)}
+                onChange={(event) => setGroupTransactions(event.target.checked
+                  ? [...groupTransactions, candidate.id] : candidate.id === transaction.id ? groupTransactions :
+                    groupTransactions.filter((id) => id !== candidate.id))} />
+              {displayDate(candidate.date)} · {candidate.description} · {currency(candidate.amount)}
+            </label>)}
+          </fieldset>
+          <fieldset className="field full"><legend>Baixas existentes</legend>
+            {groupCandidates.map((item) => <label className="checkbox-field" key={`${item.entry.id}:${item.settlement.id}`}>
+              <input type="checkbox" name="groupSettlement" value={JSON.stringify([item.entry.id, item.settlement.id])} />
+              {displayDate(item.settlement.date)} · {item.entry.party} · {item.entry.description} · {currency(settlementCashAmount(item.settlement))}
+            </label>)}
+            {!groupCandidates.length && <p>Nenhuma baixa livre do mesmo banco e sentido dentro da janela de três dias.</p>}
+          </fieldset>
+          <p className="full">Selecione movimentos e baixas existentes. A soma deve coincidir exatamente e todas as datas devem caber em uma janela de três dias. Tarifas e diferenças exigem tratamento separado.</p>
         </> : mode === "existing" ? <>
           <label className="field full">Baixa compatível<select name="candidate" required defaultValue="">
             <option value="">Selecione explicitamente</option>{candidates.map((item, index) =>
@@ -200,7 +259,8 @@ function ReconciliationEditor({ data, transaction, onSave, onClose }: {
         <label className="checkbox-field full"><input type="checkbox" name="confirm" required />Conferi o movimento e o título/baixa; autorizo esta operação interna.</label>
       </div></div>
       <footer className="modal-actions"><button type="button" className="button secondary" onClick={onClose}>Cancelar</button>
-        <button className="button primary">{mode === "transfer" ? "Vincular transferência" : mode === "existing" ? "Vincular baixa existente" : "Dar baixa e conciliar"}</button></footer>
+        <button className="button primary">{mode === "transfer" ? "Vincular transferência" :
+          mode === "group" ? "Conciliar grupo" : mode === "existing" ? "Vincular baixa existente" : "Dar baixa e conciliar"}</button></footer>
     </form>
   </Modal>;
 }

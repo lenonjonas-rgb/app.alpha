@@ -70,7 +70,12 @@ export function pendingBillingOrders(data: Database) {
 }
 
 export function entryBalance(entry: FinanceEntry) {
-  return entry.amount - (entry.retention?.withheld ?? 0) - entry.settlements.filter((item) => !item.reversed).reduce((sum, item) => sum + item.amount, 0);
+  return entry.amount - (entry.retention?.withheld ?? 0) -
+    entry.settlements.filter((item) => !item.reversed).reduce((sum, item) => sum + item.amount, 0) -
+    (entry.purchaseReturnOffsets ?? []).reduce((sum, item) => sum + item.amount, 0);
+}
+export function purchaseReturnOffsetTotal(entry: FinanceEntry) {
+  return (entry.purchaseReturnOffsets ?? []).reduce((sum, item) => sum + item.amount, 0);
 }
 export function applyFinanceRetention(data: Database, entryId: string, input: z.infer<typeof fiscalRetentionSchema>, expected: FinanceEntry) {
   const retention = fiscalRetentionSchema.parse(input);
@@ -95,7 +100,8 @@ export function clearFinanceRetention(data: Database, entryId: string, calculati
 }
 
 export function entryStatus(entry: FinanceEntry, today = localDay()) {
-  return entry.canceled ? "Cancelada" : entryBalance(entry) === 0 ? (entry.kind === "Receber" ? "Recebida" : "Paga")
+  return entry.canceled ? "Cancelada" : entryBalance(entry) === 0 ? (entry.kind === "Receber" ? "Recebida" :
+    purchaseReturnOffsetTotal(entry) > 0 && !entry.settlements.some((item) => !item.reversed) ? "Compensada" : "Paga")
     : entry.dueOn < today ? "Atrasada" : entry.settlements.some((item) => !item.reversed) ? "Parcial" : "Em aberto";
 }
 
@@ -115,7 +121,8 @@ export function saveFinanceEntry(data: Database, input: FinanceEntry) {
   const entry = financeEntrySchema.parse(input);
   if (data.finance.entries.some((item) => item.id === entry.id))
     throw new Error("Esta conta já foi cadastrada.");
-  if (entry.invoiceId || entry.settlements.length || entry.canceled || entry.retention || entry.installment || entry.recurrence || entry.purchaseId)
+  if (entry.invoiceId || entry.settlements.length || entry.canceled || entry.retention || entry.installment || entry.recurrence ||
+    entry.purchaseId || entry.purchaseReturnCreditId || entry.purchaseReturnOffsets?.length)
     throw new Error("Uma nova conta deve iniciar em aberto e sem faturamento manual.");
   activeAccount(data, entry.accountId);
   return validateDatabase({ ...data, finance: { ...data.finance, entries: [...data.finance.entries, entry] } });

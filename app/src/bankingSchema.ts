@@ -19,13 +19,26 @@ export const bankTransferMatchSchema = z.object({
   id, transactionId: id, transferId: id, leg: z.enum(["outgoing", "incoming"]),
   createdAt: z.iso.datetime(), reversed: z.boolean(),
 });
+export const bankReconciliationGroupSchema = z.object({
+  id, transactionIds: z.array(id).min(1).max(200),
+  settlements: z.array(z.object({ entryId: id, settlementId: id })).min(1).max(200),
+  createdAt: z.iso.datetime(), reversed: z.boolean(),
+}).superRefine((group, context) => {
+  if (group.transactionIds.length + group.settlements.length < 3 ||
+    new Set(group.transactionIds).size !== group.transactionIds.length ||
+    new Set(group.settlements.map((item) => JSON.stringify([item.entryId, item.settlementId]))).size !== group.settlements.length) {
+    context.addIssue({ code: "custom", message: "Grupo de conciliacao duplicado ou sem divisao/agrupamento." });
+  }
+});
 export const bankingSchema = z.object({
   transactions: z.array(bankTransactionSchema).max(10000),
   matches: z.array(bankMatchSchema).max(20000),
   transferMatches: z.array(bankTransferMatchSchema).max(20000).optional(),
+  reconciliationGroups: z.array(bankReconciliationGroupSchema).max(10000).optional(),
 });
 export type BankTransaction = z.infer<typeof bankTransactionSchema>;
 export type BankMatch = z.infer<typeof bankMatchSchema>;
 export type BankTransferMatch = z.infer<typeof bankTransferMatchSchema>;
+export type BankReconciliationGroup = z.infer<typeof bankReconciliationGroupSchema>;
 export type Banking = z.infer<typeof bankingSchema>;
 export type StatementLine = z.infer<typeof statementLineSchema>;

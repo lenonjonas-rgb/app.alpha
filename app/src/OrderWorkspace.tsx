@@ -38,6 +38,9 @@ import {
   orderPending,
   orderValues,
   orderDetailsSchema,
+  orderMargin,
+  reversibleConsumptionItems,
+  reverseOrderConsumption,
   replicateOrder,
   shiftDay,
   total,
@@ -203,6 +206,7 @@ export function OrderWorkspace({
     | "checklist"
     | "question"
     | "activity"
+    | "consumption-reversal"
     | "replicate"
     | "history"
     | null
@@ -282,6 +286,13 @@ export function OrderWorkspace({
   ];
   const totals = activityTotals(details.activities, clock);
   const values = orderValues(details);
+  const margin = orderMargin(data, order);
+  const reversibleItems = reversibleConsumptionItems(data, order.id);
+  const consumedReservationIds = new Set(data.inventory!.reservations
+    .filter((item) => item.orderId === order.id && item.events.at(-1)?.status === "Consumida")
+    .map((item) => item.id));
+  const consumptionReversals = data.inventory!.consumptionReversals
+    .filter((item) => consumedReservationIds.has(item.reservationId));
   const linkedQuotes = data.quotes.filter((item) => item.orderId === order.id);
   const availableQuotes = data.quotes.filter(
     (item) => item.clientId === order.clientId && !item.orderId,
@@ -1959,6 +1970,39 @@ export function OrderWorkspace({
                   <small>Total</small>
                   <strong>{currency(values.total)}</strong>
                 </div>
+                {order.status === "Finalizada" && margin && (
+                  <div>
+                    <small>Margem após custo das peças</small>
+                    <strong>{currency(margin.margin)} · {margin.percentage.toFixed(1)}%</strong>
+                    <small>Custo líquido após estornos, usando custo registrado no momento do consumo: {currency(margin.cost)}</small>
+                  </div>
+                )}
+                {order.status === "Finalizada" && !margin &&
+                  details.items.some((item) => item.kind === "produto") && (
+                    <div>
+                      <small>Custo das peças</small>
+                      <strong>Indisponível para esta OS histórica</strong>
+                      <small>A baixa de estoque ocorreu antes do registro do custo médio.</small>
+                    </div>
+                  )}
+                {order.status === "Finalizada" && reversibleItems.length > 0 && (
+                  <div className="full">
+                    <button className="button secondary" onClick={() => setDialog("consumption-reversal")}>
+                      Registrar devolução de peças não utilizadas
+                    </button>
+                    <small>Somente peças ainda não utilizadas. O estorno repõe o estoque e preserva a finalização da OS.</small>
+                  </div>
+                )}
+                {consumptionReversals.length > 0 && (
+                  <div className="full">
+                    <small>Histórico de estornos de peças</small>
+                    {consumptionReversals.map((reversal) => (
+                      <p key={reversal.id}>{new Date(reversal.at).toLocaleString("pt-BR")} · {reversal.reason} · {
+                        reversal.items.map((item) => `${item.quantity} × ${data.products.find((product) => product.id === item.productId)?.name ?? item.productId}`).join("; ")
+                      }</p>
+                    ))}
+                  </div>
+                )}
               </div>
             </>
           )}
@@ -2115,6 +2159,19 @@ export function OrderWorkspace({
           }}
         />
       )}
+      {dialog === "consumption-reversal" && (
+        <ConsumptionReversalEditor
+          order={order}
+          items={reversibleItems}
+          onClose={() => setDialog(null)}
+          onSave={(quantities, reason, confirmed) => {
+            if (act((current) => reverseOrderConsumption(current, order.id, quantities, reason, confirmed),
+              "Devolução registrada; o estoque e a margem da OS foram atualizados.")) {
+              setDialog(null);
+            }
+          }}
+        />
+      )}
       {dialog === "replicate" && (
         <Modal title="Replicar OS" onClose={() => setDialog(null)}>
           <form
@@ -2200,6 +2257,60 @@ export function OrderWorkspace({
         </Modal>
       )}
     </div>
+  );
+}
+
+function ConsumptionReversalEditor({
+  order,
+  items,
+  onClose,
+  onSave,
+}: {
+  order: Order;
+  items: ReturnType<typeof reversibleConsumptionItems>;
+  onClose: () => void;
+  onSave: (quantities: Record<string, number>, reason: string, confirmed: boolean) => void;
+}) {
+  const [error, setError] = useState("");
+  const [confirmed, setConfirmed] = useState(false);
+  return (
+    <Modal title="Devolver peças não utilizadas" onClose={onClose}>
+      <form onSubmit={(event) => {
+        event.preventDefault();
+        const form = new FormData(event.currentTarget);
+        const quantities = Object.fromEntries(items.flatMap((item) => {
+          const quantity = Number(form.get(`quantity.${item.id}`));
+          return quantity > 0 ? [[item.id, quantity]] : [];
+        }));
+        try {
+          if (!confirmed) throw new Error("Confirme que as peças devolvidas não foram utilizadas.");
+          if (!Object.keys(quantities).length) throw new Error("Informe ao menos uma quantidade a devolver.");
+          onSave(quantities, String(form.get("reason") ?? "").trim(), confirmed);
+        } catch (cause) {
+          setError(errorMessage(cause));
+        }
+      }}>
+        <div className="modal-body form-grid">
+          <p className="full">OS {order.code} já está finalizada. Informe somente peças físicas ainda não utilizadas que retornaram ao estoque.
+            O lançamento não reabre a OS nem modifica a baixa ou o custo original.</p>
+          {error && <p className="error-message full" role="alert">{error}</p>}
+          {items.map((item) => (
+            <label className="field" key={item.id}>
+              {item.productName} · consumido {item.consumedQuantity}, já devolvido {item.reversedQuantity}, disponível {item.remainingQuantity}
+              <input type="number" name={`quantity.${item.id}`} min="0" max={item.remainingQuantity} step="1" defaultValue="0" required />
+            </label>
+          ))}
+          <label className="field full">Motivo da devolução<input name="reason" required minLength={5} maxLength={1000} /></label>
+          <label className="field full"><span><input type="checkbox" checked={confirmed}
+            onChange={(event) => setConfirmed(event.target.checked)} />
+            Confirmei as quantidades e que essas peças não foram utilizadas.</span></label>
+        </div>
+        <footer className="modal-footer">
+          <button type="button" className="button secondary" onClick={onClose}>Voltar</button>
+          <button className="button primary" disabled={!confirmed}>Confirmar devolução</button>
+        </footer>
+      </form>
+    </Modal>
   );
 }
 

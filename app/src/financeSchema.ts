@@ -78,6 +78,9 @@ export const financeEntrySchema = z.object({
   installment: installmentSchema.optional(),
   recurrence: z.object({ id, period: recurrencePeriodSchema }).optional(),
   purchaseId: id.optional(),
+  purchaseReturnCreditId: id.optional(),
+  purchaseReturnOffsets: z.array(z.object({ returnId: id, amount: money.refine((value) => value > 0) }))
+    .max(100000).optional(),
   settlements: z.array(financeSettlementSchema).default([]),
 });
 export const financeRecurrenceSchema = z.object({
@@ -101,19 +104,46 @@ export const supplierSchema = z.object({
   phone: z.string().trim().max(100), email: z.union([z.literal(""), z.email().max(254)]),
   address: z.string().trim().max(1000), active: z.boolean(),
 });
+export const purchaseQuoteSchema = z.object({
+  id, supplierId: id, supplierName: name,
+  amount: money.refine((value) => value > 0), quotedOn: date,
+  reference: z.string().trim().max(200), terms: z.string().trim().max(1000),
+});
+export const purchaseApprovalSchema = z.object({
+  at: z.iso.datetime(), approverUserId: id, approverName: name,
+  approverRole: z.enum(["owner", "admin", "local"]),
+  reason: z.string().trim().min(5).max(1000),
+});
+export const purchaseProcurementSchema = z.object({
+  quotes: z.array(purchaseQuoteSchema).min(1).max(20),
+  selectedQuoteId: id,
+  quoteExceptionReason: z.string().trim().min(5).max(1000).optional(),
+  approval: purchaseApprovalSchema,
+});
 export const purchaseOrderSchema = z.object({
   id, supplierId: id, supplierName: name, supplierDocument: supplierSchema.shape.document,
   description: name, orderedOn: date, createdAt: z.iso.datetime(), accountId: id,
   paymentMethod: financeEntrySchema.shape.paymentMethod, categoryId: id.optional(), costCenterId: id.optional(),
   items: z.array(z.object({
+    id: id.optional(), code: z.string().trim().max(100).optional(), productId: id.optional(),
     description: name, quantity: z.number().int().min(1).max(10000),
     unitCost: money.refine((value) => value > 0),
   })).min(1).max(100),
   schedule: z.array(z.object({ dueOn: date, amount: financeEntrySchema.shape.amount })).min(1).max(120),
-  cancellation: z.object({ at: z.iso.datetime(), reason: z.string().trim().min(5).max(1000) }).optional(),
+  procurement: purchaseProcurementSchema.optional(),
+  cancellation: z.object({
+    at: z.iso.datetime(), reason: z.string().trim().min(5).max(1000),
+    receivedAmount: money.refine((value) => value > 0).optional(), payableEntryIds: z.array(id).max(120).optional(),
+  }).superRefine((value, context) => {
+    if ((value.receivedAmount !== undefined) !== (value.payableEntryIds !== undefined) ||
+      (value.receivedAmount !== undefined && !value.payableEntryIds?.length))
+      context.addIssue({ code: "custom", message: "Cancelamento parcial exige valor recebido e contas vinculadas." });
+  }).optional(),
   receipt: z.object({
-    at: z.iso.datetime(), date, reference: z.string().trim().max(200),
+    at: z.iso.datetime(), date, locationId: id, reference: z.string().trim().max(200),
     notes: z.string().trim().min(5).max(1000), entryIds: z.array(id).min(1).max(120),
+    stockItems: z.array(z.object({ lineId: id, productId: id })).min(1).max(100).optional(),
+    batchId: id.optional(),
   }).optional(),
 });
 export const billingItemSchema = z.object({
@@ -251,6 +281,8 @@ export function validateFinance(finance: Finance, clientIds: Set<string>, orderC
     }
   }
   for (const entry of finance.entries) {
+    const returnOffsets = entry.purchaseReturnOffsets ?? [];
+    const returnOffsetTotal = returnOffsets.reduce((sum, item) => sum + item.amount, 0);
     if ((entry.invoiceId || entry.retention) && entry.settlements.some((item) => item.adjustment))
       throw new Error("Ajustes de baixa estão disponíveis somente para contas manuais sem retenções ou faturamento de OS.");
     if (entry.retention && (entry.kind !== "Receber" || !entry.invoiceId || entry.retention.invoiceAmount !== entry.amount ||
@@ -259,11 +291,19 @@ export function validateFinance(finance: Finance, clientIds: Set<string>, orderC
     if (!accounts.has(entry.accountId) || (entry.clientId && !clientIds.has(entry.clientId)) ||
       (entry.invoiceId && !finance.invoices.some((item) => item.id === entry.invoiceId)) ||
       !unique(entry.settlements.map((item) => item.id)) ||
+      !unique(returnOffsets.map((item) => item.returnId)) ||
       entry.settlements.some((item) => !accounts.has(item.accountId)) ||
-      entry.settlements.filter((item) => !item.reversed).reduce((sum, item) => sum + item.amount, 0) > entry.amount - (entry.retention?.withheld ?? 0) ||
+      entry.settlements.filter((item) => !item.reversed).reduce((sum, item) => sum + item.amount, 0) +
+        returnOffsetTotal > entry.amount - (entry.retention?.withheld ?? 0) ||
+      (returnOffsetTotal > 0 && (entry.kind !== "Pagar" || !entry.purchaseId || entry.purchaseReturnCreditId)) ||
+      (entry.purchaseReturnCreditId && (entry.kind !== "Receber" || entry.purchaseId || entry.invoiceId ||
+        entry.retention || entry.installment || entry.recurrence)) ||
       (entry.canceled && entry.settlements.some((item) => !item.reversed)))
       throw new Error("Conta financeira com referências ou baixas inválidas.");
   }
+  if (!unique(finance.entries.flatMap((entry) =>
+    entry.purchaseReturnCreditId ? [entry.purchaseReturnCreditId] : [])))
+    throw new Error("Crédito de devolução vinculado a mais de uma conta.");
   if (finance.management) {
     const { categories, costCenters, classifications, openingBalances } = finance.management;
     if (!unique(categories.map((item) => item.id)) || !unique(costCenters.map((item) => item.id)) ||
@@ -279,8 +319,9 @@ export function validateFinance(finance: Finance, clientIds: Set<string>, orderC
       throw new Error("Saldo inicial com conta bancária inválida.");
   }
   if (finance.banking) {
-    const { transactions, matches } = finance.banking;
+    const { transactions, matches, reconciliationGroups = [] } = finance.banking;
     if (!unique(transactions.map((item) => item.id)) || !unique(matches.map((item) => item.id)) ||
+      !unique(reconciliationGroups.map((item) => item.id)) ||
       !unique(transactions.map((item) => JSON.stringify([item.accountId, item.externalId]))) ||
       transactions.some((item) => !accounts.has(item.accountId)))
       throw new Error("Movimentos de extrato duplicados ou com banco inválido.");
@@ -298,6 +339,41 @@ export function validateFinance(finance: Finance, clientIds: Set<string>, orderC
         if (matchedTransactions.has(transaction.id) || matchedSettlements.has(key))
           throw new Error("Movimento ou baixa já conciliado.");
         matchedTransactions.add(transaction.id); matchedSettlements.add(key);
+      }
+    }
+    for (const group of reconciliationGroups) {
+      const groupTransactions = group.transactionIds.map((id) => transactions.find((item) => item.id === id));
+      const groupSettlements = group.settlements.map(({ entryId, settlementId }) => {
+        const entry = finance.entries.find((item) => item.id === entryId);
+        const settlement = entry?.settlements.find((item) => item.id === settlementId);
+        return { entry, settlement };
+      });
+      if (groupTransactions.some((item) => !item) || groupSettlements.some((item) => !item.entry || !item.settlement))
+        throw new Error("Grupo de conciliacao referencia movimento ou baixa inexistente.");
+      const first = groupTransactions[0]!;
+      if (groupTransactions.some((transaction) => transaction!.accountId !== first.accountId ||
+        Math.sign(transaction!.amount) !== Math.sign(first.amount)) ||
+        groupSettlements.some(({ entry, settlement }) => settlement!.accountId !== first.accountId ||
+          entry!.kind !== (first.amount > 0 ? "Receber" : "Pagar")))
+        throw new Error("Grupo de conciliacao mistura bancos ou sentidos incompatíveis.");
+      const dates = [...groupTransactions.map((item) => item!.date), ...groupSettlements.map((item) => item.settlement!.date)]
+        .map((date) => Date.parse(`${date}T00:00:00Z`));
+      if (Math.max(...dates) - Math.min(...dates) > 3 * 86_400_000 ||
+        groupTransactions.reduce((sum, item) => sum + Math.abs(item!.amount), 0) !==
+          groupSettlements.reduce((sum, item) => sum + settlementCashAmount(item.settlement!), 0))
+        throw new Error("Grupo de conciliacao excede tres dias ou possui total divergente.");
+      const groupActive = !group.reversed &&
+        groupSettlements.every(({ entry, settlement }) => !entry!.canceled && !settlement!.reversed);
+      if (groupActive) {
+        for (const transaction of groupTransactions) {
+          if (matchedTransactions.has(transaction!.id)) throw new Error("Movimento ja conciliado.");
+          matchedTransactions.add(transaction!.id);
+        }
+        for (const { entry, settlement } of groupSettlements) {
+          const key = JSON.stringify([entry!.id, settlement!.id]);
+          if (matchedSettlements.has(key)) throw new Error("Baixa ja conciliada.");
+          matchedSettlements.add(key);
+        }
       }
     }
     const transferMatches = finance.banking.transferMatches ?? [];

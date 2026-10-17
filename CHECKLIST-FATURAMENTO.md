@@ -1,6 +1,7 @@
 # Checklist de faturamento completo
 
 Marcar somente depois de implementar e verificar. Uma etapa concluida no codigo nao significa implantacao ou homologacao fiscal concluida.
+Este e o checklist de referencia para tarefas fiscais e de cobranca (documentos, remessas, boleto/Pix, retorno bancario e homologacao). O [CHECKLIST-ERP.md](./CHECKLIST-ERP.md) mantem apenas o aceite integrado do ERP e nao duplica estes itens. Os itens numerados sao objetivos gerais; subitens detalham entregas e as secoes de verificacao/andamento registram evidencias, nao novas tarefas paralelas.
 
 ## Desenvolvimento
 

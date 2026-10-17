@@ -28,8 +28,8 @@ Marcar somente apos implementar e verificar. Codigo local, publicacao e homologa
 - [x] Preservar historico e invalidar conciliacao quando a baixa for estornada.
 - [x] Implementar/testar protecao SQL de extratos/vinculos e revalidacao de estado atual, incluindo backups e dupla conciliacao. Migracao ainda nao aplicada em producao.
 - [x] Conciliar cada ponta de transferencia com extrato exato, sem novas baixas; estados independentes, desfazimento e estorno com historico e protecao SQL (local).
-- [ ] Conciliacao dividida/agrupada, tarifas, datas diferentes entre pontas e outras divergencias.
-- [ ] Homologar importacao com arquivos reais dos bancos utilizados.
+- [x] Conciliacao dividida/agrupada entre movimentos e baixas existentes, com total exato, janela de tres dias, desfazimento integral do grupo e protecao SQL append-only; tarifas, diferencas de valor e datas diferentes nas pontas de transferencia continuam fora do escopo.
+- [ ] Homologar importacao com arquivos reais dos bancos utilizados. Etapa adiada conforme decisao do usuario; depende de amostras autorizadas dos bancos usados.
 
 ## 3. Comercial
 
@@ -40,48 +40,48 @@ Marcar somente apos implementar e verificar. Codigo local, publicacao e homologa
 ## 4. Compras e fornecedores
 
 - [x] Cadastro/editabilidade/inativacao de fornecedores, contatos/endereco e CPF/CNPJ opcional validado/unico; nome/documento historicos preservados nos pedidos (local).
-- [x] Pedidos confirmados imutaveis, itens/total, banco/classificacao e pagamentos unicos ou parcelados com previa/datas editaveis; cancelamento justificado antes de receber (local).
+- [x] Pedidos confirmados imutaveis, itens/total, banco/classificacao e pagamentos unicos ou parcelados com previa/datas editaveis; cancelamento justificado (local).
 - [x] Recebimento integral conferido com data/referencia/observacoes e geracao atomica das contas a pagar, sem duplicidade por pedido, mesmo apos cancelamento de conta (local).
+- [x] Vincular item por codigo exato ou nome normalizado unico; selecionar manualmente quando ambiguo e criar produto novo somente no recebimento confirmado (local).
+- [x] Registrar entrada de cada item no deposito padrao atomicamente com recebimento/contas e impedir duplicidade no historico (local).
 - [x] Protecao SQL de fornecedores/pedidos/recebimentos/contas vinculadas e isolamento do tecnico, validada em PostgreSQL local; publicacao pendente.
-- [ ] Cotacoes, aprovacoes por alcada e trilha de auditoria de alteracoes de fornecedores.
-- [ ] Recebimento parcial, conferencias e devolucoes.
-- [ ] Entradas de estoque vinculadas ao recebimento, sem duplicidade (recebimento financeiro atual nao movimenta estoque).
+- [x] Cotacoes e aprovacao de compras: minimo de tres propostas de fornecedores distintos ou justificativa para excecao, escolha vinculada ao fornecedor/total, motivo e aprovacao por owner/admin autenticado (inclusive pelo solicitante); validacao local e protecao SQL. Publicacao da migration e atualizacao coordenada dos clientes permanecem pendentes.
+- [ ] Auditoria persistente de alteracoes cadastrais de fornecedores, com autor, data, antes/depois e justificativa.
+- [x] Recebimentos parciais append-only com quantidades pendentes por item, custo aprovado e estoque por entrega; gerar contas a pagar uma unica vez somente na conclusao do pedido (local).
+- [x] Registrar devolucao ao fornecedor como saida append-only somente do estoque recebido e disponivel, respeitando reservas (local).
+- [x] Abater devolucoes do saldo aberto das contas a pagar vinculadas e gerar credito a receber do fornecedor pelo excedente, usando custo original e preservando baixas anteriores; validacao SQL append-only (local).
+- [x] Cancelar saldo nao recebido de compra parcial e gerar contas proporcionais ao valor recebido, rateadas pelas datas/parcelas aprovadas; preservar estoque, entregas e baixas (local).
 
 ## 5. Estoque integrado
 
-- [ ] Livro de movimentacoes, saldos por local e estoque minimo.
-- [ ] Reservas/consumo de pecas por OS e devolucao.
-- [ ] Inventario e ajustes justificados.
-- [ ] Custo medio e margem sem reescrever historico.
-- [ ] Rastreabilidade compra -> estoque -> OS/venda -> devolucao.
+- [x] Livro imutavel de movimentacoes, saldos fisicos/disponiveis por localizacao e migracao explicita de saldos legados (local).
+- [x] Depositos, deposito padrao e transferencias internas com origem/destino atomicos e sem saldo negativo (local).
+- [x] Reservar pecas ao iniciar/check-in, manter reserva durante pausa, liberar ao retornar a Aberta e baixar ao finalizar/check-out da OS; proteger tambem a RPC Android (local).
+- [x] Contagem fisica por produto/deposito, ajuste da diferenca e justificativa imutavel no livro (local).
+- [x] Custo medio movel por produto, snapshots imutaveis por movimento e margem das OS com baixa registrada (local).
+- [x] Rastreabilidade compra -> estoque -> OS (local).
+- [x] Devolucao parcial/total de pecas nao utilizadas apos consumo da OS, com justificativa, reposicao append-only, limite pelo consumo original e ajuste da margem pelo custo historico (local).
+- [ ] Devolucoes/estornos financeiros de vendas, transferencias de estoque vinculadas a devolucoes e rastreabilidade completa da venda.
 
 ## 6. Contratos e recorrencias
 
-- [ ] Contratos de manutencao e vinculo a cliente/unidade/equipamento.
+- [x] Cadastro local de contratos de manutencao com unidades vinculadas ao cliente selecionadas por padrao (sem exigir tipo de equipamento), anexo opcional do contrato assinado (PDF/imagem ate 500 KB), cobertura, vigencia, valor mensal e periodicidade quinzenal, mensal, semestral ou dias personalizados; alertas internos cinco dias antes para agendamento manual. Se selecionado em nova OS para cliente/unidade compativeis, copia o valor mensal para servico adicional faturavel; nao gera OS, tarefas ou contas automaticamente, nem limita selecoes por mes.
 - [x] Recorrencias financeiras mensais a pagar/receber com vigencia, suspensao/reativacao/cancelamento e historico (local).
 - [x] Geracao manual de contas por previa/confirmacao, sem duplicar recorrencia/mes, inclusive contas canceladas (local).
 - [ ] Reajustes, renovacoes e versionamento de condicoes contratuais.
-- [ ] Geracao de OS/tarefas previstas dos contratos de manutencao.
+- [ ] Validacao server-side, publicacao e homologacao da persistencia dos contratos/alertas/cobrancas; nao existe migration SQL especifica nesta etapa.
 - [ ] Controle de inadimplencia e renovacoes.
 
 ## 7. Fiscal e cobranca real
 
-Detalhamento tecnico e limitacoes em [CHECKLIST-FATURAMENTO.md](./CHECKLIST-FATURAMENTO.md).
-
-- [x] Estrutura de backend fiscal, certificado A1, cadastros, calculos e remessas implementada para validacao.
-- [ ] Publicar backend privado com armazenamento persistente, backups e secrets seguros.
-- [ ] Validar cadastros/matriz tributaria com a contabilidade e operacoes reais.
-- [ ] Homologar NF-e/NFS-e com A1 real e retornos oficiais antes de habilitar producao.
-- [ ] Concluir eventos fiscais aplicaveis, consultas e recuperacao de falhas.
-- [ ] Homologar registro/retorno de boleto e conciliacao bancaria sem confundir remessa com pagamento.
-- [ ] Definir e integrar Pix real/banco/provedor, com notificacoes idempotentes e conferencia.
+O detalhamento, os estados de implementacao e as pendencias de desenvolvimento, validacao contabil, infraestrutura, banco, homologacao e entrada em producao estao exclusivamente em [CHECKLIST-FATURAMENTO.md](./CHECKLIST-FATURAMENTO.md). Este checklist nao replica essas tarefas; use a secao 9 para o aceite integrado do ERP.
 
 ## 8. Governanca e operacao
 
 - [x] Isolamento por empresa e restricao do financeiro ao painel administrativo.
 - [x] Protecao SQL do historico de contas/faturamentos/baixas no codigo.
 - [ ] Permissoes granulares por acao e aprovacoes por valor/responsavel.
-- [ ] Auditoria persistente de autor, data, antes/depois e justificativa.
+- [ ] Auditoria persistente transversal de alteracoes nas demais entidades, com autor, data, antes/depois e justificativa; alteracoes cadastrais de fornecedores estao listadas na secao 4.
 - [ ] Fechamento/reabertura autorizada de periodos.
 - [ ] Validacoes server-side para todos os novos processos, sem depender apenas da interface.
 - [ ] Backups coordenados Supabase/backend e restauracao testada.
@@ -118,8 +118,38 @@ Recorrencias financeiras mensais implementadas conforme escopo confirmado: pagar
 
 Validacao das recorrencias: 507 testes frontend aprovados em 45 arquivos, incluindo PostgreSQL PGlite, duplicidades/backup/CAS, referencias, limite de lote, historico e isolamento tecnico; build/type-check, lint e diff aprovados. Navegador: cadastro nao criou contas; geracao de tres mensalidades de R$ 100,00 (31/out, 30/nov, 31/dez) persistiu R$ 300,00 com classificacoes e vinculos apos recarga. Periodo repetido e mes com conta cancelada nao geraram novamente; suspensao bloqueou geracao, reativacao manteve contas e cancelamento definitivo preservou historico/contas. Recorrencia a receber gerou R$ 0,01 para o cliente escolhido. Dados originais restaurados. SQL nao aplicado em producao; sem commit/push.
 
-Compras e fornecedores implementados conforme escopo confirmado: fornecedores editaveis/inativaveis com CPF/CNPJ numerico/alfanumerico opcional validado e unico, contatos/endereco; pedidos com snapshot de nome/documento e condicoes imutaveis, itens de quantidade inteira, previa mensal de 1 a 120 pagamentos e vencimentos editaveis. Pedido aberto nao cria contas/previsao. Recebimento integral conferido gera todas as contas/classificacoes atomicamente, sem duplicidade por pedido, inclusive apos cancelamento de conta. Cancelamento justificado/confirmado somente antes de receber, definitivo. Sem movimentacao de estoque, parciais/devolucoes, fiscal/boletos, aprovacao por alcada ou importacao XML. Referencia documental informativa nao impede pedidos diferentes para a mesma compra. Migracao `20261016070000_purchase_guards.sql` protege historico, dados de fornecedores, origem/parcelas/classificacao inicial e operacoes com referencias ativas.
+Compras e fornecedores implementados conforme escopo confirmado: fornecedores editaveis/inativaveis com CPF/CNPJ numerico/alfanumerico opcional validado e unico, contatos/endereco; pedidos com snapshot de nome/documento e condicoes imutaveis, itens de quantidade inteira, previa mensal de 1 a 120 pagamentos e vencimentos editaveis. Pedido aberto nao cria contas/previsao/estoque. Na conclusao do recebimento, todas as contas/classificacoes e entradas de estoque sao geradas sem duplicidade por pedido, inclusive apos cancelamento de conta. Pedido parcialmente recebido pode ser cancelado no saldo nao entregue; as contas do valor recebido sao rateadas pelas parcelas/datas aprovadas, com centavos residuais nas primeiras e sem alterar o estoque ou baixas. Devolucoes continuam permitidas sobre o estoque recebido. Fiscal/boletos, aprovacao por alcada e importacao XML seguem fora do escopo. Referencia documental informativa nao impede pedidos diferentes para a mesma compra. A protecao SQL valida o cancelamento, rateio e entregas append-only.
 
 Validacao de compras: 526 testes frontend aprovados em 46 arquivos, incluindo PostgreSQL PGlite, pagamentos de um centavo/limite monetario, centavos exatos, calendarios/datas editadas, snapshots, idempotencia/backup/CAS, escrita direta e isolamento tecnico; build/type-check, lint e diff aprovados. Navegador: fornecedor com CNPJ formatado normalizado; pedido de R$ 100,00 com parcelas R$ 33,34/R$ 33,33/R$ 33,33, previa 31/out -> 30/nov -> 31/dez e segunda data editada para 01/dez. Antes do recebimento, zero contas; apos conferencia, tres contas com classificacao e vinculos persistidos apos recarga. Cancelar conta nao liberou novo recebimento. Outro fluxo validou cancelamento definitivo de pedido aberto sem contas, pagamento unico de R$ 0,01 sem parcela artificial e alteracao/inativacao do fornecedor preservando snapshot e historico. Dados locais originais restaurados. SQL nao aplicado em producao; sem commit/push.
 
-Proxima entrega recomendada: livro de movimentacoes de estoque e entradas vinculadas a compras, sem duplicidade e sem alterar saldos historicos silenciosamente, preparando consumo/devolucao por OS. Recebimentos parciais/devolucoes, contratos de manutencao/OS e parcelamento/ajustes de faturamentos de OS permanecem separados e pendentes. Publicacao das etapas financeiras e migracoes pendentes continuam separadas da implementacao.
+Integracao de estoque com compras e OS implementada localmente: migracao de saldo legado para livro por localizacao com eventos de abertura/conciliacao; depositos, deposito padrao e transferencia interna; entrada da compra vinculada ao recebimento com vinculo por codigo/nome (ambiguidades pedem selecao; produto novo so e criado ao receber); saldos fisico/reservado/disponivel; reserva na entrada em atendimento/check-in, manutencao na pausa, liberacao ao reabrir e consumo ao finalizar/check-out. A RPC Android tambem grava reservas e consumos no mesmo historico, e os tecnicos continuam sem receber dados do livro/financeiro. `20261017010000_inventory_guards.sql` protege movimentos/reservas, saldos, custos, recebimentos, devolucoes de compras e a RPC mobile. OS que ja estavam em atendimento/finalizadas nao recebem reserva/baixa retroativa.
+
+Validacao desta etapa: 533 testes aprovados em 46 arquivos, incluindo PGlite, estados da OS, vinculos das compras, reserva e consumo na RPC Android; build/type-check, lint e `git diff --check` aprovados. SQL ainda nao aplicado no Supabase, sem commit/push. Aplicacao da migracao exige backup e publicacao coordenada com o frontend/admin e app tecnico atualizados.
+
+Recebimento parcial implementado localmente conforme a decisao de gerar contas a pagar somente na conclusao normal: cada entrega persiste em registro append-only, atualiza estoque pelo custo unitario aprovado, exibe recebido/pendente e guarda data, deposito, referencia e conferencia. O cancelamento encerra apenas o saldo nao recebido e gera contas pelo valor recebido, rateadas proporcionalmente pelas parcelas aprovadas; entregas e estoque sao preservados. A protecao SQL valida lotes, movimentos, quantidades acumuladas, rateio e imutabilidade.
+
+Estorno de consumo da OS implementado localmente: em OS finalizadas com baixa registrada, permite devolver por linha quantidades parciais ou totais de pecas nao utilizadas, exige confirmacao e motivo, repoe estoque em movimentos append-only e mantem a OS finalizada. O custo da margem e ajustado pelo custo historico do consumo; o custo medio atual permanece inalterado. O validador local e a protecao SQL impedem exceder o consumo original ou alterar/excluir estornos.
+
+Validacao das entregas de estoque recentes: 542 testes aprovados em 46 arquivos, incluindo PostgreSQL PGlite para recebimentos parciais e estornos de consumo; build, lint e `git diff --check` aprovados. SQL permanece sem aplicacao no Supabase; sem commit/push.
+
+Devolucao de compras ao fornecedor implementada localmente no estoque e financeiro: somente itens recebidos e ainda disponiveis no deposito podem ser devolvidos; reservas de OS sao respeitadas. O valor usa custo unitario original, abate contas a pagar em aberto sem reescrever baixas existentes e registra credito a receber do fornecedor pelo excedente, incluindo devolucoes anteriores a conclusao do recebimento. Registros, movimentos, abatimentos e creditos sao vinculados e protegidos por validacao local e SQL append-only. O pedido e classificacoes originais permanecem preservados.
+
+Validacao desta entrega: 544 testes aprovados em 46 arquivos, incluindo PGlite para credito em devolucao antes da conclusao do recebimento, abatimento em conta a pagar, protecao contra valores adulterados e historico removido; build/type-check, lint e `git diff --check` aprovados. Migration ainda nao aplicada no Supabase; sem commit/push.
+
+Cancelamento do saldo pendente apos recebimento parcial implementado: o usuario pode encerrar somente as quantidades nao recebidas; estoque e entregas conferidas permanecem. As contas sao criadas pelo valor efetivamente recebido, rateadas proporcionalmente pelas parcelas e vencimentos aprovados, com centavos residuais nas primeiras. Devolucoes do estoque recebido continuam permitidas e abatem essas contas, preservando baixas anteriores. Protecoes local e SQL validam quantidades, valores, rateio, vinculos e ordem temporal.
+
+Validacao desta etapa: 545 testes aprovados em 46 arquivos, incluindo PGlite para rateio com centavos residuais, cancelamento imutavel e devolucao apos cancelamento; build/type-check, lint e `git diff --check` aprovados. Migrations ainda nao aplicadas no Supabase; sem commit/push.
+
+Cotacoes e aprovacao de compras implementadas localmente conforme escopo confirmado: cada pedido novo exige propostas de fornecedores distintos, com minimo de tres ou justificativa quando nao houver concorrencia, selecao vinculada ao fornecedor/total e motivo de aprovacao. Owner/admin autenticado pode aprovar, inclusive a propria cotacao. Nao ha regra automatica obrigando menor preco; a decisao precisa ser justificada. Pedidos antigos sem metadata continuam compativeis. Validacao local e protecao SQL impedem pedido novo sem trilha auditavel, aprovador de outro papel/empresa, cotacoes duplicadas, proposta selecionada divergente e excecao sem justificativa.
+
+Validacao desta etapa: 547 testes aprovados em 46 arquivos, incluindo PGlite para recusa de pedido sem aprovacao, ator divergente, papel local, propostas repetidas e excecao incompleta; build/type-check, lint e `git diff --check` aprovados. `20261019010000_purchase_approval_guards.sql` ainda nao foi aplicada no Supabase. Atualize coordenadamente os clientes administrativos antes da publicacao; clientes antigos nao poderao cadastrar novos pedidos sem a metadata. Sem commit/push.
+
+Conciliacao bancaria dividida/agrupada implementada localmente: movimentos e baixas existentes podem ser relacionados em qualquer combinacao muitos-para-muitos, com soma exata, mesmo banco/sentido e diferenca maxima de tres dias entre as datas. Selecao e confirmacao sao manuais; nao ha acerto automatico de tarifas ou diferencas. Desfazer cancela o grupo inteiro sem alterar extratos/baixas; estornar ou cancelar qualquer baixa relacionada torna todo o grupo inativo. Protecoes local e SQL mantem o historico append-only e bloqueiam dupla conciliacao, inclusive cruzada com transferencias.
+
+Validacao desta entrega: 550 testes aprovados em 46 arquivos, incluindo PGlite para totais divergentes, datas fora da janela, historico imutavel, conflito com transferencia e estorno do grupo; build/type-check, lint e `git diff --check` aprovados. `20261020010000_bank_reconciliation_groups.sql` nao foi aplicada no Supabase; sem commit/push.
+
+Homologacao da importacao com arquivos reais dos bancos permanece pendente e foi adiada conforme decisao do usuario ate estarem disponiveis amostras autorizadas dos bancos utilizados. Tarifas/diferencas de valor e datas distintas entre as pontas de transferencia exigem escopo proprio. Permanecem pendentes reajustes/renovacoes/versionamento de contratos, geracao de OS/tarefas previstas, controle de inadimplencia/renovacoes e parcelamento/ajustes de faturamentos de OS. Publicacao das etapas financeiras e migracoes continua separada da implementacao.
+
+Cadastro basico de contratos de manutencao implementado localmente: cliente ativo, uma ou mais unidades/equipamentos vinculados, cobertura e vigencia; suspensao/reativacao/cancelamento com motivo e historico. Datas futuras e contratos vencidos sao identificados sem alterar automaticamente o status. O cadastro nao cria OS, tarefas, recorrencias ou contas; reajustes, renovacoes/versionamento e agenda preventiva permanecem pendentes.
+
+Validacao desta entrega: 557 testes aprovados em 47 arquivos; build/type-check, lint e `git diff --check` aprovados. Smoke test no navegador confirmou cadastro, vinculos e persistencia apos recarga, sem criar OS nem contas; dados locais originais restaurados. Sem migration SQL especifica, aplicacao em producao, commit ou push.

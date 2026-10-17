@@ -13,6 +13,7 @@ import {
   Check,
   ChevronLeft,
   ChevronRight,
+  ClipboardCheck,
   CircleCheck,
   Clock3,
   FileText,
@@ -36,8 +37,12 @@ import type { LucideIcon } from "lucide-react";
 import type { Database, Order, OrderStatus, Quote } from "./domain";
 import {
   changeOrderStatus,
+  countStock,
   convertQuote,
   currency,
+  stockAvailable,
+  stockLocationBalance,
+  stockReserved,
   demoDatabase,
   displayDate,
   getOrderDetails,
@@ -52,7 +57,7 @@ import {
 } from "./domain";
 import { downloadFile, errorMessage, useDatabase } from "./useDatabase";
 import { Badge, Empty, Modal } from "./components";
-import { EditorModal, MovementModal } from "./Forms";
+import { EditorModal, InventoryCountModal, MovementModal } from "./Forms";
 import type { Editor, FormKind } from "./Forms";
 import { CloudAccess } from "./CloudAccess";
 import { OrderPrintable, OrderWorkspace } from "./OrderWorkspace";
@@ -64,6 +69,7 @@ import { QuestionnaireCatalog } from "./QuestionnaireCatalog";
 import { EquipmentBrandCatalog } from "./EquipmentBrandCatalog";
 import { EquipmentSelectionSummary } from "./EquipmentModelPicker";
 import { ClientEquipment } from "./ClientEquipment";
+import { maintenanceVisitAlerts } from "./maintenanceContracts";
 import { roleLabels } from "./userAccess";
 import type { CompanyRole } from "./userAccess";
 import { formatCnpj, isValidCnpj, lookupCompanyByCnpj, normalizeCnpj } from "./cnpj";
@@ -76,12 +82,16 @@ const ReportsPanel = lazy(() =>
 const FinancePanel = lazy(() =>
   import("./FinancePanel").then((module) => ({ default: module.FinancePanel })),
 );
+const MaintenanceContractsPanel = lazy(() =>
+  import("./MaintenanceContractsPanel").then((module) => ({ default: module.MaintenanceContractsPanel })),
+);
 
 type View =
   | "agenda"
   | "orders"
   | "clients"
   | "equipment"
+  | "contracts"
   | "stock"
   | "quotes"
   | "reports"
@@ -106,6 +116,7 @@ const navigation: {
   { id: "finance", label: "Financeiro", icon: ArrowRightLeft, group: "GESTÃO" },
   { id: "clients", label: "Clientes", icon: Users, group: "CADASTROS" },
   { id: "equipment", label: "Equipamentos", icon: Wrench, group: "CADASTROS" },
+  { id: "contracts", label: "Contratos de manutenção", icon: ClipboardCheck, group: "CADASTROS" },
   { id: "questionnaires", label: "Questionários", icon: FileText, group: "CADASTROS" },
   {
     id: "stock",
@@ -131,7 +142,8 @@ function readEditorDraft(scope: string): Editor | null {
       ("date" in value && typeof value.date !== "string") ||
       ("time" in value && typeof value.time !== "string") ||
       ("clientId" in value && typeof value.clientId !== "string") ||
-      ("equipmentId" in value && typeof value.equipmentId !== "string"))
+      ("equipmentId" in value && typeof value.equipmentId !== "string") ||
+      ("contractId" in value && typeof value.contractId !== "string"))
       return null;
     return { ...value, kind: value.kind as FormKind };
   } catch (error) {
@@ -282,6 +294,7 @@ export default function App() {
   const [clientFilter, setClientFilter] = useState("");
   const [agendaMode, setAgendaMode] = useState("calendar");
   const [stockTab, setStockTab] = useState("products");
+  const [inventoryProductId, setInventoryProductId] = useState<string | null>(null);
   const [calendarView, setCalendarView] = useState("dayGridMonth");
   const [calendarTitle, setCalendarTitle] = useState("");
   const [editor, setEditor] = useState<Editor | null>(null);
@@ -382,6 +395,7 @@ export default function App() {
     return <Recovery error={loadError || cloud.error} onRestore={commit} />;
   const database = data;
   const today = localDay();
+  const maintenanceAlerts = maintenanceVisitAlerts(database, today);
   const todayDate = new Date(today + "T12:00:00");
   const title = navigation.find((item) => item.id === view)!.label;
   const clientName = (id: string) =>
@@ -425,7 +439,8 @@ export default function App() {
   const products = database.products.filter(
     (item) =>
       matches(item.name, item.code) &&
-      (statusFilter !== "Baixo estoque" || item.stock <= item.minimum),
+      (statusFilter !== "Baixo estoque" ||
+        stockAvailable(database, item.id, database.inventory!.defaultLocationId) <= item.minimum),
   );
   const quotes = database.quotes.filter(
     (item) =>
@@ -817,6 +832,8 @@ export default function App() {
                     })
                   : view === "orders"
                     ? `${activeOrders.length} atendimentos em aberto`
+                    : view === "contracts"
+                      ? `${database.maintenanceContracts.length} contratos cadastrados`
                     : view === "clients"
                       ? `${database.clients.length} clientes cadastrados`
                       : view === "equipment"
@@ -830,7 +847,8 @@ export default function App() {
                               : database.settings.company}
               </p>
             </div>
-            {view !== "settings" && view !== "reports" && view !== "questionnaires" && view !== "finance" && (
+            {view !== "settings" && view !== "reports" && view !== "questionnaires" && view !== "finance" && view !== "contracts" &&
+              (view !== "stock" || stockTab === "products" || stockTab === "services") && (
               <button
                 className="button primary"
                 onClick={() => openEditor(newKind)}
@@ -854,6 +872,18 @@ export default function App() {
               </button>
             </div>
           )}
+          {maintenanceAlerts.length > 0 && <section className="stock-attention" aria-label="Alertas de pré-agendamento de manutenção">
+            <div className="section-heading"><h2><TriangleAlert size={17} />Visitas de manutenção para agendar</h2>
+              <span>{maintenanceAlerts.length} alerta(s)</span></div>
+            {maintenanceAlerts.map(({ contract, date, daysUntil }) => <div className="stock-alert-row" key={`${contract.id}:${date}`}>
+              <span><strong>{contract.name}</strong><small>{clientName(contract.clientId)} · visita {displayDate(date)} ·
+                {daysUntil < 0 ? ` ${Math.abs(daysUntil)} dia(s) atrasada` : daysUntil === 0 ? " hoje" : ` em ${daysUntil} dia(s)`}</small></span>
+              <button className="button secondary" onClick={() => setEditor({
+                kind: "order", date, time: "09:00", clientId: contract.clientId,
+                equipmentId: contract.equipmentIds[0], contractId: contract.id,
+              })}>Agendar visita</button>
+            </div>)}
+          </section>}
           {(view === "agenda" || view === "orders") && (
             <section className="metric-strip" aria-label="Resumo operacional">
               {metricItems.map((item) => (
@@ -874,7 +904,7 @@ export default function App() {
               ))}
             </section>
           )}
-          {view !== "settings" && view !== "reports" && view !== "questionnaires" && view !== "finance" && (
+          {view !== "settings" && view !== "reports" && view !== "questionnaires" && view !== "finance" && view !== "contracts" && (
             <section className="module-section">
               <div className="module-toolbar">
                 <label className="search-field">
@@ -1328,6 +1358,28 @@ export default function App() {
                     >
                       Movimentações <span>{database.movements.length}</span>
                     </button>
+                    <button
+                      role="tab"
+                      aria-selected={stockTab === "locations"}
+                      className={stockTab === "locations" ? "active" : ""}
+                      onClick={() => {
+                        setStockTab("locations");
+                        setQuery("");
+                      }}
+                    >
+                      Saldos por depósito
+                    </button>
+                    <button
+                      role="tab"
+                      aria-selected={stockTab === "inventory"}
+                      className={stockTab === "inventory" ? "active" : ""}
+                      onClick={() => {
+                        setStockTab("inventory");
+                        setQuery("");
+                      }}
+                    >
+                      Inventário físico <span>{database.inventory!.counts.length}</span>
+                    </button>
                   </div>
                   {stockTab === "products" && (
                     <div className="table-scroll">
@@ -1337,8 +1389,10 @@ export default function App() {
                             <th>Produto</th>
                             <th>Código</th>
                             <th>Preço</th>
-                            <th>Custo</th>
-                            <th>Saldo</th>
+                            <th>Custo médio</th>
+                            <th>Físico</th>
+                            <th>Reservado</th>
+                            <th>Disponível</th>
                             <th>Mínimo</th>
                             <th>Situação</th>
                             <th>
@@ -1362,18 +1416,20 @@ export default function App() {
                               <td>{currency(item.cost)}</td>
                               <td>
                                 <b
-                                  className={`stock-number ${item.stock <= item.minimum ? "overdue" : ""}`}
+                                  className={`stock-number ${stockLocationBalance(database, item.id, database.inventory!.defaultLocationId) <= item.minimum ? "overdue" : ""}`}
                                 >
-                                  {item.stock}
+                                  {stockLocationBalance(database, item.id, database.inventory!.defaultLocationId)}
                                 </b>
                               </td>
+                              <td>{stockReserved(database, item.id, database.inventory!.defaultLocationId)}</td>
+                              <td>{stockAvailable(database, item.id, database.inventory!.defaultLocationId)}</td>
                               <td>{item.minimum}</td>
                               <td>
                                 <Badge
                                   value={
-                                    item.stock === 0
+                                    stockAvailable(database, item.id, database.inventory!.defaultLocationId) === 0
                                       ? "Sem estoque"
-                                      : item.stock <= item.minimum
+                                      : stockAvailable(database, item.id, database.inventory!.defaultLocationId) <= item.minimum
                                         ? "Estoque baixo"
                                         : "Disponível"
                                   }
@@ -1393,6 +1449,14 @@ export default function App() {
                                     }
                                   >
                                     <ArrowRightLeft size={17} />
+                                  </button>
+                                  <button
+                                    className="icon-button"
+                                    aria-label={`Contagem física de ${item.name}`}
+                                    title="Registrar contagem física"
+                                    onClick={() => setInventoryProductId(item.id)}
+                                  >
+                                    <ClipboardCheck size={17} />
                                   </button>
                                   <button
                                     className="icon-button"
@@ -1469,6 +1533,7 @@ export default function App() {
                         <thead>
                           <tr>
                             <th>Data</th>
+                            <th>Depósito</th>
                             <th>Produto</th>
                             <th>Tipo</th>
                             <th>Quantidade</th>
@@ -1491,6 +1556,7 @@ export default function App() {
                                 <td>
                                   {new Date(item.at).toLocaleString("pt-BR")}
                                 </td>
+                                <td>{database.inventory!.locations.find((location) => location.id === item.locationId)?.name ?? "—"}</td>
                                 <td>
                                   {
                                     database.products.find(
@@ -1501,13 +1567,15 @@ export default function App() {
                                 </td>
                                 <td>
                                   <Badge
-                                    value={item.delta > 0 ? "Entrada" : "Saída"}
+                                    value={item.source?.type === "inventory"
+                                      ? "Inventário"
+                                      : item.source?.type === "consumptionReversal"
+                                        ? "Estorno de OS"
+                                      : item.delta > 0 ? "Entrada" : "Saída"}
                                   />
                                 </td>
                                 <td
-                                  className={
-                                    item.delta < 0 ? "overdue" : "positive"
-                                  }
+                                  className={item.delta < 0 ? "overdue" : item.delta > 0 ? "positive" : ""}
                                 >
                                   {item.delta > 0 ? "+" : ""}
                                   {item.delta}
@@ -1527,6 +1595,61 @@ export default function App() {
                         ),
                       ).length && (
                         <Empty title="Nenhuma movimentação encontrada" />
+                      )}
+                    </div>
+                  )}
+                  {stockTab === "locations" && (
+                    <div className="table-scroll">
+                      <p>Depósito padrão: {database.inventory!.locations.find((location) =>
+                        location.id === database.inventory!.defaultLocationId)?.name}. Compras recebidas e consumo de OS usam este depósito.</p>
+                      <table>
+                        <thead><tr><th>Depósito</th><th>Produto</th><th>Físico</th><th>Reservado em OS</th><th>Disponível</th></tr></thead>
+                        <tbody>{database.inventory!.locations.flatMap((location) =>
+                          database.products.filter((item) => matches(item.name, item.code)).map((item) => (
+                            <tr key={`${location.id}:${item.id}`}><td>{location.name}{location.id === database.inventory!.defaultLocationId ? " · Padrão" : ""}</td>
+                              <td>{item.name} · {item.code}</td>
+                              <td>{stockLocationBalance(database, item.id, location.id)}</td>
+                              <td>{stockReserved(database, item.id, location.id)}</td>
+                              <td>{stockAvailable(database, item.id, location.id)}</td>
+                            </tr>
+                          )),
+                        )}</tbody>
+                      </table>
+                    </div>
+                  )}
+                  {stockTab === "inventory" && (
+                    <div className="table-scroll">
+                      <p>As contagens registram o saldo do sistema, a quantidade encontrada e a justificativa. Divergências geram ajustes vinculados ao histórico de estoque.</p>
+                      <table>
+                        <thead>
+                          <tr>
+                            <th>Data</th>
+                            <th>Produto</th>
+                            <th>Depósito</th>
+                            <th>Saldo sistema</th>
+                            <th>Contagem física</th>
+                            <th>Ajuste</th>
+                            <th>Justificativa</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {database.inventory!.counts.map((item) => (
+                            <tr key={item.id}>
+                              <td>{new Date(item.at).toLocaleString("pt-BR")}</td>
+                              <td>{database.products.find((product) => product.id === item.productId)?.name ?? "Produto removido"}</td>
+                              <td>{database.inventory!.locations.find((location) => location.id === item.locationId)?.name ?? "Depósito removido"}</td>
+                              <td>{item.systemQuantity}</td>
+                              <td>{item.countedQuantity}</td>
+                              <td className={item.countedQuantity < item.systemQuantity ? "overdue" : item.countedQuantity > item.systemQuantity ? "positive" : ""}>
+                                {item.countedQuantity > item.systemQuantity ? "+" : ""}{item.countedQuantity - item.systemQuantity}
+                              </td>
+                              <td>{item.reason}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                      {!database.inventory!.counts.length && (
+                        <Empty title='Nenhuma contagem registrada. Use "Contagem física" no produto para iniciar.' />
                       )}
                     </div>
                   )}
@@ -1620,7 +1743,8 @@ export default function App() {
                                 ? database.services.filter((item) =>
                                     matches(item.name),
                                   ).length
-                                : database.movements.filter((item) =>
+                                : stockTab === "movements"
+                                  ? database.movements.filter((item) =>
                                     matches(
                                       database.products.find(
                                         (product) =>
@@ -1629,6 +1753,9 @@ export default function App() {
                                       item.reason,
                                     ),
                                   ).length
+                                  : stockTab === "inventory"
+                                    ? database.inventory!.counts.length
+                                    : database.inventory!.locations.length
                             : orders.length}{" "}
                     registros
                   </span>
@@ -1637,6 +1764,9 @@ export default function App() {
               )}
             </section>
           )}
+          {view === "contracts" && <Suspense fallback={<p role="status">Carregando contratos…</p>}>
+            <MaintenanceContractsPanel data={database} commit={commit} onSuccess={setNotice} />
+          </Suspense>}
           {view === "agenda" && (
             <section className="agenda-bottom">
               <div className="today-agenda">
@@ -1734,6 +1864,7 @@ export default function App() {
           )}
           {view === "finance" && <Suspense fallback={<p role="status">Carregando financeiro…</p>}>
             <FinancePanel data={database} commit={commit} onSuccess={setNotice} onOpenOrder={openFullOrder}
+              approvalActor={{ userId: cloud.userId, name: cloud.email, role: cloud.role }}
               initialTab={location.hash === "#finance/fiscal" ? "Fiscal" : undefined} />
           </Suspense>}
           {view === "questionnaires" && <QuestionnaireCatalog data={database} commit={commit} onSuccess={setNotice} />}
@@ -1793,6 +1924,21 @@ export default function App() {
             onClientEquipment={(id) => { closeEditor(); setClientEquipmentId(id); }}
           />
         ))}
+      {inventoryProductId && (
+        <InventoryCountModal
+          data={database}
+          productId={inventoryProductId}
+          onClose={() => setInventoryProductId(null)}
+          onSave={(locationId, quantity, reason) => {
+            const productId = inventoryProductId;
+            const difference = quantity - stockLocationBalance(database, productId, locationId);
+            commit((current) => countStock(current, productId, locationId, quantity, reason));
+            setNotice(difference
+              ? `Contagem registrada; ajuste de ${difference > 0 ? "+" : ""}${difference} unidade(s).`
+              : "Contagem sem divergência registrada no histórico.");
+          }}
+        />
+      )}
       {database.clients.find((client) => client.id === clientEquipmentId) && <ClientEquipment
         key={clientEquipmentId}
         client={database.clients.find((client) => client.id === clientEquipmentId)!}
@@ -2550,6 +2696,8 @@ function SettingsPanel({
                   equipment: [],
                   equipmentBrands: [],
                   equipmentModels: [],
+                  maintenanceContracts: [],
+                  maintenanceEquipmentTypes: [],
                   products: [],
                   services: [],
                   orders: [],

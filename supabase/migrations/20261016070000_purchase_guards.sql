@@ -28,6 +28,7 @@ declare
   v_data jsonb; v_suppliers jsonb; v_orders jsonb; v_entries jsonb;
   v_supplier jsonb; v_order jsonb; v_old jsonb; v_item jsonb; v_row jsonb; v_entry jsonb; v_receipt jsonb;
   v_total bigint; v_count integer; v_index integer; v_previous date; v_due date; v_new boolean; v_receiving boolean;
+  v_received_amount bigint; v_remainder bigint; v_expected bigint; v_entry_index integer;
 begin
   if TG_OP='DELETE' then
     if jsonb_array_length(coalesce(old.payload #> '{finance,purchasing,suppliers}','[]'))>0
@@ -150,13 +151,74 @@ begin
         or jsonb_typeof(v_order #> '{cancellation,reason}') is distinct from 'string'
         or length(btrim(v_order #>> '{cancellation,reason}')) not between 5 and 1000
         or coalesce(v_order #>> '{cancellation,at}','') !~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}T'
-        or (v_order #>> '{cancellation,at}')::timestamptz<(v_order->>'createdAt')::timestamptz then
+        or (v_order #>> '{cancellation,at}')::timestamptz<(v_order->>'createdAt')::timestamptz
+        or (v_order->'cancellation' ? 'receivedAmount' and
+          (jsonb_typeof(v_order#>'{cancellation,receivedAmount}') is distinct from 'number'
+            or coalesce(v_order#>>'{cancellation,receivedAmount}','') !~ '^[1-9][0-9]*$'))
+        or (v_order->'cancellation' ? 'payableEntryIds' and
+          (jsonb_typeof(v_order#>'{cancellation,payableEntryIds}') is distinct from 'array'
+            or jsonb_array_length(v_order#>'{cancellation,payableEntryIds}')>120
+            or exists(select 1 from jsonb_array_elements(v_order#>'{cancellation,payableEntryIds}') i
+              where jsonb_typeof(i) is distinct from 'string' or length(i#>>'{}') not between 1 and 200)
+            or exists(select 1 from jsonb_array_elements(v_order#>'{cancellation,payableEntryIds}') i group by i having count(*)>1)))
+        or ((v_order->'cancellation' ? 'receivedAmount') is distinct from
+          (v_order->'cancellation' ? 'payableEntryIds')) then
         raise exception 'Cancelamento de compra exige data/hora e motivo validos.';
       end if;
     end if;
+    select coalesce(sum((ri->>'quantity')::bigint*(oi->>'unitCost')::bigint),0) into v_received_amount
+      from jsonb_array_elements(coalesce(new.payload#>'{inventory,purchaseReceipts}','[]')) r,
+        jsonb_array_elements(coalesce(r->'items','[]')) ri
+      join jsonb_array_elements(v_order->'items') oi on oi->>'id'=ri->>'lineId'
+      where r->>'orderId'=v_order->>'id';
+    if v_order ? 'cancellation' and
+      ((v_order->'cancellation' ? 'receivedAmount') is distinct from (v_received_amount>0)
+        or ((v_order#>>'{cancellation,receivedAmount}')::bigint is distinct from null and
+          (v_order#>>'{cancellation,receivedAmount}')::bigint is distinct from v_received_amount)) then
+      raise exception 'Cancelamento parcial diverge do valor efetivamente recebido.';
+    end if;
     if not (v_order ? 'receipt') then
-      if exists(select 1 from jsonb_array_elements(v_entries) e where e->>'purchaseId'=v_order->>'id') then
-        raise exception 'Pedido nao recebido nao pode gerar contas a pagar.';
+      if v_order ? 'cancellation' and v_received_amount>0 then
+        v_remainder := (v_order#>>'{cancellation,receivedAmount}')::bigint;
+        select v_remainder-coalesce(sum(floor(v_remainder::numeric*(r->>'amount')::numeric/v_total)),0)::bigint
+          into v_remainder from jsonb_array_elements(v_order->'schedule') r;
+        v_index := 0; v_entry_index := 0;
+        for v_row in select r from jsonb_array_elements(v_order->'schedule') r loop
+          v_expected := floor((v_order#>>'{cancellation,receivedAmount}')::numeric*
+            (v_row->>'amount')::numeric/v_total)::bigint;
+          if v_index<v_remainder then v_expected := v_expected+1; end if;
+          if v_expected>0 then
+            select e into v_entry from jsonb_array_elements(v_entries) e
+              where e->>'id'=v_order#>>array['cancellation','payableEntryIds',v_entry_index::text]
+                and e->>'purchaseId'=v_order->>'id';
+            if v_entry is null or v_entry->>'kind' is distinct from 'Pagar'
+              or v_entry->'party' is distinct from v_order->'supplierName'
+              or v_entry->'description' is distinct from v_order->'description'
+              or v_entry->'accountId' is distinct from v_order->'accountId'
+              or v_entry->'paymentMethod' is distinct from v_order->'paymentMethod'
+              or (v_entry->>'amount')::bigint is distinct from v_expected
+              or v_entry->'dueOn' is distinct from v_row->'dueOn'
+              or v_entry->'issuedOn' is distinct from v_order->'orderedOn'
+              or v_entry ?| array['clientId','invoiceId','retention','recurrence','installment'] then
+              raise exception 'Conta a pagar diverge do rateio do recebido no cancelamento.';
+            end if;
+            if (v_order ? 'categoryId' or v_order ? 'costCenterId') and not exists(
+              select 1 from jsonb_array_elements(coalesce(new.payload#>'{finance,management,classifications}','[]')) c
+              where c->'entryId'=v_entry->'id' and c->'categoryId' is not distinct from v_order->'categoryId'
+                and c->'costCenterId' is not distinct from v_order->'costCenterId') then
+              raise exception 'Cancelamento exige classificacao inicial igual ao pedido.';
+            end if;
+            v_entry_index := v_entry_index+1;
+          end if;
+          v_index := v_index+1;
+        end loop;
+        if v_entry_index<>jsonb_array_length(v_order#>'{cancellation,payableEntryIds}')
+          or (select count(*) from jsonb_array_elements(v_entries) e where e->>'purchaseId'=v_order->>'id')<>v_entry_index then
+          raise exception 'Quantidade de contas a pagar diverge do rateio de cancelamento.';
+        end if;
+      elsif exists(select 1 from jsonb_array_elements(v_entries) e where e->>'purchaseId'=v_order->>'id')
+        or (v_order ? 'cancellation' and v_received_amount>0) then
+        raise exception 'Pedido nao recebido ou nao cancelado nao pode gerar contas a pagar.';
       end if;
       continue;
     end if;

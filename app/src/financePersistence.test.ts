@@ -5,7 +5,8 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { billOrders, cancelFinanceEntry, applyFinanceRetention, settleFinanceEntry, reverseSettlement } from "./finance";
 import { demoDatabase, getOrderDetails, localDay } from "./domain";
 import { classifyFinanceEntry, saveCostCenter, saveFinanceCategory, saveOpeningBalance } from "./financeManagement";
-import { banking, importStatement, matchBankSettlement, unmatchBankSettlement, matchBankTransfer, unmatchBankTransfer, activeBankMatch } from "./bankReconciliation";
+import { banking, importStatement, matchBankSettlement, unmatchBankSettlement, matchBankTransfer, unmatchBankTransfer,
+  activeBankMatch, matchBankSettlementGroup } from "./bankReconciliation";
 import { recordFinanceTransfer, reverseFinanceTransfer } from "./financeTransfers";
 import { saveBankAccount } from "./finance";
 import { saveFinanceInstallments } from "./financeInstallments";
@@ -66,15 +67,16 @@ beforeAll(async () => {
   await db.exec(await readFile(new URL("../../supabase/migrations/20261016050000_settlement_adjustment_guards.sql", import.meta.url), "utf8"));
   await db.exec(await readFile(new URL("../../supabase/migrations/20261016060000_finance_recurrence_guards.sql", import.meta.url), "utf8"));
   await db.exec(await readFile(new URL("../../supabase/migrations/20261016070000_purchase_guards.sql", import.meta.url), "utf8"));
+  await db.exec(await readFile(new URL("../../supabase/migrations/20261020010000_bank_reconciliation_groups.sql", import.meta.url), "utf8"));
 }, 30000);
 beforeEach(async () => {
   await db.exec("reset role");
   await db.exec("alter table public.company_data disable trigger guard_purchases");
   await db.exec("alter table public.company_data disable trigger guard_finance_recurrences");
-  await db.exec("alter table public.company_data disable trigger guard_finance_history; alter table public.company_data disable trigger guard_bank_reconciliation; alter table public.company_data disable trigger guard_finance_transfers; alter table public.company_data disable trigger guard_bank_transfer_matches; alter table public.company_data disable trigger guard_finance_installments; alter table public.company_data disable trigger guard_finance_settlement_adjustments");
+  await db.exec("alter table public.company_data disable trigger guard_finance_history; alter table public.company_data disable trigger guard_bank_reconciliation; alter table public.company_data disable trigger guard_finance_transfers; alter table public.company_data disable trigger guard_bank_transfer_matches; alter table public.company_data disable trigger guard_finance_installments; alter table public.company_data disable trigger guard_finance_settlement_adjustments; alter table public.company_data disable trigger guard_bank_reconciliation_groups");
   baseline = fixture();
   await db.query("update public.company_data set payload=$1,revision=1 where company_id=$2", [JSON.stringify(baseline), company]);
-  await db.exec("delete from public.finance_change_permits; alter table public.company_data enable trigger guard_finance_history; alter table public.company_data enable trigger guard_bank_reconciliation; alter table public.company_data enable trigger guard_finance_transfers; alter table public.company_data enable trigger guard_bank_transfer_matches; alter table public.company_data enable trigger guard_finance_installments; alter table public.company_data enable trigger guard_finance_settlement_adjustments");
+  await db.exec("delete from public.finance_change_permits; alter table public.company_data enable trigger guard_finance_history; alter table public.company_data enable trigger guard_bank_reconciliation; alter table public.company_data enable trigger guard_finance_transfers; alter table public.company_data enable trigger guard_bank_transfer_matches; alter table public.company_data enable trigger guard_finance_installments; alter table public.company_data enable trigger guard_finance_settlement_adjustments; alter table public.company_data enable trigger guard_bank_reconciliation_groups");
   await db.exec("alter table public.company_data enable trigger guard_finance_recurrences");
   await db.exec("alter table public.company_data enable trigger guard_purchases");
   await identity("authenticated");
@@ -87,11 +89,19 @@ describe("proteção financeira no PostgreSQL", () => {
     let data = saveSupplier(baseline, supplier);
     data = saveFinanceCategory(data, { id: "purchase-category", name: "Compras", kind: "Pagar", active: true });
     data = saveCostCenter(data, { id: "purchase-center", name: "Compras", active: true });
+    const quoteId = "purchase-quote";
     return savePurchaseOrder(data, { id: "purchase", supplierId: supplier.id, supplierName: supplier.name, supplierDocument: supplier.document,
       description: "Compra de peças", items: [{ description: "Peça", quantity: 1, unitCost: total }],
       schedule: previewPurchaseSchedule(total, count, "2026-01-31"), accountId: "bank", paymentMethod: "Pix",
       categoryId: "purchase-category", costCenterId: "purchase-center",
-      orderedOn: "2026-01-01", createdAt: "2026-01-01T12:00:00Z" }, true);
+      orderedOn: "2026-01-01", createdAt: "2026-01-01T12:00:00Z",
+      procurement: {
+        quotes: [{ id: quoteId, supplierId: supplier.id, supplierName: supplier.name,
+          amount: total, quotedOn: "2026-01-01", reference: "Cotação registrada", terms: "" }],
+        selectedQuoteId: quoteId, quoteExceptionReason: "Somente um fornecedor disponível para esta compra.",
+        approval: { at: "2026-01-01T12:00:00Z", approverUserId: owner, approverName: "Administrador",
+          approverRole: "owner", reason: "Compra aprovada conforme necessidade operacional." },
+      } }, true);
   }
   function receivePurchase(data = purchaseFixture()) {
     return receivePurchaseOrder(data, purchasing(data).orders[0], { date: localDay(), reference: "NF 123", notes: "Recebimento integral conferido" }, true);
@@ -369,6 +379,56 @@ describe("proteção financeira no PostgreSQL", () => {
     await expect(save(changed, 5)).rejects.toThrow("Baixas nao");
     await expect(save(data, 5)).rejects.toThrow("estorno desfeito");
     await expect(save(reversed, 4)).rejects.toThrow("another session");
+  });
+  it("persiste grupos de conciliacao, valida totais no SQL e impede apagar/reativar historico", async () => {
+    const entryId = baseline.finance.entries[0].id;
+    let data = settleFinanceEntry(baseline, entryId, {
+      id: "group-settlement-a", date: localDay(), amount: 2500, accountId: "bank",
+    });
+    data = settleFinanceEntry(data, entryId, {
+      id: "group-settlement-b", date: localDay(), amount: 7500, accountId: "bank",
+    });
+    data = importStatement(data, "bank", { format: "CSV", bank: "", account: "", lines: [
+      { externalId: "group-movement-a", date: localDay(), amount: 4000, description: "Grupo A" },
+      { externalId: "group-movement-b", date: localDay(), amount: 6000, description: "Grupo B" },
+    ] }, "grupo.csv", true);
+    const transactionIds = banking(data).transactions.map((transaction) => transaction.id);
+    data = matchBankSettlementGroup(data, transactionIds, [
+      { entryId, settlementId: "group-settlement-a" }, { entryId, settlementId: "group-settlement-b" },
+    ], true);
+    const wrongTotal = structuredClone(data);
+    wrongTotal.finance.banking!.reconciliationGroups![0].settlements.pop();
+    await expect(save(wrongTotal)).rejects.toThrow("total divergente");
+    await save(data);
+    const withTransfer = saveBankAccount(data, { ...data.finance.accounts[0], id: "group-destination", name: "Destino grupo" });
+    const transfer = recordFinanceTransfer(withTransfer, { id: "group-transfer", fromAccountId: "bank",
+      toAccountId: "group-destination", date: localDay(), amount: 4000, description: "Transferencia em conflito",
+      createdAt: new Date().toISOString() }, true);
+    transfer.finance.banking!.transferMatches = [{
+      id: "group-transfer-match", transactionId: transactionIds[0], transferId: "group-transfer",
+      leg: "outgoing", createdAt: new Date().toISOString(), reversed: false,
+    }];
+    await expect(save(transfer, 2)).rejects.toThrow("Movimento ja conciliado");
+    const stored = await db.query<{ payload: typeof data }>("select payload from public.company_data where company_id=$1", [company]);
+    expect(stored.rows[0].payload.finance.banking!.reconciliationGroups).toEqual(banking(data).reconciliationGroups);
+
+    const removed = structuredClone(data);
+    removed.finance.banking!.reconciliationGroups = [];
+    await expect(save(removed, 2)).rejects.toThrow("removido");
+
+    const reversed = unmatchBankSettlement(data, banking(data).reconciliationGroups![0].id);
+    await save(reversed, 2);
+    const farDate = new Date(Date.parse(`${localDay()}T12:00:00Z`) - 4 * 86_400_000).toISOString().slice(0, 10);
+    const tooFar = importStatement(reversed, "bank", { format: "CSV", bank: "", account: "", lines: [
+      { externalId: "group-too-far", date: farDate, amount: 6000, description: "Movimento fora da janela" },
+    ] }, "grupo.csv", true);
+    tooFar.finance.banking!.reconciliationGroups!.push({
+      id: "group-too-far", transactionIds: [transactionIds[0], banking(tooFar).transactions.at(-1)!.id],
+      settlements: [{ entryId, settlementId: "group-settlement-a" }, { entryId, settlementId: "group-settlement-b" }],
+      createdAt: new Date().toISOString(), reversed: false,
+    });
+    await expect(save(tooFar, 3)).rejects.toThrow("tres dias");
+    await expect(save(data, 3)).rejects.toThrow("reativado");
   });
   it("SQL rejeita ajustes invalidos, caixa zerado, origem faturada e vinculo pelo principal", async () => {
     const source = adjustmentFixture();

@@ -2,7 +2,9 @@
 import { readFile } from "node:fs/promises";
 import { PGlite } from "@electric-sql/pglite";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { demoDatabase, getOrderDetails, instantiateQuestionnaire, validateDatabase } from "./domain";
+import { changeOrderStatus, countStock, demoDatabase, getOrderDetails, instantiateQuestionnaire,
+  availablePurchaseReturnItems, createStockLocation, localDay, reversibleConsumptionItems,
+  reverseOrderConsumption, returnPurchaseStock, stockLocationBalance, transferStock, validateDatabase } from "./domain";
 import { saveQuestionnaire } from "./questionnaires";
 import { questionnaireDisplaySchema } from "./questionnaireSchema";
 import { linkClientEquipment, saveEquipmentBrand, saveEquipmentModel, selectEquipmentModel } from "./equipmentCatalogData";
@@ -11,7 +13,9 @@ import { distanceMeters } from "./serviceDistance";
 import { saveFinanceInstallments } from "./financeInstallments";
 import { settleFinanceEntry } from "./finance";
 import { generateRecurringEntries, previewRecurringEntries, saveFinanceRecurrence } from "./financeRecurrences";
-import { purchasing, receivePurchaseOrder, savePurchaseOrder, saveSupplier } from "./purchasing";
+import { cancelPurchaseOrder, previewPurchaseSchedule, purchasing, receivePurchaseOrder, savePurchaseOrder, saveSupplier } from "./purchasing";
+import { purchaseTotal } from "./purchasingValidation";
+import type { PurchaseOrder, Supplier } from "./financeSchema";
 
 const owner = "00000000-0000-4000-8000-000000000001";
 const tech = "00000000-0000-4000-8000-000000000002";
@@ -44,13 +48,23 @@ payload.finance = generateRecurringEntries(payload, payload.finance.recurrences!
   previewRecurringEntries(payload, "private-recurrence", "2026-10", "2026-10"), true).finance;
 payload.finance = saveSupplier(payload, { id: "private-supplier", name: "Fornecedor de compra privado", document: "",
   phone: "11999999999", email: "private@example.test", address: "Endereco privado", active: true }).finance;
+for (const [id, name] of [["quote-supplier-2", "Fornecedor cotado 2"], ["quote-supplier-3", "Fornecedor cotado 3"]]) {
+  payload.finance = saveSupplier(payload, { id, name, document: "", phone: "", email: "", address: "", active: true }).finance;
+}
 payload.finance = savePurchaseOrder(payload, { id: "private-purchase", supplierId: "private-supplier",
   supplierName: "Fornecedor de compra privado", supplierDocument: "", description: "Pedido privado",
   orderedOn: "2026-10-01", createdAt: "2026-10-01T12:00:00Z", accountId: "private-bank", paymentMethod: "Pix",
   items: [{ description: "Peca privada", quantity: 1, unitCost: 1000 }],
-  schedule: [{ dueOn: "2026-10-31", amount: 1000 }] }, true).finance;
-payload.finance = receivePurchaseOrder(payload, purchasing(payload).orders[0], {
-  date: "2026-10-01", reference: "NF privada", notes: "Conferencia privada completa" }, true).finance;
+  schedule: [{ dueOn: "2026-10-31", amount: 1000 }],
+  procurement: approvedQuotes({ id: "private-purchase", supplierId: "private-supplier", orderedOn: "2026-10-01",
+    items: [{ description: "Peca privada", quantity: 1, unitCost: 1000 }] }, purchasing(payload).suppliers),
+}, true).finance;
+const purchaseReceived = receivePurchaseOrder(payload, purchasing(payload).orders[0], {
+  date: "2026-10-01", reference: "NF privada", notes: "Conferencia privada completa" }, true);
+payload.finance = purchaseReceived.finance;
+payload.products = purchaseReceived.products;
+payload.movements = purchaseReceived.movements;
+payload.inventory = purchaseReceived.inventory;
 payload.orders[0].technicianUserId = tech;
 payload.orders[0].status = "Aberta";
 payload.orders[0].details = getOrderDetails(payload.orders[0]);
@@ -69,6 +83,23 @@ async function mutate(action: string, data: object, revision: number, orderId = 
   return db.query("select public.mobile_update_order($1,$2,$3::jsonb,$4) as data", [orderId, action, JSON.stringify(data), revision]);
 }
 const gps = { latitude: -23.5, longitude: -46.6, accuracy: 12 };
+function approvedQuotes(order: Pick<PurchaseOrder, "id" | "supplierId" | "orderedOn" | "items">,
+  suppliers: Supplier[], approverId = owner) {
+  const selected = suppliers.find((supplier) => supplier.id === order.supplierId)!;
+  const alternatives = suppliers.filter((supplier) => supplier.id !== selected.id).slice(0, 2);
+  const candidates = [selected, ...alternatives];
+  const amount = purchaseTotal(order);
+  const quotes = candidates.map((supplier, index) => ({
+    id: `${order.id}-quote-${index}`, supplierId: supplier.id, supplierName: supplier.name,
+    amount: amount + index * 100, quotedOn: order.orderedOn,
+    reference: `COT-${order.id}-${index}`, terms: `Prazo comercial ${index + 1}`,
+  }));
+  return {
+    quotes, selectedQuoteId: quotes[0].id,
+    approval: { at: new Date().toISOString(), approverUserId: approverId, approverName: "Admin", approverRole: "owner" as const,
+      reason: "Melhor condição total para o pedido." },
+  };
+}
 
 beforeAll(async () => {
   await db.exec(`
@@ -80,7 +111,7 @@ beforeAll(async () => {
     grant usage on schema auth to anon,authenticated;
     grant execute on function auth.uid() to anon,authenticated;
   `);
-  for (const file of ["20261008010000_tenant_auth_and_company_data.sql", "20261009010000_android_technicians.sql", "20261009020000_technician_link_validation.sql", "20261010010000_questionnaires.sql", "20261011010000_questionnaire_checkout_requirement.sql", "20261011020000_yes_no_question_justification.sql", "20261015010000_service_distance.sql", "20261015020000_travel_route_limits.sql", "20261015030000_address_lookup_limits.sql", "20261015040000_finance_history_guards.sql"]) {
+  for (const file of ["20261008010000_tenant_auth_and_company_data.sql", "20261009010000_android_technicians.sql", "20261009020000_technician_link_validation.sql", "20261010010000_questionnaires.sql", "20261011010000_questionnaire_checkout_requirement.sql", "20261011020000_yes_no_question_justification.sql", "20261015010000_service_distance.sql", "20261015020000_travel_route_limits.sql", "20261015030000_address_lookup_limits.sql", "20261015040000_finance_history_guards.sql", "20261017010000_inventory_guards.sql", "20261018010000_purchase_return_finance.sql"]) {
     await db.exec(await readFile(new URL(`../../supabase/migrations/${file}`, import.meta.url), "utf8"));
   }
   await db.query("insert into auth.users values ($1,'owner@example.test'),($2,'tech@example.test'),($3,'other@example.test')", [owner, tech, other]);
@@ -90,8 +121,64 @@ beforeAll(async () => {
     entries: payload.finance.entries.map((entry) => ({ ...entry, settlements: [] })) } };
   await db.query("insert into public.company_data(company_id,payload) values ($1,$2)", [company, JSON.stringify(initial)]);
   await db.query("update public.company_data set payload=$1 where company_id=$2", [JSON.stringify(payload), company]);
+  await db.exec(await readFile(new URL("../../supabase/migrations/20261016070000_purchase_guards.sql", import.meta.url), "utf8"));
+  await db.exec(await readFile(new URL("../../supabase/migrations/20261019010000_purchase_approval_guards.sql", import.meta.url), "utf8"));
 }, 30000);
 afterAll(async () => { await db.close(); });
+
+describe("aprovação e cotações de compras no banco", () => {
+  it("recusa pedidos novos sem aprovação válida, cotações distintas ou justificativa de exceção", async () => {
+    await identity(owner);
+    const original = (await db.query<{ payload: unknown; revision: number }>(
+      "select payload,revision from public.company_data where company_id=$1", [company])).rows[0];
+    const data = validateDatabase(original.payload), supplier = purchasing(data).suppliers[0], product = data.products[0];
+    const orderData = savePurchaseOrder(data, {
+      id: "sql-approval-guard-test", supplierId: supplier.id, supplierName: supplier.name,
+      supplierDocument: supplier.document, description: "Pedido de teste de aprovação",
+      orderedOn: localDay(), createdAt: new Date().toISOString(), accountId: "private-bank",
+      paymentMethod: "Pix", items: [{ description: product.name, productId: product.id, quantity: 1, unitCost: 100 }],
+      schedule: [{ dueOn: localDay(), amount: 100 }],
+      procurement: approvedQuotes({ id: "sql-approval-guard-test", supplierId: supplier.id, orderedOn: localDay(),
+        items: [{ description: product.name, quantity: 1, unitCost: 100 }] }, purchasing(data).suppliers),
+    }, true);
+    const proposed = structuredClone(data) as ReturnType<typeof validateDatabase>;
+    proposed.finance.purchasing!.orders.push(
+      purchasing(orderData).orders.find((order) => order.id === "sql-approval-guard-test")!);
+    const reject = async (candidate: ReturnType<typeof validateDatabase>, actor = owner) => {
+      await identity(actor);
+      await expect(db.query("select public.save_company_data($1,$2)",
+        [JSON.stringify(candidate), original.revision])).rejects.toThrow();
+    };
+
+    const withoutApproval = structuredClone(proposed) as ReturnType<typeof validateDatabase>;
+    delete withoutApproval.finance.purchasing!.orders.at(-1)!.procurement;
+    await reject(withoutApproval);
+
+    const tooFewQuotes = structuredClone(proposed) as ReturnType<typeof validateDatabase>;
+    const tooFewProcurement = tooFewQuotes.finance.purchasing!.orders.at(-1)!.procurement!;
+    tooFewProcurement.quotes = tooFewProcurement.quotes.slice(0, 2);
+    delete tooFewProcurement.quoteExceptionReason;
+    await reject(tooFewQuotes);
+
+    const duplicateSupplier = structuredClone(proposed) as ReturnType<typeof validateDatabase>;
+    const duplicateProcurement = duplicateSupplier.finance.purchasing!.orders.at(-1)!.procurement!;
+    duplicateProcurement.quotes[1].supplierId = duplicateProcurement.quotes[0].supplierId;
+    duplicateProcurement.quotes[1].supplierName = duplicateProcurement.quotes[0].supplierName;
+    await reject(duplicateSupplier);
+
+    const changedActor = structuredClone(proposed) as ReturnType<typeof validateDatabase>;
+    changedActor.finance.purchasing!.orders.at(-1)!.procurement!.approval.approverUserId = tech;
+    await reject(changedActor);
+
+    const localApproval = structuredClone(proposed) as ReturnType<typeof validateDatabase>;
+    localApproval.finance.purchasing!.orders.at(-1)!.procurement!.approval.approverRole = "local";
+    await reject(localApproval);
+
+    const unauthorizedTenantActor = structuredClone(proposed) as ReturnType<typeof validateDatabase>;
+    unauthorizedTenantActor.finance.purchasing!.orders.at(-1)!.procurement!.approval.approverUserId = other;
+    await reject(unauthorizedTenantActor, other);
+  });
+});
 
 describe("RPC Android e isolamento de dados", () => {
   it("limita geocodificação a 30 por minuto por empresa, permite renovar a janela e bloqueia acesso direto", async () => {
@@ -737,6 +824,342 @@ describe("RPC Android e isolamento de dados", () => {
     const after = await snapshot();
     expect(after.payload.orders[0].status).toBe("Em atendimento");
     expect(getOrderDetails(after.payload.orders[0]).activities.at(-1)?.kind).toBe("Check-in");
+  });
+  it("reserva no check-in e registra o consumo no checkout do técnico", async () => {
+    await identity(owner);
+    const raw = await db.query<{ payload: unknown; revision: number }>(
+      "select payload,revision from public.company_data where company_id=$1", [company]);
+    const original = raw.rows[0];
+    try {
+      const data = validateDatabase(original.payload), order = data.orders[0], product = data.products[0];
+      order.status = "Aberta";
+      order.details = { ...getOrderDetails(order), activities: [], pending: [], checklists: [], items: [{
+        id: "mobile-stock-line", kind: "produto", referenceId: product.id, name: product.name,
+        quantity: 2, price: 1000, discount: 0,
+      }] };
+      await db.query("select public.save_company_data($1,$2)", [JSON.stringify(data), original.revision]);
+      await identity(tech);
+      let current = await snapshot();
+      await mutate("Check-in", { location: gps }, current.revision);
+      await identity(owner);
+      let stored = validateDatabase((await db.query<{ payload: unknown }>(
+        "select payload from public.company_data where company_id=$1", [company])).rows[0].payload);
+      expect(stored.inventory!.reservations.at(-1)?.events.at(-1)?.status).toBe("Reservada");
+      expect(stored.products.find((item) => item.id === product.id)?.stock).toBe(product.stock);
+      await identity(tech);
+      current = await snapshot();
+      await mutate("Check-out", { location: gps }, current.revision);
+      await identity(owner);
+      stored = validateDatabase((await db.query<{ payload: unknown }>(
+        "select payload from public.company_data where company_id=$1", [company])).rows[0].payload);
+      expect(stored.products.find((item) => item.id === product.id)?.stock).toBe(product.stock - 2);
+      expect(stored.inventory!.reservations.at(-1)?.events.at(-1)?.status).toBe("Consumida");
+      expect(stored.movements[0].source).toMatchObject({
+        type: "consumption", referenceId: stored.inventory!.reservations.at(-1)!.id, lineId: "mobile-stock-line",
+      });
+    } finally {
+      await db.exec("reset role");
+      await db.exec("alter table public.company_data disable trigger guard_inventory");
+      await db.exec("alter table public.company_data disable trigger guard_purchases");
+      await db.query("update public.company_data set payload=$1,revision=$2 where company_id=$3",
+        [JSON.stringify(original.payload), original.revision, company]);
+      await db.exec("alter table public.company_data enable trigger guard_inventory");
+      await db.exec("alter table public.company_data enable trigger guard_purchases");
+      await identity(tech);
+    }
+  });
+  it("valida a contagem física no banco e impede reescrever sua auditoria", async () => {
+    await identity(owner);
+    const raw = await db.query<{ payload: unknown; revision: number }>(
+      "select payload,revision from public.company_data where company_id=$1", [company]);
+    const original = raw.rows[0];
+    try {
+      const data = validateDatabase(original.payload);
+      const product = data.products[0], locationId = data.inventory!.defaultLocationId;
+      const countedQuantity = stockLocationBalance(data, product.id, locationId) + 1;
+      const count = countStock(data, product.id, locationId,
+        countedQuantity, "Conferência cíclica de teste.");
+      await db.query("select public.save_company_data($1,$2)", [JSON.stringify(count), original.revision]);
+      const savedRaw = await db.query<{ payload: unknown; revision: number }>(
+        "select payload,revision from public.company_data where company_id=$1", [company]);
+      const saved = validateDatabase(savedRaw.rows[0].payload);
+      expect(saved.inventory!.counts[0]).toMatchObject({
+        productId: product.id, countedQuantity,
+      });
+      expect(saved.movements[0].source).toMatchObject({
+        type: "inventory", referenceId: saved.inventory!.counts[0].id,
+      });
+      const altered = structuredClone(saved) as ReturnType<typeof validateDatabase>;
+      altered.inventory!.counts[0].reason += " alterada";
+      await expect(db.query("select public.save_company_data($1,$2)",
+        [JSON.stringify(altered), savedRaw.rows[0].revision])).rejects.toThrow("Historico de estoque");
+    } finally {
+      await db.exec("reset role");
+      await db.exec("alter table public.company_data disable trigger guard_inventory");
+      await db.exec("alter table public.company_data disable trigger guard_purchases");
+      await db.query("update public.company_data set payload=$1,revision=$2 where company_id=$3",
+        [JSON.stringify(original.payload), original.revision, company]);
+      await db.exec("alter table public.company_data enable trigger guard_inventory");
+      await db.exec("alter table public.company_data enable trigger guard_purchases");
+      await identity(tech);
+    }
+  });
+  it("protege movimentos append-only e os vínculos do recebimento contra gravação direta", async () => {
+    await identity(owner);
+    const stored = await db.query<{ payload: unknown; revision: number }>(
+      "select payload,revision from public.company_data where company_id=$1", [company]);
+    const alteredMovement = structuredClone(stored.rows[0].payload) as ReturnType<typeof validateDatabase>;
+    alteredMovement.movements[0].reason += " alterado";
+    await expect(db.query("select public.save_company_data($1,$2)",
+      [JSON.stringify(alteredMovement), stored.rows[0].revision])).rejects.toThrow("estoque");
+    const alteredReceipt = structuredClone(stored.rows[0].payload) as ReturnType<typeof validateDatabase>;
+    const purchase = alteredReceipt.finance.purchasing!.orders.find((item) => item.receipt?.stockItems?.length)!;
+    purchase.receipt!.stockItems![0].productId = "produto-inexistente";
+    await expect(db.query("select public.save_company_data($1,$2)",
+      [JSON.stringify(alteredReceipt), stored.rows[0].revision])).rejects.toThrow();
+    const alteredAverage = structuredClone(stored.rows[0].payload) as ReturnType<typeof validateDatabase>;
+    const costedMovement = alteredAverage.movements.find((item) => item.averageCostAfter !== undefined)!;
+    alteredAverage.products.find((item) => item.id === costedMovement.productId)!.cost += 1;
+    await expect(db.query("select public.save_company_data($1,$2)",
+      [JSON.stringify(alteredAverage), stored.rows[0].revision])).rejects.toThrow("Custo medio atual");
+  });
+  it("aceita entrega parcial no SQL e protege quantidade, histórico e cancelamento do saldo", async () => {
+    await identity(owner);
+    const original = (await db.query<{ payload: unknown; revision: number }>(
+      "select payload,revision from public.company_data where company_id=$1", [company])).rows[0];
+    try {
+      const data = validateDatabase(original.payload);
+      const supplier = purchasing(data).suppliers[0], product = data.products[0];
+      const order = savePurchaseOrder(data, {
+        id: "sql-partial-purchase", supplierId: supplier.id, supplierName: supplier.name,
+        supplierDocument: supplier.document, description: "Compra parcial para teste",
+        orderedOn: localDay(), createdAt: new Date().toISOString(), accountId: "private-bank",
+        paymentMethod: "Pix", items: [{ description: product.name, productId: product.id, quantity: 2, unitCost: 100 }],
+        schedule: [{ dueOn: localDay(), amount: 200 }],
+        procurement: approvedQuotes({ id: "sql-partial-purchase", supplierId: supplier.id, orderedOn: localDay(),
+          items: [{ description: product.name, quantity: 2, unitCost: 100 }] }, purchasing(data).suppliers),
+      }, true);
+      const pending = purchasing(order).orders.find((item) => item.id === "sql-partial-purchase")!;
+      const partial = receivePurchaseOrder(order, pending, {
+        date: localDay(), reference: "NF parcial", notes: "Conferência parcial SQL",
+        quantities: { [pending.items[0].id!]: 1 },
+      }, true);
+      expect(partial.finance.entries.filter((entry) => entry.purchaseId === pending.id)).toEqual([]);
+      await db.query("select public.save_company_data($1,$2)", [JSON.stringify(partial), original.revision]);
+      const savedRaw = (await db.query<{ payload: unknown; revision: number }>(
+        "select payload,revision from public.company_data where company_id=$1", [company])).rows[0];
+      const saved = validateDatabase(savedRaw.payload);
+      expect(saved.inventory!.purchaseReceipts.at(-1)?.items[0].quantity).toBe(1);
+      const altered = structuredClone(saved) as ReturnType<typeof validateDatabase>;
+      altered.inventory!.purchaseReceipts.at(-1)!.items[0].quantity = 2;
+      await expect(db.query("select public.save_company_data($1,$2)",
+        [JSON.stringify(altered), savedRaw.revision])).rejects.toThrow("Historico de estoque");
+      const cancelled = structuredClone(saved) as ReturnType<typeof validateDatabase>;
+      cancelled.finance.purchasing!.orders.find((item) => item.id === pending.id)!.cancellation = {
+        at: new Date().toISOString(), reason: "Cancelar saldo parcialmente entregue",
+      };
+      await expect(db.query("select public.save_company_data($1,$2)",
+        [JSON.stringify(cancelled), savedRaw.revision])).rejects.toThrow();
+      const removed = structuredClone(saved) as ReturnType<typeof validateDatabase>;
+      removed.inventory!.purchaseReceipts.pop();
+      await expect(db.query("select public.save_company_data($1,$2)",
+        [JSON.stringify(removed), savedRaw.revision])).rejects.toThrow("Historico de estoque");
+    } finally {
+      await db.exec("reset role");
+      await db.exec("alter table public.company_data disable trigger guard_inventory");
+      await db.exec("alter table public.company_data disable trigger guard_purchases");
+      await db.query("update public.company_data set payload=$1,revision=$2 where company_id=$3",
+        [JSON.stringify(original.payload), original.revision, company]);
+      await db.exec("alter table public.company_data enable trigger guard_inventory");
+      await db.exec("alter table public.company_data enable trigger guard_purchases");
+      await identity(tech);
+    }
+  });
+  it("valida devoluções de compra no SQL, limita recebimentos e protege o histórico append-only", async () => {
+    await identity(owner);
+    const original = (await db.query<{ payload: unknown; revision: number }>(
+      "select payload,revision from public.company_data where company_id=$1", [company])).rows[0];
+    try {
+      const data = validateDatabase(original.payload), supplier = purchasing(data).suppliers[0], product = data.products[0];
+      const savedOrderData = savePurchaseOrder(data, {
+        id: "sql-purchase-return", supplierId: supplier.id, supplierName: supplier.name,
+        supplierDocument: supplier.document, description: "Compra para devolução SQL",
+        orderedOn: localDay(), createdAt: new Date().toISOString(), accountId: "private-bank",
+        paymentMethod: "Pix", items: [{ description: product.name, productId: product.id, quantity: 2, unitCost: 100 }],
+        schedule: [{ dueOn: localDay(), amount: 200 }],
+        procurement: approvedQuotes({ id: "sql-purchase-return", supplierId: supplier.id, orderedOn: localDay(),
+          items: [{ description: product.name, quantity: 2, unitCost: 100 }] }, purchasing(data).suppliers),
+      }, true);
+      const order = purchasing(savedOrderData).orders.find((item) => item.id === "sql-purchase-return")!;
+      const partial = receivePurchaseOrder(savedOrderData, order, {
+        date: localDay(), reference: "NF parcial", notes: "Primeira parte recebida",
+        quantities: { [order.items[0].id!]: 1 },
+      }, true);
+      await db.query("select public.save_company_data($1,$2)", [JSON.stringify(partial), original.revision]);
+      const partialRaw = (await db.query<{ payload: unknown; revision: number }>(
+        "select payload,revision from public.company_data where company_id=$1", [company])).rows[0];
+      const partialSaved = validateDatabase(partialRaw.payload), locationId = partialSaved.inventory!.defaultLocationId;
+      const available = availablePurchaseReturnItems(partialSaved, order.id, locationId)[0];
+      expect(available.returnableQuantity).toBe(1);
+      const returned = returnPurchaseStock(partialSaved, order.id, locationId, { [available.lineId]: 1 }, {
+        date: localDay(), reference: "DEV SQL", reason: "Devolução de teste SQL",
+      }, true);
+      const firstReturn = returned.inventory!.purchaseReturns.at(-1)!;
+      const firstCredit = returned.finance.entries.find((entry) => entry.purchaseReturnCreditId === firstReturn.id);
+      expect(firstReturn.financial).toMatchObject({ amount: 100, payableOffsets: [] });
+      expect(firstCredit).toMatchObject({ kind: "Receber", amount: 100, purchaseReturnCreditId: firstReturn.id });
+      const invalidCredit = structuredClone(returned) as ReturnType<typeof validateDatabase>;
+      invalidCredit.inventory!.purchaseReturns.at(-1)!.financial!.amount += 1;
+      await expect(db.query("select public.save_company_data($1,$2)",
+        [JSON.stringify(invalidCredit), partialRaw.revision])).rejects.toThrow();
+      await db.query("select public.save_company_data($1,$2)", [JSON.stringify(returned), partialRaw.revision]);
+      const creditRaw = (await db.query<{ payload: unknown; revision: number }>(
+        "select payload,revision from public.company_data where company_id=$1", [company])).rows[0];
+      const creditSaved = validateDatabase(creditRaw.payload);
+      const completed = receivePurchaseOrder(creditSaved, order, {
+        date: localDay(), reference: "NF final", notes: "Saldo recebido",
+        quantities: { [order.items[0].id!]: 1 },
+      }, true);
+      await db.query("select public.save_company_data($1,$2)", [JSON.stringify(completed), creditRaw.revision]);
+      const completedRaw = (await db.query<{ payload: unknown; revision: number }>(
+        "select payload,revision from public.company_data where company_id=$1", [company])).rows[0];
+      const completedSaved = validateDatabase(completedRaw.payload);
+      const remaining = availablePurchaseReturnItems(completedSaved, order.id, locationId)[0];
+      const returnedAgain = returnPurchaseStock(completedSaved, order.id, locationId, { [remaining.lineId]: 1 }, {
+        date: localDay(), reference: "DEV SQL 2", reason: "Segunda devolução SQL",
+      }, true);
+      const secondReturn = returnedAgain.inventory!.purchaseReturns.at(-1)!;
+      expect(secondReturn.financial).toMatchObject({ amount: 100, payableOffsets: [{ amount: 100 }] });
+      const payable = returnedAgain.finance.entries.find((entry) => entry.purchaseId === order.id)!;
+      expect(payable.purchaseReturnOffsets).toContainEqual({ returnId: secondReturn.id, amount: 100 });
+      const secondLocationData = createStockLocation(completedSaved, "Depósito alternativo SQL");
+      const secondLocationId = secondLocationData.inventory!.locations.at(-1)!.id;
+      const transferred = transferStock(secondLocationData, product.id, locationId, secondLocationId, 1, "Teste SQL");
+      const crossLocation = structuredClone(returnedAgain);
+      crossLocation.inventory!.locations = transferred.inventory!.locations;
+      crossLocation.inventory!.purchaseReturns.at(-1)!.items[0].locationId = secondLocationId;
+      const crossLocationMovement = crossLocation.movements.find((movement) =>
+        movement.source?.type === "purchaseReturn" && movement.source.referenceId === secondReturn.id)!;
+      crossLocationMovement.locationId = secondLocationId;
+      crossLocationMovement.balance = stockLocationBalance(transferred, product.id, secondLocationId) - 1;
+      crossLocation.movements = [crossLocationMovement, ...transferred.movements];
+      await expect(db.query("select public.save_company_data($1,$2)",
+        [JSON.stringify(crossLocation), completedRaw.revision])).rejects.toThrow();
+      await db.query("select public.save_company_data($1,$2)", [JSON.stringify(returnedAgain), completedRaw.revision]);
+      const savedRaw = (await db.query<{ payload: unknown; revision: number }>(
+        "select payload,revision from public.company_data where company_id=$1", [company])).rows[0];
+      const saved = validateDatabase(savedRaw.payload);
+      expect(saved.inventory!.purchaseReturns.at(-1)?.items[0].quantity).toBe(1);
+      const altered = structuredClone(saved) as ReturnType<typeof validateDatabase>;
+      altered.inventory!.purchaseReturns.at(-1)!.items[0].quantity = 2;
+      const alteredMovement = altered.movements.find((movement) =>
+        movement.source?.type === "purchaseReturn" && movement.source.referenceId === secondReturn.id)!;
+      alteredMovement.delta = -2;
+      alteredMovement.balance -= 1;
+      altered.products.find((item) => item.id === product.id)!.stock -= 1;
+      await expect(db.query("select public.save_company_data($1,$2)",
+        [JSON.stringify(altered), savedRaw.revision])).rejects.toThrow();
+      const removed = structuredClone(saved) as ReturnType<typeof validateDatabase>;
+      removed.inventory!.purchaseReturns.pop();
+      await expect(db.query("select public.save_company_data($1,$2)",
+        [JSON.stringify(removed), savedRaw.revision])).rejects.toThrow();
+      const cancelSupplier = purchasing(saved).suppliers[0];
+      const newOrderData = savePurchaseOrder(saved, {
+        id: "sql-partial-cancel", supplierId: cancelSupplier.id, supplierName: cancelSupplier.name,
+        supplierDocument: cancelSupplier.document, description: "Compra cancelada parcialmente",
+        orderedOn: localDay(), createdAt: new Date().toISOString(), accountId: "private-bank",
+        paymentMethod: "Pix", items: [{ description: product.name, productId: product.id, quantity: 10, unitCost: 100 }],
+        schedule: previewPurchaseSchedule(1000, 3, localDay()),
+        procurement: approvedQuotes({ id: "sql-partial-cancel", supplierId: cancelSupplier.id, orderedOn: localDay(),
+          items: [{ description: product.name, quantity: 10, unitCost: 100 }] }, purchasing(saved).suppliers),
+      }, true);
+      const newOrder = purchasing(newOrderData).orders.find((item) => item.id === "sql-partial-cancel")!;
+      const partialPurchase = receivePurchaseOrder(newOrderData, newOrder, {
+        date: localDay(), reference: "NF parcial SQL", notes: "Uma unidade recebida",
+        quantities: { [newOrder.items[0].id!]: 2 },
+      }, true);
+      await db.query("select public.save_company_data($1,$2)", [JSON.stringify(partialPurchase), savedRaw.revision]);
+      const partialPurchaseRaw = (await db.query<{ payload: unknown; revision: number }>(
+        "select payload,revision from public.company_data where company_id=$1", [company])).rows[0];
+      const partialPurchaseSaved = validateDatabase(partialPurchaseRaw.payload);
+      const canceledPurchase = cancelPurchaseOrder(partialPurchaseSaved,
+        purchasing(partialPurchaseSaved).orders.find((item) => item.id === newOrder.id)!, "Fornecedor sem saldo", true);
+      const canceledEntries = canceledPurchase.finance.entries.filter((entry) => entry.purchaseId === newOrder.id);
+      expect(canceledEntries.map((entry) => entry.amount)).toEqual([67, 67, 66]);
+      await db.query("select public.save_company_data($1,$2)",
+        [JSON.stringify(canceledPurchase), partialPurchaseRaw.revision]);
+      const canceledRaw = (await db.query<{ payload: unknown; revision: number }>(
+        "select payload,revision from public.company_data where company_id=$1", [company])).rows[0];
+      const canceledSaved = validateDatabase(canceledRaw.payload);
+      const canceledReturnable = availablePurchaseReturnItems(canceledSaved, newOrder.id, locationId)[0];
+      const returnedAfterCancel = returnPurchaseStock(canceledSaved, newOrder.id, locationId,
+        { [canceledReturnable.lineId]: 2 }, {
+          date: localDay(), reference: "DEV cancelamento SQL", reason: "Devolução após cancelar saldo",
+        }, true);
+      expect(returnedAfterCancel.inventory!.purchaseReturns.at(-1)?.financial?.payableOffsets)
+        .toHaveLength(canceledEntries.length);
+      await db.query("select public.save_company_data($1,$2)",
+        [JSON.stringify(returnedAfterCancel), canceledRaw.revision]);
+      const returnedCanceledRaw = (await db.query<{ payload: unknown; revision: number }>(
+        "select payload,revision from public.company_data where company_id=$1", [company])).rows[0];
+      const alteredCancellation = structuredClone(returnedAfterCancel) as ReturnType<typeof validateDatabase>;
+      alteredCancellation.finance.purchasing!.orders.find((item) => item.id === newOrder.id)!
+        .cancellation!.receivedAmount = 101;
+      await expect(db.query("select public.save_company_data($1,$2)",
+        [JSON.stringify(alteredCancellation), returnedCanceledRaw.revision])).rejects.toThrow();
+    } finally {
+      await db.exec("reset role");
+      await db.exec("alter table public.company_data disable trigger guard_inventory");
+      await db.exec("alter table public.company_data disable trigger guard_finance_history");
+      await db.exec("alter table public.company_data disable trigger guard_purchases");
+      await db.exec("alter table public.company_data disable trigger guard_purchase_return_finance");
+      await db.query("update public.company_data set payload=$1,revision=$2 where company_id=$3",
+        [JSON.stringify(original.payload), original.revision, company]);
+      await db.exec("alter table public.company_data enable trigger guard_inventory");
+      await db.exec("alter table public.company_data enable trigger guard_finance_history");
+      await db.exec("alter table public.company_data enable trigger guard_purchases");
+      await db.exec("alter table public.company_data enable trigger guard_purchase_return_finance");
+      await identity(tech);
+    }
+  });
+  it("valida no SQL os estornos parciais de peças consumidas e impede excesso ou reescrita", async () => {
+    await identity(owner);
+    const original = (await db.query<{ payload: unknown; revision: number }>(
+      "select payload,revision from public.company_data where company_id=$1", [company])).rows[0];
+    try {
+      const data = validateDatabase(original.payload), order = data.orders[0], product = data.products[0];
+      order.status = "Aberta";
+      order.details = { ...getOrderDetails(order), activities: [], items: [{
+        id: "sql-reversal-line", kind: "produto", referenceId: product.id, name: product.name,
+        quantity: 2, price: 1000, discount: 0,
+      }] };
+      const finalized = changeOrderStatus(validateDatabase(data), order.id, "Finalizada");
+      const line = reversibleConsumptionItems(finalized, order.id)[0];
+      const reversed = reverseOrderConsumption(finalized, order.id, { [line.id]: 1 },
+        "Peça não utilizada.", true);
+      await db.query("select public.save_company_data($1,$2)", [JSON.stringify(reversed), original.revision]);
+      const savedRaw = (await db.query<{ payload: unknown; revision: number }>(
+        "select payload,revision from public.company_data where company_id=$1", [company])).rows[0];
+      const saved = validateDatabase(savedRaw.payload);
+      expect(saved.inventory!.consumptionReversals.at(-1)?.items[0].quantity).toBe(1);
+      const altered = structuredClone(saved) as ReturnType<typeof validateDatabase>;
+      altered.inventory!.consumptionReversals.at(-1)!.items[0].quantity = 2;
+      await expect(db.query("select public.save_company_data($1,$2)",
+        [JSON.stringify(altered), savedRaw.revision])).rejects.toThrow();
+      const removed = structuredClone(saved) as ReturnType<typeof validateDatabase>;
+      removed.inventory!.consumptionReversals.pop();
+      await expect(db.query("select public.save_company_data($1,$2)",
+        [JSON.stringify(removed), savedRaw.revision])).rejects.toThrow("Historico de estoque");
+    } finally {
+      await db.exec("reset role");
+      await db.exec("alter table public.company_data disable trigger guard_inventory");
+      await db.exec("alter table public.company_data disable trigger guard_purchases");
+      await db.query("update public.company_data set payload=$1,revision=$2 where company_id=$3",
+        [JSON.stringify(original.payload), original.revision, company]);
+      await db.exec("alter table public.company_data enable trigger guard_inventory");
+      await db.exec("alter table public.company_data enable trigger guard_purchases");
+      await identity(tech);
+    }
   });
   it("confere bytes reais dos anexos e limite total, preservando a data original", async () => {
     const current = await snapshot();

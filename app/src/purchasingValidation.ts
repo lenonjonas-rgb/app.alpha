@@ -4,6 +4,25 @@ export function purchaseTotal(order: Pick<PurchaseOrder, "items">) {
   return order.items.reduce((sum, item) => sum + item.quantity * item.unitCost, 0);
 }
 
+export function purchaseScheduleForReceived(order: PurchaseOrder, receivedAmount: number) {
+  const total = purchaseTotal(order);
+  if (!Number.isSafeInteger(receivedAmount) || receivedAmount <= 0 || receivedAmount > total)
+    throw new Error("Valor recebido da compra inválido.");
+  let remainder = BigInt(receivedAmount), allocated = 0;
+  const shares = order.schedule.map((row, index) => {
+    const amount = Number(BigInt(receivedAmount) * BigInt(row.amount) / BigInt(total));
+    allocated += amount;
+    return { index, amount, dueOn: row.dueOn };
+  });
+  remainder -= BigInt(allocated);
+  for (const share of shares) {
+    if (remainder === 0n) break;
+    share.amount += 1;
+    remainder -= 1n;
+  }
+  return shares.filter((share) => share.amount > 0);
+}
+
 export function validatePurchases(finance: Finance) {
   const { suppliers, orders } = finance.purchasing ?? { suppliers: [], orders: [] };
   const unique = (values: string[]) => new Set(values).size === values.length;
@@ -12,6 +31,21 @@ export function validatePurchases(finance: Finance) {
     throw new Error("Fornecedores, documentos ou pedidos de compra duplicados.");
   for (const order of orders) {
     const total = purchaseTotal(order), count = order.schedule.length;
+    if (order.procurement) {
+      const { quotes, selectedQuoteId, quoteExceptionReason, approval } = order.procurement;
+      const approvalTime = Date.parse(approval.at), orderCreatedAt = Date.parse(order.createdAt);
+      const suppliersById = new Map(suppliers.map((supplier) => [supplier.id, supplier]));
+      const selectedQuote = quotes.find((quote) => quote.id === selectedQuoteId);
+      if (new Set(quotes.map((quote) => quote.supplierId)).size !== quotes.length ||
+        quotes.some((quote) => !suppliersById.has(quote.supplierId) ||
+          quote.quotedOn > order.orderedOn ||
+          !quote.reference.trim() && !quote.terms.trim()) ||
+        (quotes.length < 3 && !quoteExceptionReason?.trim()) ||
+        (selectedQuote?.supplierId !== order.supplierId || selectedQuote.amount !== total) ||
+        !["owner", "admin", "local"].includes(approval.approverRole) ||
+        approvalTime < orderCreatedAt || approvalTime > Date.now() + 5 * 60_000)
+        throw new Error("Cotações, exceção ou aprovação da compra inválidas.");
+    }
     if (total < count || total > 100_000_000 || !suppliers.some((item) => item.id === order.supplierId) ||
       !finance.accounts.some((item) => item.id === order.accountId) ||
       (order.categoryId && !finance.management?.categories.some((item) => item.id === order.categoryId && item.kind === "Pagar")) ||
@@ -23,7 +57,24 @@ export function validatePurchases(finance: Finance) {
       throw new Error("Pedido de compra com total, parcelas, datas ou referências inválidos.");
     const entries = finance.entries.filter((entry) => entry.purchaseId === order.id);
     if (!order.receipt) {
-      if (entries.length) throw new Error("Pedido não recebido não pode gerar contas a pagar.");
+      const cancellation = order.cancellation;
+      if (!cancellation?.receivedAmount) {
+        if (entries.length || cancellation?.payableEntryIds?.length)
+          throw new Error("Pedido cancelado sem recebimento não pode gerar contas a pagar.");
+        continue;
+      }
+      const schedule = purchaseScheduleForReceived(order, cancellation.receivedAmount);
+      const entryIds = cancellation.payableEntryIds ?? [];
+      if (entries.length !== schedule.length || entryIds.length !== schedule.length ||
+        !unique(entryIds) || schedule.some((row, index) => {
+          const entry = finance.entries.find((item) => item.id === entryIds[index]);
+          return !entry || entry.purchaseId !== order.id || entry.kind !== "Pagar" ||
+            entry.party !== order.supplierName || entry.description !== order.description ||
+            entry.accountId !== order.accountId || entry.paymentMethod !== order.paymentMethod ||
+            entry.amount !== row.amount || entry.dueOn !== row.dueOn || entry.issuedOn !== order.orderedOn ||
+            entry.invoiceId || entry.retention || entry.recurrence || entry.installment || entry.clientId;
+        }))
+        throw new Error("Contas a pagar divergem do valor recebido e do rateio aprovado no cancelamento.");
       continue;
     }
     const receipt = order.receipt;

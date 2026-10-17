@@ -432,6 +432,7 @@ export function useDatabase() {
       enabled: cloudEnabled,
       mode: cloudMode,
       email: displayLogin(user?.email ?? ""),
+      userId: user?.id ?? null,
       role,
       busy: cloudBusy,
       syncState: cloudSyncState,

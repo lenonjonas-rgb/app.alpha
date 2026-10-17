@@ -7,12 +7,22 @@ import {
   getOrderDetails,
   orderPending,
   orderValues,
+  orderMargin,
   updateOrderDetails,
   replicateOrder,
   convertQuote,
   demoDatabase,
   emptyDatabase,
+  countStock,
   moveStock,
+  createStockLocation,
+  setDefaultStockLocation,
+  stockAvailable,
+  stockLocationBalance,
+  stockReserved,
+  transferStock,
+  reversibleConsumptionItems,
+  reverseOrderConsumption,
   shiftDay,
   subtotal,
   total,
@@ -310,6 +320,104 @@ describe("estoque", () => {
       "inteira",
     );
   });
+  it("registra contagens e ajusta somente a divergência com justificativa", () => {
+    const data = demoDatabase(), product = data.products[0], locationId = data.inventory!.defaultLocationId;
+    const counted = countStock(data, product.id, locationId, 6, "Duas peças danificadas no estoque.");
+    expect(stockLocationBalance(counted, product.id, locationId)).toBe(6);
+    expect(counted.products[0].stock).toBe(6);
+    expect(counted.inventory!.counts[0]).toMatchObject({
+      productId: product.id, locationId, systemQuantity: 8, countedQuantity: 6,
+      reason: "Duas peças danificadas no estoque.",
+    });
+    expect(counted.movements[0]).toMatchObject({
+      delta: -2, source: { type: "inventory", referenceId: counted.inventory!.counts[0].id },
+      reason: "Inventário físico: sistema 8, contado 6. Justificativa: Duas peças danificadas no estoque.",
+      unitCost: 9500, averageCostBefore: 9500, averageCostAfter: 9500,
+    });
+    expect(validateDatabase(counted)).toEqual(counted);
+  });
+  it("audita contagem sem divergência e não permite reduzir peças reservadas", () => {
+    const data = demoDatabase(), product = data.products[0], locationId = data.inventory!.defaultLocationId;
+    const counted = countStock(data, product.id, locationId, 8, "Contagem cíclica de conferência.");
+    expect(counted.inventory!.counts).toHaveLength(1);
+    expect(counted.movements[0]).toMatchObject({ delta: 0, balance: 8, source: { type: "inventory" } });
+    const order = data.orders[0];
+    order.details = { ...getOrderDetails(order), items: [{
+      id: "reserved-line", kind: "produto", referenceId: product.id, name: product.name,
+      quantity: 4, price: 1000, discount: 0,
+    }] };
+    const reserved = changeOrderStatus(validateDatabase(data), order.id, "Em atendimento");
+    expect(() => countStock(reserved, product.id, locationId, 3, "Conferência com divergência."))
+      .toThrow("abaixo das peças reservadas");
+  });
+  it("rejeita justificativa ausente e histórico de contagem divergente", () => {
+    const data = demoDatabase(), product = data.products[0], locationId = data.inventory!.defaultLocationId;
+    expect(() => countStock(data, product.id, locationId, 9, " ")).toThrow("justificativa");
+    const counted = countStock(data, product.id, locationId, 9, "Contagem física conferida.");
+    expect(() => validateDatabase({
+      ...counted,
+      inventory: {
+        ...counted.inventory!,
+        counts: counted.inventory!.counts.map((item) => ({ ...item, countedQuantity: 10 })),
+      },
+    })).toThrow("Inventário físico divergente");
+  });
+  it("reserva peças ao iniciar e baixa somente ao finalizar a OS", () => {
+    const data = demoDatabase(), order = data.orders[0], product = data.products[0];
+    order.details = { ...getOrderDetails(order), items: [{
+      id: "stock-line", kind: "produto", referenceId: product.id, name: product.name,
+      quantity: 2, price: 1000, discount: 0,
+    }] };
+    const start = changeOrderStatus(validateDatabase(data), order.id, "Em atendimento");
+    const locationId = start.inventory!.defaultLocationId;
+    expect(stockLocationBalance(start, product.id, locationId)).toBe(8);
+    expect(stockReserved(start, product.id, locationId)).toBe(2);
+    expect(stockAvailable(start, product.id, locationId)).toBe(6);
+    const finished = changeOrderStatus(start, order.id, "Finalizada");
+    expect(stockLocationBalance(finished, product.id, locationId)).toBe(6);
+    expect(stockReserved(finished, product.id, locationId)).toBe(0);
+    expect(finished.inventory!.reservations[0].events.at(-1)?.status).toBe("Consumida");
+  });
+  it("libera reserva ao retornar a Aberta e impede alterar peças reservadas", () => {
+    const data = demoDatabase(), order = data.orders[0], product = data.products[0];
+    order.details = { ...getOrderDetails(order), items: [{
+      id: "stock-line", kind: "produto", referenceId: product.id, name: product.name,
+      quantity: 2, price: 1000, discount: 0,
+    }] };
+    const started = changeOrderStatus(validateDatabase(data), order.id, "Em atendimento");
+    expect(() => updateOrderDetails(started, order.id,
+      (details) => ({ ...details, items: details.items.map((item) => ({ ...item, quantity: 3 })) }),
+      "Editar peças")).toThrow("não podem ser alteradas");
+    const reopened = changeOrderStatus(started, order.id, "Aberta");
+    const locationId = reopened.inventory!.defaultLocationId;
+    expect(stockReserved(reopened, product.id, locationId)).toBe(0);
+    expect(reopened.inventory!.reservations[0].events.at(-1)?.status).toBe("Liberada");
+    expect(stockLocationBalance(reopened, product.id, locationId)).toBe(8);
+  });
+  it("impede iniciar com quantidade fracionária ou estoque disponível insuficiente", () => {
+    const data = demoDatabase(), order = data.orders[0], product = data.products[0];
+    order.details = { ...getOrderDetails(order), items: [{
+      id: "stock-line", kind: "produto", referenceId: product.id, name: product.name,
+      quantity: 1.5, price: 1000, discount: 0,
+    }] };
+    expect(() => changeOrderStatus(validateDatabase(data), order.id, "Em atendimento")).toThrow("inteiras");
+    order.details = { ...getOrderDetails(order), items: [{
+      id: "stock-line", kind: "produto", referenceId: product.id, name: product.name,
+      quantity: 9, price: 1000, discount: 0,
+    }] };
+    expect(() => changeOrderStatus(validateDatabase(data), order.id, "Em atendimento")).toThrow("insuficiente");
+  });
+  it("transfere entre depósitos e mantém padrão sem ajustar fisicamente os produtos", () => {
+    const data = demoDatabase(), product = data.products[0], source = data.inventory!.defaultLocationId;
+    const withLocation = createStockLocation(data, "Filial");
+    const target = withLocation.inventory!.locations.find((item) => item.name === "Filial")!.id;
+    const moved = transferStock(withLocation, product.id, source, target, 3, "Abastecimento da filial");
+    expect(stockLocationBalance(moved, product.id, source)).toBe(5);
+    expect(stockLocationBalance(moved, product.id, target)).toBe(3);
+    expect(moved.products.find((item) => item.id === product.id)?.stock).toBe(8);
+    expect(setDefaultStockLocation(moved, target).inventory!.defaultLocationId).toBe(target);
+    expect(() => transferStock(moved, product.id, source, target, 6, "Excede saldo")).toThrow("Saldo disponível");
+  });
 });
 describe("orcamentos e OS", () => {
   it("calcula total em centavos com desconto", () => {
@@ -337,5 +445,46 @@ describe("orcamentos e OS", () => {
     const result = changeOrderStatus(data, data.orders[0].id, "Finalizada");
     expect(result.orders[0].status).toBe("Finalizada");
     expect(result.orders[0].history[0].description).toContain("Finalizada");
+  });
+  it("estorna parcialmente consumo de OS finalizada com auditoria, limite e margem líquida", () => {
+    const data = demoDatabase(), order = data.orders[0], product = data.products[0];
+    order.details = { ...getOrderDetails(order), items: [{
+      id: "consumed-line", kind: "produto", referenceId: product.id, name: product.name,
+      quantity: 2, price: 15000, discount: 0,
+    }] };
+    const finalized = changeOrderStatus(validateDatabase(data), order.id, "Finalizada");
+    const available = reversibleConsumptionItems(finalized, order.id);
+    expect(available).toHaveLength(1);
+    expect(available[0]).toMatchObject({ productId: product.id, consumedQuantity: 2, remainingQuantity: 2 });
+    expect(() => reverseOrderConsumption(finalized, order.id, { [available[0].id]: 1 }, "Devolução", false))
+      .toThrow("Confirme");
+    const partial = reverseOrderConsumption(finalized, order.id, { [available[0].id]: 1 },
+      "Peça não utilizada na OS.", true);
+    expect(partial.orders.find((item) => item.id === order.id)?.status).toBe("Finalizada");
+    expect(partial.products.find((item) => item.id === product.id)?.stock).toBe(product.stock - 1);
+    expect(partial.inventory!.consumptionReversals).toHaveLength(1);
+    expect(partial.movements[0]).toMatchObject({
+      delta: 1, reason: "Estorno de consumo da OS OS-0001: Peça não utilizada na OS.",
+      source: { type: "consumptionReversal", referenceId: partial.inventory!.consumptionReversals[0].id },
+      unitCost: product.cost, averageCostBefore: product.cost, averageCostAfter: product.cost,
+    });
+    expect(orderMargin(partial, partial.orders.find((item) => item.id === order.id)!)).toMatchObject({
+      cost: product.cost, margin: 30000 - product.cost,
+    });
+    expect(reversibleConsumptionItems(partial, order.id)[0].remainingQuantity).toBe(1);
+    expect(() => reverseOrderConsumption(partial, order.id,
+      { [available[0].id]: 2 }, "Quantidade excedente.", true)).toThrow("superior");
+    const complete = reverseOrderConsumption(partial, order.id,
+      { [available[0].id]: 1 }, "Segunda peça não utilizada.", true);
+    expect(reversibleConsumptionItems(complete, order.id)).toEqual([]);
+    expect(complete.products.find((item) => item.id === product.id)?.stock).toBe(product.stock);
+    expect(orderMargin(complete, complete.orders.find((item) => item.id === order.id)!))
+      .toMatchObject({ cost: 0, margin: 30000 });
+    expect(validateDatabase(JSON.parse(JSON.stringify(complete)))).toEqual(complete);
+    const altered = structuredClone(complete);
+    altered.inventory!.consumptionReversals[0].items[0].quantity = 2;
+    expect(() => validateDatabase(altered)).toThrow("Reposição de peça");
+    expect(() => reverseOrderConsumption(finalized, "unknown", { [available[0].id]: 1 }, "Motivo válido", true))
+      .toThrow("OS finalizada");
   });
 });
