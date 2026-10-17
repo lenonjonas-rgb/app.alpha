@@ -318,6 +318,7 @@ No editor do dashboard, publique `handler.ts` e `index.ts` da pasta `supabase/fu
 - Fotos de ate 15 MB sao reduzidas a JPEG para armazenar no maximo 500 KB. PDF/TXT seguem o limite de 500 KB; o limite total continua sendo 5 MB por empresa.
 - Fotos aparecem no relatorio. No Android, o botao Compartilhar abre o seletor do sistema com uma copia do anexo no cache privado do app; no navegador, o link baixa o arquivo. Nao existe envio automatico por esse botao.
 - Controle de concorrencia por revisao da empresa: um conflito exige sincronizacao explicita, sem sobrescrever o trabalho de outro usuario.
+- OS com cobranca de contrato sincronizam usando o snapshot e o custo registrados na propria OS. O app valida a correspondencia desses valores sem exigir o cadastro completo dos contratos, que nao e enviado ao tecnico (nem seus anexos assinados). O painel continua validando cliente, vigencia, equipamentos e valor contra o contrato completo. Esta correcao requer publicar o frontend, sem nova migration.
 - A assinatura e armazenada na OS; envio de relatorio/link por e-mail ou WhatsApp ainda nao esta implementado.
 
 ### Compilar e instalar

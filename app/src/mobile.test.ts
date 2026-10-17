@@ -19,6 +19,30 @@ const archivedOrder: Order = {
 };
 
 describe("app técnico", () => {
+  it("aceita o snapshot de cobrança da OS sem receber o cadastro privado dos contratos", () => {
+    const payload = demoDatabase();
+    const details = getOrderDetails(payload.orders[0]);
+    payload.orders[0].details = {
+      ...details,
+      maintenanceContract: { id: "private-contract", monthlyAmount: 25000 },
+      costs: [...details.costs, { id: "maintenance-contract:private-contract", name: "Contrato", value: 25000 }],
+    };
+    const snapshot = { revision: 1, name: "Tecnico", role: "technician", payload };
+    const parsed = mobileSnapshotSchema.parse(snapshot);
+    expect(parsed.payload.maintenanceContracts).toEqual([]);
+    expect(getOrderDetails(parsed.payload.orders[0]).maintenanceContract?.monthlyAmount).toBe(25000);
+    expect(() => validateDatabase(payload)).toThrow("OS com cobrança de contrato inválida");
+    const missing = structuredClone(snapshot);
+    missing.payload.orders[0].details!.costs = [];
+    expect(() => mobileSnapshotSchema.parse(missing)).toThrow("OS com cobrança de contrato inválida");
+    const mismatched = structuredClone(snapshot);
+    mismatched.payload.orders[0].details!.costs.at(-1)!.value = 1;
+    expect(() => mobileSnapshotSchema.parse(mismatched)).toThrow("OS com cobrança de contrato inválida");
+    const duplicate = structuredClone(snapshot);
+    duplicate.payload.orders[0].details!.costs.push({ id: "maintenance-contract:private-contract", name: "Duplicado", value: 25000 });
+    expect(() => mobileSnapshotSchema.parse(duplicate)).toThrow();
+  });
+
   it("oculta finalizadas no início sem remover o histórico da agenda", () => {
     const orders = [...agendaOrders, { ...archivedOrder, date: today }];
     expect(technicianAgendaOrders(orders, "home", today, today).map((order) => order.id)).toEqual([

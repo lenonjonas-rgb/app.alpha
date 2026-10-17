@@ -16,6 +16,7 @@ import { generateRecurringEntries, previewRecurringEntries, saveFinanceRecurrenc
 import { cancelPurchaseOrder, previewPurchaseSchedule, purchasing, receivePurchaseOrder, savePurchaseOrder, saveSupplier } from "./purchasing";
 import { purchaseTotal } from "./purchasingValidation";
 import type { PurchaseOrder, Supplier } from "./financeSchema";
+import { addMaintenanceContractCharge, saveMaintenanceContract } from "./maintenanceContracts";
 
 const owner = "00000000-0000-4000-8000-000000000001";
 const tech = "00000000-0000-4000-8000-000000000002";
@@ -219,6 +220,54 @@ describe("aprovação e cotações de compras no banco", () => {
 });
 
 describe("RPC Android e isolamento de dados", () => {
+  it("sincroniza e atualiza OS de contrato sem enviar o contrato ou seu anexo ao técnico", async () => {
+    await identity(owner);
+    const original = (await db.query<{ payload: unknown; revision: number }>(
+      "select payload,revision from public.company_data where company_id=$1", [company])).rows[0];
+    await db.exec("begin");
+    try {
+      const data = validateDatabase(original.payload), order = data.orders[0];
+      const linked = saveMaintenanceContract(data, {
+        id: "mobile-private-contract", name: "Contrato privado",
+        clientId: order.clientId, equipmentIds: [order.equipmentId], equipmentTypeIds: [],
+        coverage: "Clausulas privadas", startsOn: order.date, endsOn: order.date,
+        monthlyAmount: 25000, visitInterval: { kind: "Mensal" },
+        createdAt: "2026-10-01T12:00:00Z", events: [],
+        signedAttachment: { id: "signed-contract", name: "contrato.pdf", mime: "application/pdf",
+          size: 3, data: "data:application/pdf;base64,YWJj", at: "2026-10-01T12:00:00Z" },
+      }, true);
+      order.details = addMaintenanceContractCharge(getOrderDetails(order), linked.maintenanceContracts[0]);
+      linked.orders[0] = order;
+      await db.query("select public.save_company_data($1,$2)",
+        [JSON.stringify(validateDatabase(linked)), original.revision]);
+      await identity(tech);
+      const result = await db.query<{ data: unknown }>("select public.mobile_company_data() as data");
+      expect(JSON.stringify(result.rows[0].data)).not.toContain("Clausulas privadas");
+      expect(JSON.stringify(result.rows[0].data)).not.toContain("contrato.pdf");
+      const mobile = mobileSnapshotSchema.parse(result.rows[0].data);
+      expect(mobile.payload.maintenanceContracts).toEqual([]);
+      const assigned = mobile.payload.orders.find((item) => item.id === order.id)!;
+      expect(getOrderDetails(assigned).maintenanceContract?.id).toBe("mobile-private-contract");
+      const details = getOrderDetails(assigned);
+      await mutate("report", {
+        report: "Atendimento do contrato atualizado", distanceKm: details.distanceKm,
+        attachments: details.attachments, checklists: details.checklists,
+        signature: details.signature, pending: details.pending,
+      }, mobile.revision, assigned.id);
+      const updated = await snapshot();
+      expect(getOrderDetails(updated.payload.orders.find((item) => item.id === order.id)!).report)
+        .toBe("Atendimento do contrato atualizado");
+      await identity(owner);
+      const saved = validateDatabase((await db.query<{ payload: unknown }>(
+        "select payload from public.company_data where company_id=$1", [company])).rows[0].payload);
+      expect(saved.maintenanceContracts[0].signedAttachment?.name).toBe("contrato.pdf");
+      expect(getOrderDetails(saved.orders[0]).maintenanceContract?.monthlyAmount).toBe(25000);
+    } finally {
+      await db.exec("rollback");
+      await identity(owner);
+    }
+  });
+
   it("limita geocodificação a 30 por minuto por empresa, permite renovar a janela e bloqueia acesso direto", async () => {
     await identity(tech);
     await expect(db.query("select public.reserve_address_lookup()")).rejects.toThrow("administração");

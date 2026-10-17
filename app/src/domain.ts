@@ -1068,6 +1068,14 @@ export function emptyDatabase(
 }
 
 export function validateDatabase(input: unknown): Database {
+  return validateDatabaseDocument(input, "company");
+}
+
+export function validateMobileDatabase(input: unknown): Database {
+  return validateDatabaseDocument(input, "mobile");
+}
+
+function validateDatabaseDocument(input: unknown, scope: "company" | "mobile"): Database {
   let data = databaseSchema.parse(input);
   if (!data.inventory) data = migrateInventory(data);
   validateFinance(data.finance, new Set(data.clients.map((item) => item.id)), new Map(data.orders.map((item) => [item.id, item.clientId])));
@@ -1126,9 +1134,12 @@ export function validateDatabase(input: unknown): Database {
     const contract = data.maintenanceContracts.find((item) => item.id === linked.id);
     const details = getOrderDetails(order);
     const charges = details.costs.filter((item) => item.id === `maintenance-contract:${linked.id}`);
-    if (!contract || contract.clientId !== order.clientId || order.date < contract.startsOn || order.date > contract.endsOn ||
-      ![order.equipmentId, ...details.equipmentIds].some((equipmentId) => contract.equipmentIds.includes(equipmentId)) ||
-      linked.monthlyAmount !== contract.monthlyAmount || charges.length !== 1 || charges[0].value !== linked.monthlyAmount)
+    // Mobile projections omit the contract registry; the OS retains its billing snapshot.
+    if (charges.length !== 1 || charges[0].value !== linked.monthlyAmount ||
+      (scope === "company" && (!contract || contract.clientId !== order.clientId ||
+        order.date < contract.startsOn || order.date > contract.endsOn ||
+        ![order.equipmentId, ...details.equipmentIds].some((equipmentId) => contract.equipmentIds.includes(equipmentId)) ||
+        linked.monthlyAmount !== contract.monthlyAmount)))
       throw new Error("OS com cobrança de contrato inválida.");
   });
   if (

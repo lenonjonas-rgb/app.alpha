@@ -4,7 +4,7 @@ import { AppLauncher } from "@capacitor/app-launcher";
 import { Directory, Filesystem } from "@capacitor/filesystem";
 import { Share } from "@capacitor/share";
 import { z } from "zod";
-import { attachmentSchema, databaseSchema, getOrderDetails, makeId, validateDatabase } from "./domain";
+import { attachmentSchema, databaseSchema, getOrderDetails, makeId, validateMobileDatabase } from "./domain";
 import type { Attachment, Order } from "./domain";
 
 export const mobileSnapshotSchema = z.object({
@@ -12,7 +12,7 @@ export const mobileSnapshotSchema = z.object({
   name: z.string(),
   role: z.enum(["owner", "admin", "technician"]),
   payload: databaseSchema,
-}).transform((value) => ({ ...value, payload: validateDatabase(value.payload) }));
+}).transform((value) => ({ ...value, payload: validateMobileDatabase(value.payload) }));
 export type MobileSnapshot = z.infer<typeof mobileSnapshotSchema>;
 
 export type TechnicianAgendaFilter = "home" | "day" | "overdue" | "running";
