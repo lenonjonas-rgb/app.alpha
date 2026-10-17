@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { Empty, Modal } from "./components";
+import { DropdownMenu } from "./DropdownMenu";
 import { availablePurchaseReturnItems, createStockLocation, currency, displayDate, localDay, makeId, setDefaultStockLocation, stockAvailable, stockLocationBalance, stockReserved, transferStock } from "./domain";
 import type { Database } from "./domain";
 import { purchaseOrderSchema, supplierSchema } from "./financeSchema";
@@ -109,9 +110,13 @@ export function PurchasingPanel({ data, commit, onSuccess, approvalActor }: {
             })}</>}
         </details></td><td><div className="finance-actions">
           {!order.receipt && !order.cancellation && <button className="button secondary" onClick={() => setEditor({ mode: "receive", item: order })}>Conferir recebimento</button>}
-          {(order.receipt || purchaseReceiptsFor(data, order).length > 0) &&
-            <button className="button secondary" onClick={() => setEditor({ mode: "return", item: order })}>Devolver ao fornecedor</button>}
-          {!order.receipt && !order.cancellation && <button className="text-button" onClick={() => setEditor({ mode: "cancel", item: order })}>Cancelar pedido</button>}
+          {((order.receipt || purchaseReceiptsFor(data, order).length > 0) || (!order.receipt && !order.cancellation)) &&
+            <DropdownMenu accessibleLabel={`Mais ações: pedido ${order.id}`} actions={[
+              ...((order.receipt || purchaseReceiptsFor(data, order).length > 0) ?
+                [{ label: "Devolver ao fornecedor", onSelect: () => setEditor({ mode: "return", item: order }) }] : []),
+              ...(!order.receipt && !order.cancellation ?
+                [{ label: "Cancelar pedido", danger: true, onSelect: () => setEditor({ mode: "cancel", item: order }) }] : []),
+            ]} />}
         </div></td></tr>)}
     </tbody></table>{!orders.length && <Empty title="Nenhum pedido encontrado" />}</div>
     <h3>Fornecedores</h3>

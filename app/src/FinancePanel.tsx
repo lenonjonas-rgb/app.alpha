@@ -2,6 +2,7 @@ import { useState } from "react";
 import type { FormEvent } from "react";
 import { Plus } from "lucide-react";
 import { Empty, Modal } from "./components";
+import { DropdownMenu } from "./DropdownMenu";
 import { currency, displayDate, localDay, makeId } from "./domain";
 import type { Database } from "./domain";
 import { billOrders, cancelFinanceEntry, entryBalance, entryStatus, pendingBillingOrders, pendingBillingValues, previewBilling, reverseSettlement, saveBankAccount, saveFinanceEntry, settleFinanceEntry } from "./finance";
@@ -30,7 +31,12 @@ type Tab = ManagementTab | "Compras e fornecedores" | "Recorrências" | "Transfe
 type Editor = { kind: "bank"; account?: BankAccount } | { kind: "entry"; direction: FinanceEntry["kind"] } |
   { kind: "bill"; ids: string[] } | { kind: "settlement"; entry: FinanceEntry } | { kind: "classification"; entry: FinanceEntry };
 type Commit = (update: Database | ((current: Database) => Database)) => void;
-const tabs: Tab[] = ["Painel gerencial", "Fluxo de caixa", "A faturar", "Contas a receber", "Contas a pagar", "Compras e fornecedores", "Recorrências", "Bancos", "Transferências", "Conciliação bancária", "Faturamentos", "Relatórios", "Cadastros gerenciais", "Fiscal", "Remessas"];
+const tabGroups: { label: string; tabs: Tab[] }[] = [
+  { label: "Visão geral", tabs: ["Painel gerencial", "Fluxo de caixa", "Relatórios"] },
+  { label: "Contas e compras", tabs: ["A faturar", "Contas a receber", "Contas a pagar", "Compras e fornecedores", "Recorrências", "Faturamentos"] },
+  { label: "Bancos", tabs: ["Bancos", "Transferências", "Conciliação bancária"] },
+  { label: "Fiscal e cadastros", tabs: ["Cadastros gerenciais", "Fiscal", "Remessas"] },
+];
 
 export function FinancePanel({ data, commit, onSuccess, onOpenOrder, initialTab, approvalActor }: {
   data: Database; commit: Commit; onSuccess: (message: string) => void; onOpenOrder: (id: string) => void; initialTab?: Tab;
@@ -102,9 +108,11 @@ export function FinancePanel({ data, commit, onSuccess, onOpenOrder, initialTab,
       <div><small>A receber em aberto</small><strong>{currency(outstanding("Receber"))}</strong></div>
       <div><small>A pagar em aberto</small><strong>{currency(outstanding("Pagar"))}</strong></div>
     </div>
-    <nav className="finance-tabs" aria-label="Seções do financeiro">{tabs.map((item) =>
-      <button key={item} className={`button ${tab === item ? "primary" : "secondary"}`} aria-current={tab === item ? "page" : undefined}
-        onClick={() => { setTab(item); setError(""); }}>{item}</button>)}</nav>
+    <nav className="finance-tabs" aria-label="Seções do financeiro">{tabGroups.map((group) =>
+      <DropdownMenu key={group.label} label={group.tabs.includes(tab) ? tab : group.label}
+        accessibleLabel={`Seções: ${group.label}`} active={group.tabs.includes(tab)}
+        actions={group.tabs.map((item) => ({ label: item, current: tab === item,
+          onSelect: () => { setTab(item); setError(""); } }))} />)}</nav>
     <p>O faturamento prepara contas internas; autorização fiscal é consultada na aba Fiscal. Boleto/Pix não são registrados automaticamente no banco.</p>
     <p>Vínculos fiscais/bancários são consultados no backend, não fazem parte do backup JSON. Atualize após emitir, consultar ou gerar remessa. Homologação não é emissão válida em produção.</p>
     <button className="button secondary" disabled={!fiscalConfigured || fiscalBusy} onClick={() => void refreshLinks()}>Atualizar vínculos fiscais e remessas</button>
@@ -165,10 +173,13 @@ export function FinancePanel({ data, commit, onSuccess, onOpenOrder, initialTab,
           <td>{data.finance.accounts.find((account) => account.id === entry.accountId)?.name}<br />{entry.paymentMethod}</td>
           <td>{displayDate(entry.dueOn)}</td><td>{currency(entry.amount)}{entry.retention && <small><br />Retenções: {currency(entry.retention.withheld)}<br />Líquido: {currency(entry.retention.net)}<br />IRRF {currency(entry.retention.irrf)} · INSS {currency(entry.retention.inss)} · CSLL {currency(entry.retention.csll)}</small>}</td><td>{currency(entryBalance(entry))}</td><td>{entryStatus(entry, today)}<FinanceFiscalStatus link={linked(entry.id)} /></td>
           <td><div className="finance-actions">
-            <button className="text-button" onClick={() => open({ kind: "classification", entry })}>Classificar</button>
             {!entry.canceled && entryBalance(entry) > 0 && <button className="button secondary" onClick={() => open({ kind: "settlement", entry })}>Dar baixa</button>}
-            {!entry.canceled && <button className="text-button" disabled={fiscalBusy || linked(entry.id)?.cancellationAllowed === false}
-              onClick={() => void cancel(entry)}>Cancelar</button>}
+            <DropdownMenu accessibleLabel={`Mais ações: ${entry.description}`} actions={[
+              { label: "Classificar", onSelect: () => open({ kind: "classification", entry }) },
+              ...(!entry.canceled ? [{ label: "Cancelar conta", danger: true,
+                disabled: fiscalBusy || linked(entry.id)?.cancellationAllowed === false,
+                onSelect: () => void cancel(entry) }] : []),
+            ]} />
           </div>
             {!!entry.purchaseReturnOffsets?.length && <details><summary>Abatimentos por devolução</summary>
               {entry.purchaseReturnOffsets.map((offset) => <p key={offset.returnId}>Devolução {offset.returnId} · {currency(offset.amount)}</p>)}

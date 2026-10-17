@@ -269,6 +269,11 @@ O logotipo enviado no chat nao estava disponivel como arquivo no projeto. A inte
 
 Envios reais, check-in automatico e confirmacao de recebimento no aplicativo nao estao conectados. O GPS pontual esta implementado no app Android, conforme a secao abaixo. A aba Envios registra somente preparacao/exportacao local, sem simular envio ao cliente. Links de OS nao sao links publicos. A assinatura desenhada nao tem autenticacao de identidade, codigo de email ou validade juridica certificada.
 
+## Navegacao do painel web
+
+- O menu lateral e organizado em Operacao, Cadastros, Financeiro e Administracao. Grupos com varias paginas sao expansiveis; grupos com uma unica pagina levam diretamente a ela, sem repetir a opcao. Apenas um grupo fica aberto; navegar por link direto abre o grupo da pagina atual. No celular, selecionar uma pagina continua fechando o menu lateral.
+- Secoes do Financeiro, Relatorios e detalhes da OS ficam em menus suspensos por assunto; Configuracoes usa um seletor de categoria. Acoes principais (criar, editar, salvar, receber compras e dar baixa) permanecem visiveis; acoes secundarias de OS, clientes, produtos, contratos, compras e contas ficam em **Mais acoes**. Menus fecham ao clicar fora ou pressionar Escape, aceitam setas/Home/End e mantem acoes indisponiveis desabilitadas. O aplicativo do tecnico nao foi alterado por essa reorganizacao.
+
 ## App Android dos tecnicos
 
 Aplicativo hibrido Capacitor 8, Android 7.0 ou superior, com interface dedicada em `https://app-alpha-theta.vercel.app/?tecnico=1`. O APK carrega a interface desse endereco HTTPS, recebendo as atualizacoes publicadas na Vercel. Os assets locais incluem uma tela de falha de conexao. **Internet e necessaria; nao ha fila offline e nenhum atendimento e registrado como sucesso antes de a RPC confirmar a gravacao.**

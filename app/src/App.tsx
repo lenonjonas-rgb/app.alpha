@@ -57,6 +57,8 @@ import {
 } from "./domain";
 import { downloadFile, errorMessage, useDatabase } from "./useDatabase";
 import { Badge, Empty, Modal } from "./components";
+import { DropdownMenu } from "./DropdownMenu";
+import { GroupedNavigation } from "./GroupedNavigation";
 import { EditorModal, InventoryCountModal, MovementModal } from "./Forms";
 import type { Editor, FormKind } from "./Forms";
 import { CloudAccess } from "./CloudAccess";
@@ -104,27 +106,27 @@ const navigation: {
   icon: LucideIcon;
   group: string;
 }[] = [
-  { id: "agenda", label: "Agenda", icon: CalendarDays, group: "OPERAÇÃO" },
+  { id: "agenda", label: "Agenda", icon: CalendarDays, group: "Operação" },
   {
     id: "orders",
     label: "Ordens de serviço",
     icon: FileText,
-    group: "OPERAÇÃO",
+    group: "Operação",
   },
-  { id: "quotes", label: "Orçamentos", icon: LayoutList, group: "OPERAÇÃO" },
-  { id: "reports", label: "Relatórios", icon: BarChart3, group: "GESTÃO" },
-  { id: "finance", label: "Financeiro", icon: ArrowRightLeft, group: "GESTÃO" },
-  { id: "clients", label: "Clientes", icon: Users, group: "CADASTROS" },
-  { id: "equipment", label: "Equipamentos", icon: Wrench, group: "CADASTROS" },
-  { id: "contracts", label: "Contratos de manutenção", icon: ClipboardCheck, group: "CADASTROS" },
-  { id: "questionnaires", label: "Questionários", icon: FileText, group: "CADASTROS" },
+  { id: "quotes", label: "Orçamentos", icon: LayoutList, group: "Operação" },
+  { id: "contracts", label: "Contratos de manutenção", icon: ClipboardCheck, group: "Operação" },
+  { id: "clients", label: "Clientes", icon: Users, group: "Cadastros" },
+  { id: "equipment", label: "Equipamentos", icon: Wrench, group: "Cadastros" },
+  { id: "questionnaires", label: "Questionários", icon: FileText, group: "Cadastros" },
   {
     id: "stock",
     label: "Estoque e serviços",
     icon: Package,
-    group: "CADASTROS",
+    group: "Cadastros",
   },
-  { id: "settings", label: "Configurações", icon: Settings, group: "SISTEMA" },
+  { id: "finance", label: "Financeiro", icon: ArrowRightLeft, group: "Financeiro" },
+  { id: "reports", label: "Relatórios", icon: BarChart3, group: "Administração" },
+  { id: "settings", label: "Configurações", icon: Settings, group: "Administração" },
 ];
 const editorDraftKey = (scope: string) =>
   `alpha-tec.active-editor.v1.${scope}`;
@@ -724,24 +726,8 @@ export default function App() {
           {database.settings.company}
           <small>Assistência técnica</small>
         </div>
-        <nav aria-label="Navegação principal">
-          {navigation.map((item, index) => (
-            <div key={item.id}>
-              {index === 0 || navigation[index - 1].group !== item.group ? (
-                <span className="nav-group">{item.group}</span>
-              ) : null}
-              <button
-                className={`nav-item ${view === item.id ? "active" : ""}`}
-                aria-current={view === item.id ? "page" : undefined}
-                onClick={() => navigate(item.id)}
-              >
-                <item.icon size={19} strokeWidth={1.7} />
-                <span>{item.label}</span>
-                {item.id === "orders" && <b>{activeOrders.length}</b>}
-              </button>
-            </div>
-          ))}
-        </nav>
+        <GroupedNavigation key={view} items={navigation} value={view}
+          onNavigate={navigate} orderCount={activeOrders.length} />
         <div className="sidebar-bottom">
           <div className="local-status">
             <span />
@@ -1211,7 +1197,10 @@ export default function App() {
                             <Badge value={item.active ? "Ativo" : "Inativo"} />
                           </td>
                           <td>
-                            <button className="text-button" onClick={() => setClientEquipmentId(item.id)}>Vincular equipamento / histórico</button>
+                            <DropdownMenu accessibleLabel={`Mais ações: ${item.name}`} actions={[
+                              { label: "Vincular equipamento / histórico", icon: Wrench,
+                                onSelect: () => setClientEquipmentId(item.id) },
+                            ]} />
                             <button
                               className="icon-button"
                               title="Editar cliente"
@@ -1447,27 +1436,12 @@ export default function App() {
                               </td>
                               <td>
                                 <div className="row-actions">
-                                  <button
-                                    className="icon-button"
-                                    aria-label={`Movimentar ${item.name}`}
-                                    title="Movimentar estoque"
-                                    onClick={() =>
-                                      setEditor({
-                                        kind: "movement",
-                                        id: item.id,
-                                      })
-                                    }
-                                  >
-                                    <ArrowRightLeft size={17} />
-                                  </button>
-                                  <button
-                                    className="icon-button"
-                                    aria-label={`Contagem física de ${item.name}`}
-                                    title="Registrar contagem física"
-                                    onClick={() => setInventoryProductId(item.id)}
-                                  >
-                                    <ClipboardCheck size={17} />
-                                  </button>
+                                  <DropdownMenu accessibleLabel={`Mais ações: ${item.name}`} actions={[
+                                    { label: "Movimentar estoque", icon: ArrowRightLeft,
+                                      onSelect: () => setEditor({ kind: "movement", id: item.id }) },
+                                    { label: "Registrar contagem física", icon: ClipboardCheck,
+                                      onSelect: () => setInventoryProductId(item.id) },
+                                  ]} />
                                   <button
                                     className="icon-button"
                                     aria-label={`Editar ${item.code}`}
@@ -2134,14 +2108,10 @@ function OrderDetail({
       </div>
       <OrderPrintable order={order} data={data} details={details} />
       <footer className="modal-footer document-controls">
-        <button className="button secondary" onClick={onMore}>
-          <FileText size={17} />
-          Mais informações
-        </button>
-        <button className="button secondary" onClick={() => window.print()}>
-          <Printer size={17} />
-          Imprimir
-        </button>
+        <DropdownMenu actions={[
+          { label: "Mais informações", icon: FileText, onSelect: onMore },
+          { label: "Imprimir", icon: Printer, onSelect: () => window.print() },
+        ]} />
         <button className="button primary" onClick={onEdit}>
           <Pencil size={17} />
           Editar OS
@@ -2254,10 +2224,9 @@ function QuoteDetail({
         )}
       </div>
       <footer className="modal-footer document-controls">
-        <button className="button secondary" onClick={() => window.print()}>
-          <Printer size={17} />
-          Imprimir
-        </button>
+        <DropdownMenu actions={[
+          { label: "Imprimir", icon: Printer, onSelect: () => window.print() },
+        ]} />
         {!quote.orderId && (
           <button className="button secondary" onClick={onEdit}>
             <Pencil size={17} />
@@ -2306,6 +2275,14 @@ function SettingsPanel({
   const [companyLookup, setCompanyLookup] = useState<CompanyRegistration | null>(null);
   const [companyLookupBusy, setCompanyLookupBusy] = useState(false);
   const [companyLookupError, setCompanyLookupError] = useState("");
+  const categories = [
+    ["empresa", "Empresa"],
+    ["acesso", "Usuários e acesso"],
+    ["atendimento", "Atendimento e deslocamento"],
+    ["relatorios", "Relatórios"],
+    ["fiscal", "Fiscal e certificado"],
+    ["dados", "Dados e backup"],
+  ];
   async function importBackup(file?: File) {
     if (!file) return;
     try {
@@ -2328,24 +2305,11 @@ function SettingsPanel({
   return (
     <div className="settings-page">
       <nav className="settings-categories" aria-label="Categorias de configurações">
-        {[
-          ["empresa", "Empresa"],
-          ["acesso", "Usuários e acesso"],
-          ["atendimento", "Atendimento e deslocamento"],
-          ["relatorios", "Relatórios"],
-          ["fiscal", "Fiscal e certificado"],
-          ["dados", "Dados e backup"],
-        ].map(([id, label]) => (
-          <button
-            key={id}
-            type="button"
-            className={`button ${category === id ? "primary" : "secondary"}`}
-            aria-pressed={category === id}
-            onClick={() => setCategory(id)}
-          >
-            {label}
-          </button>
-        ))}
+        <DropdownMenu label={categories.find(([id]) => id === category)![1]}
+          accessibleLabel="Selecionar categoria de configurações"
+          actions={categories.map(([id, label]) => ({
+            label, current: category === id, onSelect: () => setCategory(id),
+          }))} />
       </nav>
       {category === "acesso" && <section className="settings-section">
         <div className="section-heading"><h2>Usuários e acesso</h2></div>

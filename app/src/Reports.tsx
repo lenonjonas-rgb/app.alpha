@@ -28,6 +28,7 @@ import {
 } from "./domain";
 import { downloadFile, errorMessage } from "./useDatabase";
 import { Empty, Modal } from "./components";
+import { DropdownMenu } from "./DropdownMenu";
 import {
   csvContent,
   defaultReportFilters,
@@ -60,6 +61,11 @@ const reports = [
 ] as const;
 
 type ReportId = (typeof reports)[number]["id"];
+const reportGroups: { label: string; ids: ReportId[] }[] = [
+  { label: "Operação", ids: ["tasks", "questionnaires", "monitoring", "hours", "equipment"] },
+  { label: "Custos e financeiro", ids: ["finance", "kilometers", "travelCosts", "expenses"] },
+  { label: "Qualidade e arquivos", ids: ["satisfaction", "downloads"] },
+];
 type GeneratedFile = { name: string; at: string; content: string };
 
 function isAttachmentMime(value: string): value is Attachment["mime"] {
@@ -470,20 +476,18 @@ export function ReportsPanel({
 
   return (
     <section className="reports-page">
-      <div className="reports-tabs" role="tablist" aria-label="Relatórios">
-        {reports.map((item) => (
-          <button
-            key={item.id}
-            role="tab"
-            aria-selected={report === item.id}
-            className={report === item.id ? "selected" : ""}
-            onClick={() => selectReport(item.id)}
-          >
-            <item.icon size={16} />
-            {item.label}
-          </button>
-        ))}
-      </div>
+      <nav className="section-menus" aria-label="Relatórios">
+        <button className={`button ${report === "dashboard" ? "primary" : "secondary"}`}
+          aria-current={report === "dashboard" ? "page" : undefined}
+          onClick={() => selectReport("dashboard")}><BarChart3 size={16} />Dashboard</button>
+        {reportGroups.map((group) => <DropdownMenu key={group.label}
+          label={group.ids.includes(report) ? reports.find((item) => item.id === report)!.label : group.label}
+          accessibleLabel={`Relatórios: ${group.label}`} active={group.ids.includes(report)}
+          actions={reports.filter((item) => group.ids.includes(item.id)).map((item) => ({
+            label: item.label, icon: item.icon, current: report === item.id,
+            onSelect: () => selectReport(item.id),
+          }))} />)}
+      </nav>
 
       <section className="report-card">
         <div className="report-card-heading">

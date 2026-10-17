@@ -1,6 +1,7 @@
 import { Paperclip, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { Empty, Modal } from "./components";
+import { DropdownMenu } from "./DropdownMenu";
 import { currency, displayDate, localDay, makeId, shiftDay } from "./domain";
 import type { Attachment, Database, MaintenanceContract, MaintenanceEquipmentType } from "./domain";
 import { changeMaintenanceContractStatus, clientMaintenanceEquipment, maintenanceContractLifecycle, maintenanceContractStatus, plannedMaintenanceVisits, saveMaintenanceContract, saveMaintenanceEquipmentType } from "./maintenanceContracts";
@@ -28,7 +29,9 @@ export function MaintenanceContractsPanel({ data, commit, onSuccess }: {
   });
   return <section className="module-section maintenance-contracts" aria-label="Contratos de manutenção">
     {error && <p className="error-message" role="alert">{error}</p>}
-    <section aria-label="Tipos de equipamento para contratos">
+    <details className="secondary-disclosure">
+      <summary>Gerenciar tipos de equipamento</summary>
+      <section aria-label="Tipos de equipamento para contratos">
       <div className="section-heading"><h2>Tipos de equipamento cobertos</h2>
         <button className="button secondary" onClick={() => { setNewType(!newType); setError(""); }}>Cadastrar tipo</button>
       </div>
@@ -55,6 +58,7 @@ export function MaintenanceContractsPanel({ data, commit, onSuccess }: {
       </span>)}
       {!data.maintenanceEquipmentTypes.length && <p>Nenhum tipo cadastrado.</p>}</div>
     </section>
+    </details>
     <div className="section-heading">
       <p>Cadastre a cobertura, o valor mensal e o intervalo entre visitas. Ocorrências previstas geram alertas internos cinco dias antes; a equipe agenda cada visita manualmente. O valor só entra na OS se o contrato for selecionado nela.</p>
       <button className="button primary" onClick={() => setEditor({ mode: "new" })}>Novo contrato</button>
@@ -87,12 +91,13 @@ export function MaintenanceContractsPanel({ data, commit, onSuccess }: {
             <p>Cadastrado: {item.createdAt}</p>
             {item.events.map((event, index) => <p key={`${event.at}-${index}`}>{event.at} · {event.status} · {event.reason}</p>)}
           </details></td>
-          <td>{lifecycle !== "Cancelado" && <div className="row-actions">
-            <button className="text-button" onClick={() => setEditor({ mode: "status", item, status: lifecycle === "Ativo" ? "Suspenso" : "Ativo" })}>
-              {lifecycle === "Ativo" ? "Suspender" : "Reativar"}
-            </button>
-            <button className="text-button" onClick={() => setEditor({ mode: "status", item, status: "Cancelado" })}>Cancelar</button>
-          </div>}</td>
+          <td>{lifecycle !== "Cancelado" && <DropdownMenu
+            accessibleLabel={`Mais ações: ${item.name}`} actions={[
+              { label: lifecycle === "Ativo" ? "Suspender" : "Reativar",
+                onSelect: () => setEditor({ mode: "status", item, status: lifecycle === "Ativo" ? "Suspenso" : "Ativo" }) },
+              { label: "Cancelar contrato", danger: true,
+                onSelect: () => setEditor({ mode: "status", item, status: "Cancelado" }) },
+            ]} />}</td>
         </tr>;
       })}</tbody>
     </table>{!contracts.length && <Empty title="Nenhum contrato encontrado" />}</div>

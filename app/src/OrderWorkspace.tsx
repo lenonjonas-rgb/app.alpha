@@ -55,6 +55,7 @@ import type {
   OrderDetails,
 } from "./domain";
 import { Badge, Empty, Modal } from "./components";
+import { DropdownMenu } from "./DropdownMenu";
 import { EditorModal } from "./Forms";
 import type { Editor } from "./Forms";
 import { downloadFile, errorMessage } from "./useDatabase";
@@ -121,6 +122,11 @@ function readOrderDraft(key: string) {
   }
 }
 type Tab = (typeof tabs)[number];
+const tabGroups: { label: string; tabs: Tab[] }[] = [
+  { label: "Atendimento", tabs: ["Relato e assinatura", "Questionários", "Pendências"] },
+  { label: "Registros", tabs: ["Anexos e fotos", "Equipamentos", "Controle de horas"] },
+  { label: "Gestão", tabs: ["Envios", "Valores"] },
+];
 const timeText = (milliseconds: number) => {
   const seconds = Math.floor(milliseconds / 1000);
   return `${String(Math.floor(seconds / 3600)).padStart(2, "0")}:${String(Math.floor(seconds / 60) % 60).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}`;
@@ -571,40 +577,15 @@ export function OrderWorkspace({
                 <Pencil size={16} />
                 Editar informações
               </button>
-              <button
-                className="button secondary"
-                onClick={() => setEditor({ kind: "order", id: order.id })}
-              >
-                <Clock3 size={16} />
-                Reagendar / dados básicos
-              </button>
-              <button
-                className="button secondary"
-                onClick={() => setDialog("replicate")}
-              >
-                <Copy size={16} />
-                Replicar
-              </button>
-              <button
-                className="button secondary"
-                onClick={() => void copyLink()}
-              >
-                <Link2 size={16} />
-                Copiar link interno
-              </button>
-              <button
-                className="icon-button"
-                title="Imprimir OS completa"
-                aria-label="Imprimir OS completa"
-                onClick={() => window.print()}
-              >
-                <Printer size={18} />
-              </button>
-              <button
-                className="icon-button"
-                title={details.archived ? "Restaurar OS" : "Arquivar OS"}
-                aria-label={details.archived ? "Restaurar OS" : "Arquivar OS"}
-                onClick={() => {
+              <DropdownMenu actions={[
+                { label: "Reagendar / dados básicos", icon: Clock3,
+                  onSelect: () => setEditor({ kind: "order", id: order.id }) },
+                { label: "Replicar", icon: Copy, onSelect: () => setDialog("replicate") },
+                { label: "Copiar link interno", icon: Link2, onSelect: () => void copyLink() },
+                { label: "Imprimir OS completa", icon: Printer, onSelect: () => window.print() },
+                { label: details.archived ? "Restaurar OS" : "Arquivar OS",
+                  icon: details.archived ? RotateCcw : Archive, danger: !details.archived,
+                  onSelect: () => {
                   if (
                     confirm(
                       details.archived
@@ -625,14 +606,8 @@ export function OrderWorkspace({
                         ),
                       details.archived ? "OS restaurada." : "OS arquivada.",
                     );
-                }}
-              >
-                {details.archived ? (
-                  <RotateCcw size={18} />
-                ) : (
-                  <Archive size={18} />
-                )}
-              </button>
+                  } },
+              ]} />
             </>
           )}
         </div>
@@ -651,19 +626,16 @@ export function OrderWorkspace({
           className="order-tabs document-controls"
           aria-label="Informações da OS"
         >
-          {tabs.map((label) => (
-            <button
-              key={label}
-              className={tab === label ? "active" : ""}
-              aria-current={tab === label ? "page" : undefined}
-              onClick={() => setTab(label)}
-            >
-              {label}
-              {label === "Pendências" && pending.length > 0 && (
-                <b>{pending.length}</b>
-              )}
-            </button>
-          ))}
+          <button className={`button ${tab === "Detalhes" ? "primary" : "secondary"}`}
+            aria-current={tab === "Detalhes" ? "page" : undefined}
+            onClick={() => setTab("Detalhes")}>Detalhes</button>
+          {tabGroups.map((group) => <DropdownMenu key={group.label}
+            label={group.tabs.includes(tab) ? tab : group.label}
+            accessibleLabel={`Informações da OS: ${group.label}`} active={group.tabs.includes(tab)}
+            actions={group.tabs.map((item) => ({
+              label: item === "Pendências" && pending.length > 0 ? `${item} (${pending.length})` : item,
+              current: tab === item, onSelect: () => setTab(item),
+            }))} />)}
         </nav>
         <section className="order-panel" aria-label={tab}>
           {tab === "Detalhes" && (
