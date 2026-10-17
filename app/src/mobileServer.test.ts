@@ -123,8 +123,46 @@ beforeAll(async () => {
   await db.query("update public.company_data set payload=$1 where company_id=$2", [JSON.stringify(payload), company]);
   await db.exec(await readFile(new URL("../../supabase/migrations/20261016070000_purchase_guards.sql", import.meta.url), "utf8"));
   await db.exec(await readFile(new URL("../../supabase/migrations/20261019010000_purchase_approval_guards.sql", import.meta.url), "utf8"));
+  await db.exec(await readFile(new URL("../../supabase/migrations/20261021010000_skip_unchanged_company_guards.sql", import.meta.url), "utf8"));
 }, 30000);
 afterAll(async () => { await db.close(); });
+
+describe("validações por alterações relevantes", () => {
+  it("não revalida estoque/compras ao salvar contrato, mas revalida produtos e OS", async () => {
+    await identity(owner);
+    const original = (await db.query<{ payload: unknown }>(
+      "select payload from public.company_data where company_id=$1", [company])).rows[0].payload;
+    await db.exec("reset role");
+    const data = validateDatabase(original);
+    data.maintenanceContracts.push({
+      id: "sql-contract", name: "Contrato de teste", clientId: data.clients[0].id,
+      equipmentIds: [data.equipment[0].id], equipmentTypeIds: [], coverage: "Manutencao preventiva",
+      startsOn: "2026-10-01", endsOn: "2027-10-01", monthlyAmount: 10000,
+      visitInterval: { kind: "Mensal" }, createdAt: "2026-10-01T12:00:00Z", events: [],
+    });
+    async function triggers(next: unknown) {
+      await db.exec("begin");
+      try {
+        const result = await db.query<{ "QUERY PLAN": string }>(
+          "explain analyze update public.company_data set payload=$1 where company_id=$2",
+          [JSON.stringify(next), company]);
+        return result.rows.map((row) => row["QUERY PLAN"]).join("\n");
+      } finally {
+        await db.exec("rollback");
+      }
+    }
+    const plan = await triggers(data);
+    expect(plan).not.toMatch(/Trigger guard_inventory/);
+    expect(plan).not.toMatch(/Trigger guard_purchase_approvals/);
+    expect(plan).not.toMatch(/Trigger guard_purchase_return_finance/);
+    const products = structuredClone(data);
+    products.products[0].name += " atualizado";
+    expect(await triggers(products)).toMatch(/Trigger guard_inventory/);
+    const orders = structuredClone(data);
+    orders.orders[0].notes += " atualizado";
+    expect(await triggers(orders)).toMatch(/Trigger guard_inventory/);
+  });
+});
 
 describe("aprovação e cotações de compras no banco", () => {
   it("recusa pedidos novos sem aprovação válida, cotações distintas ou justificativa de exceção", async () => {

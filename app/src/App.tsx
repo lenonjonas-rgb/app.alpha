@@ -858,6 +858,16 @@ export default function App() {
               </button>
             )}
           </div>
+          {cloud.error && (
+            <div className="error-message global-error" role="alert">
+              <TriangleAlert size={19} />
+              <span>{cloud.error}</span>
+              <button className="icon-button" title="Fechar aviso de sincronização"
+                aria-label="Fechar aviso de sincronização" onClick={cloud.dismissError}>
+                <X size={18} />
+              </button>
+            </div>
+          )}
           {error && (
             <div className="error-message global-error" role="alert">
               <TriangleAlert size={19} />

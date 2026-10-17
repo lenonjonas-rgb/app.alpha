@@ -42,7 +42,7 @@ function readCompanyCache(userId: string): CompanyCache | null {
       typeof cache.companyId !== "string" ||
       !cache.companyId ||
       !Number.isInteger(cache.revision) ||
-      cache.revision < 1
+      cache.revision < 0
     )
       throw new Error("Cache local da empresa inválido.");
     return { ...cache, data: validateDatabase(cache.data) };
@@ -80,6 +80,8 @@ export function errorMessage(error: unknown): string {
       .join("\n");
   if (error instanceof DOMException && error.name === "QuotaExceededError")
     return "Armazenamento cheio. Exporte um backup antes de continuar.";
+  if (error && typeof error === "object" && "code" in error && error.code === "57014")
+    return "O banco excedeu o tempo limite da operação. Tente novamente.";
   if (error && typeof error === "object" && "message" in error && typeof error.message === "string")
     return error.message;
   return error instanceof Error
@@ -132,10 +134,11 @@ export function useDatabase() {
   const cloudReady = useRef(false);
   const loadSequence = useRef(0);
   const syncBlocked = useRef(false);
+  const saveEpoch = useRef(0);
 
   const loadCompany = useCallback(async (userId: string) => {
     if (!supabase) throw new Error("O cliente Supabase não está configurado.");
-    if (activeUserId.current !== userId) return;
+    if (activeUserId.current !== userId) return false;
     const loadId = ++loadSequence.current;
     cloudReady.current = false;
     companyId.current = null;
@@ -152,7 +155,7 @@ export function useDatabase() {
       .limit(1)
       .maybeSingle();
     if (activeUserId.current !== userId || loadId !== loadSequence.current)
-      return;
+      return false;
     if (membership.error) throw membership.error;
     if (!membership.data) {
       companyId.current = null;
@@ -162,13 +165,13 @@ export function useDatabase() {
       setCloudError("");
       setCloudMode("create-company");
       setState({ data: null, error: "", loading: false });
-      return;
+      return false;
     }
     const memberRole = z.enum(["owner", "admin", "manager", "technician"]).parse(membership.data.role);
     setRole(memberRole);
     if (memberRole === "technician") {
       location.replace(`${location.pathname}?tecnico=1`);
-      return;
+      return false;
     }
     if (memberRole !== "owner" && memberRole !== "admin")
       throw new Error("Nível sem acesso ao painel. Solicite ao Master o ajuste do seu usuário.");
@@ -186,13 +189,28 @@ export function useDatabase() {
         console.warn("Não foi possível remover o cache de outra empresa.", error);
       }
     }
-    const result = await supabase
-      .from("company_data")
-      .select("payload, revision")
-      .eq("company_id", membership.data.company_id)
-      .single();
+    let cachedData: { payload: Database; revision: number } | null = null;
+    if (cache && cache.companyId === membership.data.company_id) {
+      const latest = await supabase
+        .from("company_data")
+        .select("revision")
+        .eq("company_id", membership.data.company_id)
+        .single();
+      if (activeUserId.current !== userId || loadId !== loadSequence.current)
+        return false;
+      if (latest.error) throw latest.error;
+      if (Number(latest.data.revision) === cache.revision)
+        cachedData = { payload: cache.data, revision: cache.revision };
+    }
+    const result = cachedData
+      ? { data: cachedData, error: null }
+      : await supabase
+          .from("company_data")
+          .select("payload, revision")
+          .eq("company_id", membership.data.company_id)
+          .single();
     if (activeUserId.current !== userId || loadId !== loadSequence.current)
-      return;
+      return false;
     if (result.error) throw result.error;
     const data = validateDatabase(result.data.payload);
     companyId.current = membership.data.company_id;
@@ -204,6 +222,7 @@ export function useDatabase() {
     setCloudSyncState("synced");
     setState({ data, error: "", loading: false });
     writeCompanyCache(userId, membership.data.company_id, revision.current, data);
+    return true;
   }, []);
 
   useEffect(() => {
@@ -237,8 +256,14 @@ export function useDatabase() {
 
     let active = true;
     const handleSession = async (nextUser: User | null) => {
+      if (!active) return;
+      if (nextUser && activeUserId.current === nextUser.id) {
+        setUser(nextUser);
+        return;
+      }
       activeUserId.current = nextUser?.id ?? null;
       loadSequence.current += 1;
+      saveEpoch.current += 1;
       syncBlocked.current = false;
       setUser(nextUser);
       setRole(null);
@@ -267,11 +292,18 @@ export function useDatabase() {
       }
     };
 
+    let authEventSequence = 0;
     const { data } = supabase.auth.onAuthStateChange((_event, session) => {
       if (!active) return;
       if (_event === "INITIAL_SESSION" || _event === "SIGNED_IN") {
-        void handleSession(session?.user ?? null);
+        const eventId = ++authEventSequence;
+        // Supabase can emit SIGNED_IN again when the tab regains focus.
+        window.setTimeout(() => {
+          if (eventId === authEventSequence)
+            void handleSession(session?.user ?? null);
+        }, 0);
       } else if (_event === "SIGNED_OUT") {
+        authEventSequence += 1;
         void handleSession(null);
       }
     });
@@ -344,11 +376,12 @@ export function useDatabase() {
 
   const retry = useCallback(async () => {
     if (!user) return;
-    syncBlocked.current = false;
+    saveEpoch.current += 1;
+    syncBlocked.current = true;
     setCloudMode("loading");
     setCloudError("");
     try {
-      await loadCompany(user.id);
+      if (await loadCompany(user.id)) syncBlocked.current = false;
     } catch (error) {
       setCloudError(errorMessage(error));
       setCloudMode("unavailable");
@@ -379,12 +412,13 @@ export function useDatabase() {
     const queuedUserId = activeUserId.current;
     const queuedCompanyId = companyId.current;
     const queuedSaveSequence = ++cloudSaveSequence.current;
+    const queuedEpoch = saveEpoch.current;
     current.current = payload;
     setCloudSyncState("saving");
     setState({ data: payload, error: "", loading: false });
     saveQueue.current = saveQueue.current
       .then(async () => {
-        if (syncBlocked.current) return;
+        if (syncBlocked.current || saveEpoch.current !== queuedEpoch) return;
         if (
           activeUserId.current !== queuedUserId ||
           companyId.current !== queuedCompanyId
@@ -396,6 +430,8 @@ export function useDatabase() {
           p_payload: payload,
           p_expected_revision: revision.current,
         });
+        if (saveEpoch.current !== queuedEpoch || activeUserId.current !== queuedUserId)
+          return;
         if (saved.error) throw saved.error;
         revision.current = Number(saved.data);
         if (queuedUserId && queuedCompanyId)
@@ -404,17 +440,23 @@ export function useDatabase() {
         setCloudSyncState("synced");
       })
       .catch(async (error: unknown) => {
+        if (saveEpoch.current !== queuedEpoch || activeUserId.current !== queuedUserId)
+          return;
+        const recoveryEpoch = ++saveEpoch.current;
         syncBlocked.current = true;
+        cloudReady.current = false;
         setCloudSyncState("error");
-        const saveError = errorMessage(error);
-        setCloudError(`${saveError}\nAs alterações locais foram descartadas.`);
-        setCloudMode("unavailable");
+        const saveError = `Não foi possível confirmar a gravação. ${errorMessage(error)}`;
+        setCloudError(`${saveError}\nRecuperando a última versão salva.`);
         if (user) {
           try {
-            await loadCompany(user.id);
-            setCloudError(`${saveError}\nOs dados foram recarregados do servidor.`);
-            setCloudMode("unavailable");
+            const loaded = await loadCompany(user.id);
+            if (!loaded || saveEpoch.current !== recoveryEpoch) return;
+            syncBlocked.current = false;
+            setCloudError(`${saveError}\nA última versão salva foi recuperada. Confira os dados antes de tentar novamente: alterações que não chegaram ao servidor foram descartadas.`);
           } catch (reloadError) {
+            if (saveEpoch.current !== recoveryEpoch || activeUserId.current !== queuedUserId)
+              return;
             setCloudError(
               `${saveError}\nFalha ao recarregar os dados: ${errorMessage(reloadError)}`,
             );
@@ -448,6 +490,7 @@ export function useDatabase() {
       createCompany,
       signOut,
       retry,
+      dismissError: () => setCloudError(""),
     },
   };
 }
