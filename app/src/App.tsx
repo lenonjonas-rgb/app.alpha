@@ -37,6 +37,7 @@ import type { LucideIcon } from "lucide-react";
 import type { Database, Order, OrderStatus, Quote } from "./domain";
 import {
   changeOrderStatus,
+  changeQuoteStatus,
   countStock,
   convertQuote,
   currency,
@@ -537,18 +538,10 @@ export default function App() {
   }
   function quoteStatus(id: string, next: Quote["status"]) {
     act((current) => {
-      const quote = current.quotes.find((item) => item.id === id)!;
-      if (quote.orderId) throw new Error("Este orçamento já gerou uma OS.");
-      if (next === "Aprovado" && quote.expires < localDay())
-        throw new Error(
-          "Orçamento vencido. Atualize a validade antes de aprovar.",
-        );
-      return {
-        ...current,
-        quotes: current.quotes.map((item) =>
-          item.id === id ? { ...item, status: next } : item,
-        ),
-      };
+      return changeQuoteStatus(current, id, next, {
+        userId: cloud.userId ?? "local",
+        name: cloud.email ?? cloud.userId ?? "Usuário local",
+      });
     }, "Situação do orçamento atualizada.");
   }
   function orderStatus(id: string, next: OrderStatus) {
@@ -1693,9 +1686,11 @@ export default function App() {
                               title={
                                 item.orderId
                                   ? "Orçamento vinculado à OS"
-                                  : "Editar orçamento"
+                                  : item.status === "Aprovado"
+                                    ? "Orçamento aprovado: termos comerciais bloqueados"
+                                    : "Editar orçamento"
                               }
-                              disabled={!!item.orderId}
+                              disabled={!!item.orderId || item.status === "Aprovado"}
                               aria-label={`Editar ${item.code}`}
                               onClick={() => openEditor("quote", item.id)}
                             >
@@ -2201,6 +2196,17 @@ function QuoteDetail({
           </strong>
         </div>
         <EquipmentSelectionSummary value={quote.equipmentModels} />
+        {quote.approval && (
+          <p className="approval-record" role="note">
+            Aprovado por {quote.approval.approverName} em{" "}
+            {new Date(quote.approval.at).toLocaleString("pt-BR")}
+          </p>
+        )}
+        {quote.status === "Aprovado" && !quote.approval && (
+          <p className="approval-record" role="note">
+            Orçamento aprovado antes do registro auditável. Os termos permanecem bloqueados.
+          </p>
+        )}
         <h3>Condições e observações</h3>
         <p className="preserve-lines">{quote.notes || "Não informadas."}</p>
         {!quote.orderId && (
@@ -2209,6 +2215,7 @@ function QuoteDetail({
               Situação
               <select
                 value={quote.status}
+                disabled={quote.status === "Aprovado"}
                 onChange={(event) =>
                   onStatus(event.target.value as Quote["status"])
                 }
@@ -2227,7 +2234,7 @@ function QuoteDetail({
         <DropdownMenu actions={[
           { label: "Imprimir", icon: Printer, onSelect: () => window.print() },
         ]} />
-        {!quote.orderId && (
+        {!quote.orderId && quote.status !== "Aprovado" && (
           <button className="button secondary" onClick={onEdit}>
             <Pencil size={17} />
             Editar

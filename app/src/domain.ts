@@ -251,6 +251,16 @@ const orderSchema = z.object({
   history: z.array(eventSchema),
   details: orderDetailsSchema.optional(),
 });
+const quoteApprovalSnapshotSchema = z.object({
+  code: text,
+  clientId: id,
+  date: day,
+  expires: day,
+  items: z.array(lineSchema).min(1),
+  discount: money,
+  notes: z.string(),
+  equipmentModels: z.array(equipmentSelectionSchema),
+});
 const quoteSchema = z
   .object({
     id,
@@ -264,7 +274,32 @@ const quoteSchema = z
     notes: z.string(),
     orderId: z.string(),
     equipmentModels: z.array(equipmentSelectionSchema).default([]),
+    approval: z
+      .object({
+        at: z.iso.datetime(),
+        approverUserId: z.string().min(1).max(200),
+        approverName: text,
+        snapshot: quoteApprovalSnapshotSchema,
+      })
+      .optional(),
   })
+  .refine(
+    (quote) =>
+      !quote.approval ||
+      (quote.status === "Aprovado" &&
+        JSON.stringify(quote.approval.snapshot) ===
+          JSON.stringify({
+              code: quote.code,
+              clientId: quote.clientId,
+            date: quote.date,
+            expires: quote.expires,
+            items: quote.items,
+            discount: quote.discount,
+            notes: quote.notes,
+            equipmentModels: quote.equipmentModels,
+          })),
+    "Os termos do orçamento aprovado não correspondem ao registro de aprovação.",
+  )
   .refine(
     (value) => value.expires >= value.date,
     "Validade anterior a emissao.",
@@ -434,6 +469,7 @@ export type ConsumptionReversal = z.infer<typeof consumptionReversalSchema>;
 export type InventoryCount = z.infer<typeof inventoryCountSchema>;
 export type StockReservation = z.infer<typeof stockReservationSchema>;
 export type Quote = z.infer<typeof quoteSchema>;
+export type QuoteApprovalSnapshot = z.infer<typeof quoteApprovalSnapshotSchema>;
 export type Expense = z.infer<typeof expenseSchema>;
 export type Line = z.infer<typeof lineSchema>;
 export type OrderStatus = Order["status"];
@@ -1022,6 +1058,54 @@ export const subtotal = (items: Line[]) =>
   items.reduce((sum, item) => sum + Math.round(item.quantity * item.price), 0);
 export const total = (quote: Pick<Quote, "items" | "discount">) =>
   subtotal(quote.items) - quote.discount;
+
+export function quoteApprovalSnapshot(quote: Quote): QuoteApprovalSnapshot {
+  return quoteApprovalSnapshotSchema.parse({
+    code: quote.code,
+    clientId: quote.clientId,
+    date: quote.date,
+    expires: quote.expires,
+    items: quote.items,
+    discount: quote.discount,
+    notes: quote.notes,
+    equipmentModels: quote.equipmentModels,
+  });
+}
+
+export function changeQuoteStatus(
+  data: Database,
+  quoteId: string,
+  next: Quote["status"],
+  actor: { userId: string; name: string },
+  at = new Date().toISOString(),
+): Database {
+  const quote = data.quotes.find((record) => record.id === quoteId);
+  if (!quote) throw new Error("Orçamento não encontrado.");
+  if (quote.status === next) return data;
+  if (quote.orderId) throw new Error("Este orçamento já gerou uma OS.");
+  if (quote.status === "Aprovado")
+    throw new Error("Orçamento aprovado não pode ter a situação alterada.");
+  if (next === "Aprovado" && quote.expires < localDay())
+    throw new Error("Orçamento vencido. Atualize a validade antes de aprovar.");
+
+  const approval =
+    next === "Aprovado"
+      ? {
+          at,
+          approverUserId: actor.userId,
+          approverName: actor.name,
+          snapshot: quoteApprovalSnapshot(quote),
+        }
+      : undefined;
+  return validateDatabase({
+    ...data,
+    quotes: data.quotes.map((record) =>
+      record.id === quoteId
+        ? { ...record, status: next, ...(approval ? { approval } : {}) }
+        : record,
+    ),
+  });
+}
 
 export function emptyDatabase(
   company: string,

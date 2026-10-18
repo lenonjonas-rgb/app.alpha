@@ -2,9 +2,9 @@
 import { readFile } from "node:fs/promises";
 import { PGlite } from "@electric-sql/pglite";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { changeOrderStatus, countStock, demoDatabase, getOrderDetails, instantiateQuestionnaire,
+import { changeOrderStatus, changeQuoteStatus, countStock, demoDatabase, getOrderDetails, instantiateQuestionnaire,
   availablePurchaseReturnItems, createStockLocation, localDay, reversibleConsumptionItems,
-  reverseOrderConsumption, returnPurchaseStock, stockLocationBalance, transferStock, validateDatabase } from "./domain";
+  reverseOrderConsumption, returnPurchaseStock, stockAvailable, stockLocationBalance, transferStock, validateDatabase } from "./domain";
 import { saveQuestionnaire } from "./questionnaires";
 import { questionnaireDisplaySchema } from "./questionnaireSchema";
 import { linkClientEquipment, saveEquipmentBrand, saveEquipmentModel, selectEquipmentModel } from "./equipmentCatalogData";
@@ -125,10 +125,59 @@ beforeAll(async () => {
   await db.exec(await readFile(new URL("../../supabase/migrations/20261016070000_purchase_guards.sql", import.meta.url), "utf8"));
   await db.exec(await readFile(new URL("../../supabase/migrations/20261019010000_purchase_approval_guards.sql", import.meta.url), "utf8"));
   await db.exec(await readFile(new URL("../../supabase/migrations/20261021010000_skip_unchanged_company_guards.sql", import.meta.url), "utf8"));
+  await db.exec(await readFile(new URL("../../supabase/migrations/20261022010000_quote_approval_guards.sql", import.meta.url), "utf8"));
 }, 30000);
 afterAll(async () => { await db.close(); });
 
 describe("validações por alterações relevantes", () => {
+  it("serializa reservas concorrentes com revisão otimista e não permite sobre-reserva", async () => {
+    const raceOwner = "00000000-0000-4000-8000-000000000004";
+    const raceCompany = "10000000-0000-4000-8000-000000000004";
+    await db.exec("reset role; begin");
+    try {
+      await db.query("insert into auth.users values ($1,'reservation-race@example.test')", [raceOwner]);
+      await db.query("insert into public.companies(id,name,created_by) values ($1,'Reserva concorrente',$2)", [raceCompany, raceOwner]);
+      await db.query("insert into public.company_memberships(user_id,company_id,role) values ($1,$2,'owner')", [raceOwner, raceCompany]);
+      const initial = demoDatabase();
+      await db.query("insert into public.company_data(company_id,payload) values ($1,$2)", [raceCompany, JSON.stringify(initial)]);
+      await identity(raceOwner);
+
+      const product = initial.products[0], locationId = initial.inventory!.defaultLocationId;
+      const quantity = Math.floor(stockAvailable(initial, product.id, locationId) / 2) + 1;
+      const openOrders = initial.orders.filter((order) => order.status === "Aberta").slice(0, 2);
+      expect(openOrders).toHaveLength(2);
+      expect(stockAvailable(initial, product.id, locationId)).toBeGreaterThan(1);
+
+      const reservations = openOrders.map((order, index) => {
+        const candidate = structuredClone(initial);
+        const target = candidate.orders.find((item) => item.id === order.id)!;
+        target.details = { ...getOrderDetails(target), activities: [], items: [{
+          id: `race-line-${index}`, kind: "produto", referenceId: product.id, name: product.name,
+          quantity, price: 1000, discount: 0,
+        }] };
+        return changeOrderStatus(validateDatabase(candidate), target.id, "Em atendimento");
+      });
+      const saved = (await db.query<{ revision: number }>("select revision from public.company_data where company_id=$1", [raceCompany])).rows[0];
+      await db.query("select public.save_company_data($1::jsonb,$2)", [JSON.stringify(reservations[0]), saved.revision]);
+
+      await db.exec("savepoint stale_reservation");
+      await expect(db.query("select public.save_company_data($1::jsonb,$2)",
+        [JSON.stringify(reservations[1]), saved.revision])).rejects.toThrow("another session");
+      await db.exec("rollback to savepoint stale_reservation");
+
+      const persisted = (await db.query<{ payload: ReturnType<typeof validateDatabase>; revision: number }>(
+        "select payload,revision from public.company_data where company_id=$1", [raceCompany])).rows[0];
+      expect(persisted.revision).toBe(saved.revision + 1);
+      expect(persisted.payload.inventory!.reservations.filter((item) => item.events.at(-1)?.status === "Reservada"))
+        .toHaveLength(1);
+      expect(persisted.payload.inventory!.reservations[0].items[0].quantity).toBe(quantity);
+      expect(quantity * 2).toBeGreaterThan(stockAvailable(initial, product.id, locationId));
+    } finally {
+      await db.exec("reset role; rollback");
+      await db.exec("reset role");
+    }
+  });
+
   it("não revalida estoque/compras ao salvar contrato, mas revalida produtos e OS", async () => {
     await identity(owner);
     const original = (await db.query<{ payload: unknown }>(
@@ -1269,5 +1318,50 @@ describe("RPC Android e isolamento de dados", () => {
     await mutate("report", { ...report, attachments: [attachment] }, saved.revision);
     saved = await snapshot();
     expect(getOrderDetails(saved.payload.orders[0]).attachments[0].at).toBe(attachment.at);
+  });
+  it("grava aprovação auditável, rejeita ator falso e congela os termos no banco", async () => {
+    const quoteOwner = "00000000-0000-4000-8000-000000000005";
+    const quoteCompany = "10000000-0000-4000-8000-000000000005";
+    await db.exec("reset role");
+    await db.query("insert into auth.users values ($1,'quote-owner@example.test')", [quoteOwner]);
+    await db.query("insert into public.companies(id,name,created_by) values ($1,'Aprovação de orçamento',$2)",
+      [quoteCompany, quoteOwner]);
+    await db.query("insert into public.company_memberships(user_id,company_id,role,display_name) values ($1,$2,'owner','Responsável de teste')",
+      [quoteOwner, quoteCompany]);
+
+    const initial = demoDatabase();
+    initial.quotes = initial.quotes.map((quote) => {
+      const draft = structuredClone(quote);
+      delete draft.approval;
+      return { ...draft, status: "Rascunho" as const };
+    });
+    await db.query("insert into public.company_data(company_id,payload) values ($1,$2)",
+      [quoteCompany, JSON.stringify(initial)]);
+    await identity(quoteOwner);
+    const wrongActor = changeQuoteStatus(initial, initial.quotes[0].id, "Aprovado", {
+      userId: other,
+      name: "Outro usuário",
+    });
+    await expect(db.query("select public.save_company_data($1::jsonb,0)", [JSON.stringify(wrongActor)]))
+      .rejects.toThrow("usuário autenticado");
+
+    const approved = changeQuoteStatus(initial, initial.quotes[0].id, "Aprovado", {
+      userId: quoteOwner,
+      name: "Nome informado pelo cliente",
+    }, "2000-01-01T00:00:00.000Z");
+    await db.query("select public.save_company_data($1::jsonb,0)", [JSON.stringify(approved)]);
+    const storedResult = await db.query<{ payload: typeof approved }>(
+      "select payload from public.company_data where company_id=$1", [quoteCompany]);
+    const stored = storedResult.rows[0].payload;
+    expect(stored.quotes[0].approval).toMatchObject({
+      approverUserId: quoteOwner,
+      approverName: "Responsável de teste",
+    });
+    expect(stored.quotes[0].approval!.at).not.toBe(approved.quotes[0].approval!.at);
+
+    const altered = structuredClone(stored);
+    altered.quotes[0].discount += 1;
+    await expect(db.query("select public.save_company_data($1::jsonb,1)", [JSON.stringify(altered)]))
+      .rejects.toThrow("imutáveis");
   });
 });

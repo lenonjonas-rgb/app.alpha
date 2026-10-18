@@ -1580,6 +1580,11 @@ td .record-link strong {
   font-weight: 500;
   margin-bottom: 12px;
 }
+.approval-record {
+  color: var(--muted);
+  font-size: 11px;
+  margin: 12px 0;
+}
 .preserve-lines {
   white-space: pre-wrap;
   overflow-wrap: anywhere;

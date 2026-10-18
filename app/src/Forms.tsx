@@ -816,6 +816,10 @@ export function EditorModal({
             const existing = current.quotes.find(
               (item) => item.id === editor.id,
             );
+            if (existing?.status === "Aprovado")
+              throw new Error(
+                "Orçamento aprovado: os termos comerciais não podem ser editados.",
+              );
             if (existing?.orderId)
               throw new Error(
                 "O orçamento já gerou uma OS e não pode ser editado.",

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   changeOrderStatus,
+  changeQuoteStatus,
   appendActivity,
   activityTotals,
   associateQuote,
@@ -439,6 +440,47 @@ describe("orcamentos e OS", () => {
     expect(result.orders[4].code).toBe("OS-0005");
     expect(() => convertQuote(result, data.quotes[0].id)).toThrow("ja possui");
     expect(result.products[0].stock).toBe(data.products[0].stock);
+  });
+  it("registra autor, data e snapshot imutavel ao aprovar orcamento", () => {
+    const data = demoDatabase();
+    const at = "2026-10-22T14:30:00.000Z";
+    const approved = changeQuoteStatus(data, data.quotes[0].id, "Aprovado", {
+      userId: "user-admin",
+      name: "Administração",
+    }, at);
+    expect(approved.quotes[0].approval).toMatchObject({
+      at,
+      approverUserId: "user-admin",
+      approverName: "Administração",
+      snapshot: {
+        clientId: data.quotes[0].clientId,
+        date: data.quotes[0].date,
+        expires: data.quotes[0].expires,
+        items: data.quotes[0].items,
+        discount: data.quotes[0].discount,
+        notes: data.quotes[0].notes,
+        equipmentModels: data.quotes[0].equipmentModels,
+      },
+    });
+    const changedTerms = structuredClone(approved);
+    changedTerms.quotes[0].discount += 1;
+    expect(() => validateDatabase(changedTerms)).toThrow();
+    expect(() =>
+      changeQuoteStatus(approved, approved.quotes[0].id, "Recusado", {
+        userId: "user-admin",
+        name: "Administração",
+      }),
+    ).toThrow("não pode ter a situação alterada");
+  });
+  it("nao aprova orcamento vencido", () => {
+    const data = demoDatabase();
+    data.quotes[0].expires = shiftDay(data.quotes[0].expires, -16);
+    expect(() =>
+      changeQuoteStatus(data, data.quotes[0].id, "Aprovado", {
+        userId: "user-admin",
+        name: "Administração",
+      }),
+    ).toThrow("Orçamento vencido");
   });
   it("registra mudanca de status no historico", () => {
     const data = demoDatabase();
