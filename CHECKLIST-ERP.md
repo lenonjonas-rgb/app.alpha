@@ -33,9 +33,16 @@ Marcar somente apos implementar e verificar. Codigo local, publicacao e homologa
 
 ## 3. Comercial
 
-- [ ] Integrar orcamentos existentes a aprovacao, pedido, OS e faturamento.
-- [ ] Controlar entregas/servicos parciais, cancelamentos e devolucoes.
-- [ ] Condicoes de pagamento, descontos e aprovacoes comerciais.
+- [x] Criar e acompanhar propostas comerciais em Vendas usando os mesmos registros e aprovacao de Orcamentos, sem duplicacao (local).
+- [x] Criar pedido de venda independente da OS, converter orcamento aprovado, permitir vinculo opcional com OS e lancar/estornar estoque pelo menu do pedido; cancelamento estorna o estoque lancado de forma rastreavel (local).
+- [x] Menu de acoes do pedido no padrao Bling: situacoes Em aberto/Em andamento/Atendido/Cancelado, lancar/estornar contas, gerar NF-e/NFS-e a partir do faturamento, gerar OS, clonar e imprimir (simples, comprovante, detalhes) (local).
+- [x] Tela de NF-e de venda de produto no padrao Bling: editor completo com abas do item, calculo automatico, parcelas, faturamento do pedido ao salvar e menu de tres pontos (validar, contas, estoque, clonar, espelho, cancelar, excluir) (local, sem transmissao).
+- [ ] Completar na NF-e: transmissao/XML/DANFE pelo backend fiscal, e-mail/WhatsApp, NF-e complementar, boletos, clonar para entrada, etiquetas, estoque para nota avulsa e outras formas de pagamento alem de Boleto/Pix.
+- [x] Coluna Servicos no padrao Bling: Notas de servico (NFS-e com retencoes, parcelas e menu de acoes), Contratos e Cobrancas em Vendas, OS com as 9 situacoes e menu de tres pontos, e relatorios de servico (contratos, NFS-e, parcelas, OS por situacao) (local, sem transmissao).
+- [ ] Completar em Servicos: transmissao da NFS-e, boletos e e-mail das cobrancas, etiqueta/e-mail da OS e CT-e.
+- [ ] Completar no pedido de venda: nota fiscal parcial, NFC-e, reversao, etiquetas, carne, relatorio de producao, envio por e-mail/WhatsApp, boletos, entregas parciais, devolucoes e logistica.
+- [x] Registrar descontos por item e geral, frete, outras despesas e condicao de pagamento informativa no pedido (local; sem criar conta a receber).
+- [ ] Cadastrar condicoes de pagamento/parcelas, comissoes e aprovacoes comerciais adicionais.
 
 ## 4. Compras e fornecedores
 
@@ -68,6 +75,7 @@ Marcar somente apos implementar e verificar. Codigo local, publicacao e homologa
 - [x] Cadastro local de contratos de manutencao com unidades vinculadas ao cliente selecionadas por padrao (sem exigir tipo de equipamento), anexo opcional do contrato assinado (PDF/imagem ate 500 KB), cobertura, vigencia, valor mensal e periodicidade quinzenal, mensal, semestral ou dias personalizados; alertas internos cinco dias antes para agendamento manual. Se selecionado em nova OS para cliente/unidade compativeis, copia o valor mensal para servico adicional faturavel; nao gera OS, tarefas ou contas automaticamente, nem limita selecoes por mes.
 - [x] Recorrencias financeiras mensais a pagar/receber com vigencia, suspensao/reativacao/cancelamento e historico (local).
 - [x] Geracao manual de contas por previa/confirmacao, sem duplicar recorrencia/mes, inclusive contas canceladas (local).
+- [x] Cobranca de contratos (local): periodicidade, data base, vencimento, desconto temporario, geracao mensal de contas a receber sem duplicidade e, opcionalmente, NFS-e e OS por cobranca; tela de Cobrancas por mes em Vendas.
 - [ ] Reajustes, renovacoes e versionamento de condicoes contratuais.
 - [ ] Validacao server-side, publicacao e homologacao da persistencia dos contratos/alertas/cobrancas; nao existe migration SQL especifica nesta etapa.
 - [ ] Controle de inadimplencia e renovacoes.

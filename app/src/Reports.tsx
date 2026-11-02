@@ -24,6 +24,8 @@ import {
   getOrderDetails,
   localDay,
   makeId,
+  orderSituation,
+  orderSituationGroups,
   orderValues,
 } from "./domain";
 import { downloadFile, errorMessage } from "./useDatabase";
@@ -43,6 +45,11 @@ import {
 } from "./reporting";
 import type { ReportFilters } from "./reporting";
 import { serviceDistanceText } from "./serviceDistance";
+import {
+  contractReportModes, contractReportRows, groupContractRows, nfseInstallmentRows, nfseReportRows, serviceOrderSituationSummary,
+} from "./serviceReporting";
+import type { ContractReportMode } from "./serviceReporting";
+import { nfseStatuses } from "./serviceInvoiceSchema";
 import "./Reports.css";
 
 const reports = [
@@ -57,12 +64,18 @@ const reports = [
   { id: "monitoring", label: "Monitoramento", icon: Activity },
   { id: "hours", label: "Apontamento de horas", icon: Clock3 },
   { id: "equipment", label: "Equipamentos", icon: Wrench },
+  { id: "serviceContracts", label: "Contratos", icon: ClipboardList },
+  { id: "serviceInvoices", label: "Notas de serviço", icon: Receipt },
+  { id: "serviceInstallments", label: "Parcelas de notas de serviço", icon: Receipt },
+  { id: "serviceOrders", label: "Ordens de serviço por situação", icon: Wrench },
+  { id: "cte", label: "Notas de transporte (CT-e)", icon: FileText },
   { id: "downloads", label: "Central de downloads", icon: Download },
 ] as const;
 
 type ReportId = (typeof reports)[number]["id"];
 const reportGroups: { label: string; ids: ReportId[] }[] = [
   { label: "Operação", ids: ["tasks", "questionnaires", "monitoring", "hours", "equipment"] },
+  { label: "Serviços", ids: ["serviceContracts", "serviceInvoices", "serviceInstallments", "serviceOrders", "cte"] },
   { label: "Custos e financeiro", ids: ["finance", "kilometers", "travelCosts", "expenses"] },
   { label: "Qualidade e arquivos", ids: ["satisfaction", "downloads"] },
 ];
@@ -249,6 +262,11 @@ export function ReportsPanel({
   const [questionnaire, setQuestionnaire] = useState("");
   const [expenseFormOpen, setExpenseFormOpen] = useState(false);
   const [generatedFiles, setGeneratedFiles] = useState<GeneratedFile[]>([]);
+  const [contractMode, setContractMode] = useState<ContractReportMode>("start");
+  const contractRows = useMemo(() => contractReportRows(data, filters, contractMode), [data, filters, contractMode]);
+  const contractGroups = useMemo(() => groupContractRows(contractRows), [contractRows]);
+  const nfseRows = useMemo(() => nfseReportRows(data, filters), [data, filters]);
+  const installmentRows = useMemo(() => nfseInstallmentRows(data, filters), [data, filters]);
   const orderRows = useMemo(
     () => filterOrders(data, filters),
     [data, filters],
@@ -332,7 +350,7 @@ export function ReportsPanel({
             order.code,
             clientName(order.clientId),
             order.technician,
-            order.status,
+            orderSituation(order),
             (orderValues(getOrderDetails(order)).total / 100).toFixed(2),
             getOrderDetails(order).distanceKm,
           ]),
@@ -453,6 +471,39 @@ export function ReportsPanel({
           ]),
         );
         break;
+      case "serviceContracts":
+        name = `relatorio-contratos-${localDay()}.csv`;
+        csv = csvContent(
+          ["Data", "Mês", "Contrato", "Cliente", "Periodicidade", "Valor (R$)", "Situação"],
+          contractRows.map((row) => [row.date, row.month, row.label, row.client, row.periodicity, (row.amount / 100).toFixed(2), row.status]),
+        );
+        break;
+      case "serviceInvoices":
+        name = `relatorio-notas-servico-${localDay()}.csv`;
+        csv = csvContent(
+          ["Emissão", "RPS", "NFS-e", "Cliente", "Serviço", "ISS (R$)", "Retenções (R$)", "Total (R$)", "Situação"],
+          nfseRows.map((row) => [row.nfse.issueDate, row.number, row.nfse.nfseNumber, row.client, row.nfse.service.description,
+            (row.iss / 100).toFixed(2), (row.retentions / 100).toFixed(2), (row.total / 100).toFixed(2), row.nfse.status]),
+        );
+        break;
+      case "serviceInstallments":
+        name = `relatorio-parcelas-nfse-${localDay()}.csv`;
+        csv = csvContent(
+          ["Vencimento", "RPS", "Cliente", "Parcela", "Valor (R$)", "Situação"],
+          installmentRows.map((row) => [row.dueOn, row.number, row.client, row.installment, (row.amount / 100).toFixed(2), row.status]),
+        );
+        break;
+      case "serviceOrders":
+        name = `relatorio-os-situacao-${localDay()}.csv`;
+        csv = csvContent(
+          ["Data", "OS", "Cliente", "Colaborador", "Status", "Situação", "Valor OS"],
+          orderRows.map((order) => [order.date, order.code, clientName(order.clientId), order.technician, order.status,
+            orderSituation(order), (orderValues(getOrderDetails(order)).total / 100).toFixed(2)]),
+        );
+        break;
+      case "cte":
+        onError("Relatório de notas de transporte (CT-e) em breve.");
+        return;
       case "downloads":
         csv = csvContent(
           ["Arquivo", "Data de geração"],
@@ -485,6 +536,7 @@ export function ReportsPanel({
           accessibleLabel={`Relatórios: ${group.label}`} active={group.ids.includes(report)}
           actions={reports.filter((item) => group.ids.includes(item.id)).map((item) => ({
             label: item.label, icon: item.icon, current: report === item.id,
+            ...(item.id === "cte" ? { disabled: true, hint: "em breve" } : {}),
             onSelect: () => selectReport(item.id),
           }))} />)}
       </nav>
@@ -591,7 +643,7 @@ export function ReportsPanel({
                 </select>
               </label>
             )}
-            {(report === "tasks" || report === "dashboard") && (
+            {(report === "tasks" || report === "dashboard" || report === "serviceOrders") && (
               <label className="field">
                 Situação
                 <select
@@ -599,11 +651,34 @@ export function ReportsPanel({
                   onChange={(event) => updateFilter("status", event.target.value)}
                 >
                   <option value="">Todas</option>
-                  {["Aberta", "Em atendimento", "Pausada", "Finalizada"].map(
-                    (status) => (
-                      <option key={status}>{status}</option>
-                    ),
-                  )}
+                  {Object.entries(orderSituationGroups).map(([groupStatus, situations]) => (
+                    <optgroup key={groupStatus} label={groupStatus}>
+                      <option value={groupStatus}>{groupStatus} (todas)</option>
+                      {situations.map((situation) => (
+                        <option key={situation} value={`situacao:${situation}`}>{situation}</option>
+                      ))}
+                    </optgroup>
+                  ))}
+                </select>
+              </label>
+            )}
+            {(report === "serviceInvoices" || report === "serviceInstallments") && (
+              <label className="field">
+                Situação
+                <select value={filters.status} onChange={(event) => updateFilter("status", event.target.value)}>
+                  <option value="">Todas</option>
+                  {(report === "serviceInvoices" ? nfseStatuses
+                    : ["Em aberto", "Parcial", "Atrasada", "Recebida", "Prevista (contas não lançadas)"]).map((status) => (
+                    <option key={status}>{status}</option>
+                  ))}
+                </select>
+              </label>
+            )}
+            {report === "serviceContracts" && (
+              <label className="field">
+                Listar
+                <select value={contractMode} onChange={(event) => setContractMode(event.target.value as ContractReportMode)}>
+                  {contractReportModes.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
                 </select>
               </label>
             )}
@@ -792,7 +867,7 @@ export function ReportsPanel({
                       </td>
                       <td>{clientName(order.clientId)}</td>
                       <td>{order.technician}</td>
-                      <td>{order.status}</td>
+                      <td>{orderSituation(order)}</td>
                       <td className="amount">
                         {currency(orderValues(getOrderDetails(order)).total)}
                       </td>
@@ -1059,6 +1134,122 @@ export function ReportsPanel({
               O modo finalizado considera apenas OS com check-out; no modo
               parcial, atividades ainda abertas são calculadas até o momento.
             </p>
+          </div>
+        )}
+
+        {report === "serviceContracts" && (
+          <div className="report-content">
+            <div className="report-metrics compact">
+              <div className="report-metric"><small>Contratos</small><strong>{contractRows.length}</strong></div>
+              <div className="report-metric"><small>Valor por cobrança</small><strong>{currency(contractRows.reduce((sum, row) => sum + row.amount, 0))}</strong></div>
+            </div>
+            {contractRows.length === 0 ? <p>Nenhum contrato no período.</p> : (
+              <div className="table-scroll">
+                <table>
+                  <thead><tr>
+                    <th>{contractMode === "end" || contractMode === "endMonth" ? "Término" : "Início"}</th>
+                    <th>Contrato</th><th>Cliente</th><th>Periodicidade</th><th>Valor</th><th>Situação</th>
+                  </tr></thead>
+                  {(contractMode === "startMonth" || contractMode === "endMonth" ? contractGroups : [{ month: "", rows: contractRows, amount: 0 }])
+                    .map((group) => (
+                      <tbody key={group.month || "all"}>
+                        {group.month && <tr><th colSpan={4}>{group.month} · {group.rows.length} contrato(s)</th>
+                          <th className="amount">{currency(group.amount)}</th><th /></tr>}
+                        {group.rows.map((row) => (
+                          <tr key={row.contract.id}>
+                            <td>{displayDate(row.date)}</td><td>{row.label}</td><td>{row.client}</td>
+                            <td>{row.periodicity}</td><td className="amount">{currency(row.amount)}</td><td>{row.status}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    ))}
+                </table>
+              </div>
+            )}
+          </div>
+        )}
+
+        {report === "serviceInvoices" && (
+          <div className="report-content">
+            <div className="report-metrics compact">
+              <div className="report-metric"><small>Notas</small><strong>{nfseRows.length}</strong></div>
+              <div className="report-metric"><small>ISS</small><strong>{currency(nfseRows.reduce((sum, row) => sum + row.iss, 0))}</strong></div>
+              <div className="report-metric"><small>Retenções</small><strong>{currency(nfseRows.reduce((sum, row) => sum + row.retentions, 0))}</strong></div>
+              <div className="report-metric"><small>Total</small><strong>{currency(nfseRows.filter((row) => row.nfse.status !== "Cancelada").reduce((sum, row) => sum + row.total, 0))}</strong></div>
+            </div>
+            {nfseRows.length === 0 ? <p>Nenhuma nota de serviço no período.</p> : (
+              <div className="table-scroll">
+                <table>
+                  <thead><tr><th>Emissão</th><th>RPS</th><th>NFS-e</th><th>Cliente</th><th>Serviço</th><th>ISS</th><th>Total</th><th>Situação</th></tr></thead>
+                  <tbody>
+                    {nfseRows.map((row) => (
+                      <tr key={row.nfse.id}>
+                        <td>{displayDate(row.nfse.issueDate)}</td><td>{row.number}</td><td>{row.nfse.nfseNumber || "—"}</td>
+                        <td>{row.client}</td><td>{row.nfse.service.description}</td>
+                        <td className="amount">{currency(row.iss)}</td><td className="amount">{currency(row.total)}</td><td>{row.nfse.status}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+            <p className="report-disclaimer">Canceladas aparecem na lista, mas não entram no total.</p>
+          </div>
+        )}
+
+        {report === "serviceInstallments" && (
+          <div className="report-content">
+            <div className="report-metrics compact">
+              <div className="report-metric"><small>Parcelas</small><strong>{installmentRows.length}</strong></div>
+              <div className="report-metric"><small>Valor</small><strong>{currency(installmentRows.reduce((sum, row) => sum + row.amount, 0))}</strong></div>
+            </div>
+            {installmentRows.length === 0 ? <p>Nenhuma parcela de nota de serviço no período.</p> : (
+              <div className="table-scroll">
+                <table>
+                  <thead><tr><th>Vencimento</th><th>RPS</th><th>Cliente</th><th>Parcela</th><th>Valor</th><th>Situação</th></tr></thead>
+                  <tbody>
+                    {installmentRows.map((row) => (
+                      <tr key={`${row.nfse.id}-${row.installment}`}>
+                        <td>{displayDate(row.dueOn)}</td><td>{row.number}</td><td>{row.client}</td><td>{row.installment}</td>
+                        <td className="amount">{currency(row.amount)}</td><td>{row.status}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+            <p className="report-disclaimer">Período pelo vencimento. Notas canceladas ficam de fora.</p>
+          </div>
+        )}
+
+        {report === "serviceOrders" && (
+          <div className="report-content">
+            <div className="report-metrics compact">
+              {serviceOrderSituationSummary(orderRows).map((item) => (
+                <div className="report-metric" key={item.situation}><small>{item.situation}</small><strong>{item.count}</strong></div>
+              ))}
+            </div>
+            <div className="table-scroll">
+              <table>
+                <thead><tr><th>Data</th><th>OS</th><th>Cliente</th><th>Colaborador</th><th>Situação</th><th>Valor</th></tr></thead>
+                <tbody>
+                  {orderRows.map((order) => (
+                    <tr key={order.id}>
+                      <td>{displayDate(order.date)}</td>
+                      <td><button className="record-link" onClick={() => onOpenOrder(order.id)}><strong>{order.code}</strong><small>{order.title}</small></button></td>
+                      <td>{clientName(order.clientId)}</td><td>{order.technician}</td><td>{orderSituation(order)}</td>
+                      <td className="amount">{currency(orderValues(getOrderDetails(order)).total)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        {report === "cte" && (
+          <div className="report-content">
+            <p className="report-disclaimer">Relatório de notas de transporte (CT-e) em breve — o Alpha ainda não emite CT-e.</p>
           </div>
         )}
 

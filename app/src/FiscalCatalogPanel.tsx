@@ -29,7 +29,10 @@ export function FiscalCatalogPanel({ data, catalog, rules, busy, act }: {
     {referenceId && <form key={`${kind}:${referenceId}:${current?.updatedAt ?? "new"}`} onSubmit={(event) => {
       event.preventDefault();
       const form = new FormData(event.currentTarget);
-      const classification = kind === "nfe" ? { unit: form.get("unit"), ncm: form.get("ncm"), origin: form.get("origin") } :
+      const classification = kind === "nfe" ? {
+        unit: form.get("unit"), ncm: form.get("ncm"), cest: String(form.get("cest") ?? "").trim() || undefined,
+        origin: form.get("origin"),
+      } :
         { nationalCode: form.get("nationalCode"), municipalCode: form.get("municipalCode"), nbs: form.get("nbs") };
       void act(async () => {
         await fiscalRequest("/catalog", "PUT", { kind, referenceId, ruleId: form.get("ruleId"), notes: form.get("notes"),
@@ -41,6 +44,7 @@ export function FiscalCatalogPanel({ data, catalog, rules, busy, act }: {
           {kind === "nfe" ? <>
             <label className="field">Unidade comercial<input name="unit" required maxLength={6} defaultValue={product?.unit} placeholder="Ex.: UN" /></label>
             <label className="field">NCM (8 dígitos)<input name="ncm" required pattern="[0-9]{8}" maxLength={8} defaultValue={product?.ncm} /></label>
+            <label className="field">CEST (7 dígitos, quando aplicável)<input name="cest" pattern="[0-9]{7}" maxLength={7} defaultValue={product?.cest ?? ""} /></label>
             <label className="field">Origem da mercadoria<select name="origin" required defaultValue={product?.origin ?? ""}>
               <option value="">Selecione</option>
               <option value="0">0 · Nacional, exceto códigos 3, 4, 5 e 8</option>
@@ -73,7 +77,7 @@ export function FiscalCatalogPanel({ data, catalog, rules, busy, act }: {
         const record = (item.kind === "nfe" ? data.products : data.services).find((entry) => entry.id === item.referenceId);
         const rule = rules.find((entry) => entry.id === item.ruleId);
         return <tr key={`${item.kind}:${item.referenceId}`}><td>{record?.name ?? `Item ausente: ${item.referenceId}`} · {item.kind.toUpperCase()}</td>
-          <td>{item.kind === "nfe" ? `NCM ${item.ncm} · origem ${item.origin} · ${item.unit}` : `Tributação ${item.nationalCode} · NBS ${item.nbs}`}</td>
+          <td>{item.kind === "nfe" ? `NCM ${item.ncm} · CEST ${item.cest ?? "não informado"} · origem ${item.origin} · ${item.unit}` : `Tributação ${item.nationalCode} · NBS ${item.nbs}`}</td>
           <td>{rule?.name ?? "Referência ausente"}<br />{rule?.reviewed ? "Referência revisada; conferir operação" : "Revisão pendente"}</td>
           <td>{item.active ? "Ativo" : "Inativo"}{!record && " · item não encontrado"}</td>
           <td><button className="text-button" disabled={busy || !record} onClick={() => { setKind(item.kind); setReferenceId(item.referenceId); }}>Editar / inativar</button></td></tr>;

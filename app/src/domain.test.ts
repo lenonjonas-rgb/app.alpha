@@ -2,6 +2,13 @@ import { describe, expect, it } from "vitest";
 import {
   changeOrderStatus,
   changeQuoteStatus,
+  cancelSalesOrder,
+  changeSalesOrderStatus,
+  createServiceOrderFromSalesOrder,
+  postSalesOrderStock,
+  reverseSalesOrderStock,
+  salesOrderEditable,
+  convertQuoteToSalesOrder,
   appendActivity,
   activityTotals,
   associateQuote,
@@ -21,6 +28,8 @@ import {
   stockAvailable,
   stockLocationBalance,
   stockReserved,
+  salesOrderTotal,
+  saveSalesOrderDraft,
   transferStock,
   reversibleConsumptionItems,
   reverseOrderConsumption,
@@ -29,6 +38,7 @@ import {
   total,
   validateDatabase,
 } from "./domain";
+import { billSalesOrder, previewSalesOrderBilling, reverseSalesOrderBilling, salesOrderInvoices, saveBankAccount } from "./finance";
 
 describe("dados locais", () => {
   it("valida a base de demonstracao", () =>
@@ -425,6 +435,211 @@ describe("orcamentos e OS", () => {
     const quote = demoDatabase().quotes[0];
     expect(subtotal(quote.items)).toBe(43500);
     expect(total({ ...quote, discount: 3500 })).toBe(40000);
+  });
+  describe("pedidos de venda", () => {
+    function draftInput(data: ReturnType<typeof demoDatabase>) {
+      const product = data.products[0];
+      return {
+        clientId: data.clients[0].id,
+        date: "2026-10-10",
+        expectedOn: "",
+        quoteId: "",
+        serviceOrderId: "",
+        stockLocationId: data.inventory!.defaultLocationId,
+        seller: "Vendedor teste",
+        paymentTerms: "30 dias",
+        shippingCost: 500,
+        otherExpenses: 100,
+        discount: 1000,
+        notes: "",
+        internalNotes: "",
+        items: [{
+          id: "sale-line-1",
+          kind: "produto" as "produto" | "servico",
+          referenceId: product.id,
+          name: product.name,
+          quantity: 2,
+          price: 10000,
+          discountPercent: 2500,
+        }],
+      };
+    }
+
+    it("mantém compatibilidade com backups sem os campos de pedidos de venda", () => {
+      const legacy = JSON.parse(JSON.stringify(demoDatabase())) as {
+        salesOrders?: unknown;
+        quotes: { salesOrderId?: unknown }[];
+      };
+      delete legacy.salesOrders;
+      legacy.quotes.forEach((quote) => delete quote.salesOrderId);
+      const restored = validateDatabase(legacy);
+      expect(restored.salesOrders).toEqual([]);
+      expect(restored.quotes.every((quote) => quote.salesOrderId === "")).toBe(true);
+    });
+
+    it("converte orçamento aprovado em pedido sem substituir a OS nem baixar estoque", () => {
+      const data = demoDatabase();
+      data.quotes[0].status = "Aprovado";
+      const stockBefore = data.products[0].stock;
+      const converted = convertQuoteToSalesOrder(data, data.quotes[0].id);
+      expect(converted.salesOrders).toHaveLength(1);
+      expect(converted.salesOrders[0]).toMatchObject({
+        code: "PV-0001",
+        quoteId: data.quotes[0].id,
+        clientId: data.quotes[0].clientId,
+        status: "Em aberto",
+      });
+      expect(converted.quotes[0].salesOrderId).toBe(converted.salesOrders[0].id);
+      expect(converted.orders).toEqual(data.orders);
+      expect(converted.products[0].stock).toBe(stockBefore);
+      expect(() => convertQuoteToSalesOrder(converted, data.quotes[0].id)).toThrow("já possui");
+    });
+
+    it("permite que a mesma proposta aprovada gere uma OS e um pedido de venda", () => {
+      const data = demoDatabase();
+      data.quotes[0].status = "Aprovado";
+      const withServiceOrder = convertQuote(data, data.quotes[0].id);
+      const withSalesOrder = convertQuoteToSalesOrder(withServiceOrder, data.quotes[0].id);
+      expect(withSalesOrder.quotes[0].orderId).toBe(withServiceOrder.quotes[0].orderId);
+      expect(withSalesOrder.quotes[0].salesOrderId).toBe(withSalesOrder.salesOrders[0].id);
+      expect(withSalesOrder.products).toEqual(data.products);
+      expect(withSalesOrder.finance.entries).toEqual(data.finance.entries);
+    });
+
+    it("lança e estorna estoque em ciclos sem depender da situação do pedido", () => {
+      const data = demoDatabase();
+      const draft = saveSalesOrderDraft(data, draftInput(data));
+      const order = draft.salesOrders[0];
+      expect(salesOrderTotal(order)).toBe(14600);
+      const stockBefore = data.products[0].stock;
+      const entriesBefore = data.finance.entries.length;
+      const posted = postSalesOrderStock(draft, order.id);
+      expect(posted.salesOrders[0].status).toBe("Em aberto");
+      expect(posted.salesOrders[0].stockEvents[0]).toMatchObject({ type: "lancamento", reason: expect.stringContaining("Estoque lançado - Depósito:") });
+      expect(posted.products[0].stock).toBe(stockBefore - 2);
+      expect(posted.movements[0].source).toEqual({ type: "sale", referenceId: order.id, lineId: "sale-line-1" });
+      expect(posted.finance.entries).toHaveLength(entriesBefore);
+      expect(salesOrderEditable(posted, posted.salesOrders[0])).toBe(false);
+      expect(() => postSalesOrderStock(posted, order.id)).toThrow("já foi lançado");
+      expect(() => saveSalesOrderDraft(posted, draftInput(posted), order.id)).toThrow("sem estoque lançado");
+
+      const reversed = reverseSalesOrderStock(posted, order.id);
+      expect(reversed.products[0].stock).toBe(stockBefore);
+      expect(reversed.movements[0].source).toEqual({ type: "saleReversal", referenceId: order.id, lineId: "sale-line-1" });
+      expect(salesOrderEditable(reversed, reversed.salesOrders[0])).toBe(true);
+      expect(() => reverseSalesOrderStock(reversed, order.id)).toThrow("não possui estoque lançado");
+
+      const again = postSalesOrderStock(reversed, order.id);
+      expect(again.salesOrders[0].stockEvents.map((event) => event.type)).toEqual(["lancamento", "estorno", "lancamento"]);
+      expect(again.products[0].stock).toBe(stockBefore - 2);
+      expect(validateDatabase(JSON.parse(JSON.stringify(again)))).toBeTruthy();
+
+      const tampered = structuredClone(again);
+      tampered.movements[0].source!.referenceId = "pedido-inexistente";
+      expect(() => validateDatabase(tampered)).toThrow();
+    });
+
+    it("altera situações no padrão Bling e mantém cancelado como situação final", () => {
+      const data = demoDatabase();
+      const draft = saveSalesOrderDraft(data, draftInput(data));
+      const id = draft.salesOrders[0].id;
+      const progress = changeSalesOrderStatus(draft, id, "Em andamento");
+      const done = changeSalesOrderStatus(progress, id, "Atendido");
+      expect(done.salesOrders[0].events.map((event) => event.status)).toEqual(["Em aberto", "Em andamento", "Atendido"]);
+      expect(salesOrderEditable(done, done.salesOrders[0])).toBe(false);
+      expect(() => changeSalesOrderStatus(done, id, "Atendido")).toThrow("já está atendido");
+      const reopened = changeSalesOrderStatus(done, id, "Em aberto");
+      expect(salesOrderEditable(reopened, reopened.salesOrders[0])).toBe(true);
+      const cancelled = cancelSalesOrder(reopened, id, "Cliente desistiu");
+      expect(() => changeSalesOrderStatus(cancelled, id, "Em aberto")).toThrow("cancelados não podem");
+      expect(() => postSalesOrderStock(cancelled, id)).toThrow("cancelados não movimentam");
+    });
+
+    it("rejeita estoque insuficiente e cancela venda com estoque lançado estornando os produtos", () => {
+      const data = demoDatabase();
+      const input = draftInput(data);
+      input.items[0].quantity = data.products[0].stock + 1;
+      const tooLarge = saveSalesOrderDraft(data, input);
+      expect(() => postSalesOrderStock(tooLarge, tooLarge.salesOrders[0].id)).toThrow("Estoque disponível insuficiente");
+      expect(data.products[0].stock).toBe(8);
+
+      input.items[0].quantity = 2;
+      const draft = saveSalesOrderDraft(data, input);
+      const posted = postSalesOrderStock(draft, draft.salesOrders[0].id);
+      const cancelled = cancelSalesOrder(posted, posted.salesOrders[0].id, "Venda desistida");
+      expect(cancelled.salesOrders[0].status).toBe("Cancelado");
+      expect(cancelled.salesOrders[0].stockEvents.at(-1)).toMatchObject({ type: "estorno", reason: "Venda desistida" });
+      expect(cancelled.products[0].stock).toBe(data.products[0].stock);
+      expect(cancelled.movements[0].source).toEqual({
+        type: "saleReversal", referenceId: draft.salesOrders[0].id, lineId: "sale-line-1",
+      });
+      expect(cancelled.finance.entries).toEqual(data.finance.entries);
+      expect(() => cancelSalesOrder(cancelled, cancelled.salesOrders[0].id, "Duplicado")).toThrow("já está cancelado");
+    });
+
+    it("migra pedidos confirmados de versões anteriores para estoque lançado", () => {
+      const data = demoDatabase();
+      const draft = saveSalesOrderDraft(data, draftInput(data));
+      const posted = postSalesOrderStock(draft, draft.salesOrders[0].id);
+      const cancelled = cancelSalesOrder(posted, posted.salesOrders[0].id, "Venda desistida");
+      const legacy = JSON.parse(JSON.stringify(cancelled));
+      const [launch, reversal] = cancelled.salesOrders[0].stockEvents;
+      legacy.salesOrders[0].events = [
+        { status: "Rascunho", at: cancelled.salesOrders[0].createdAt, reason: "Pedido de venda criado" },
+        { status: "Confirmado", at: launch.at, reason: "Pedido confirmado" },
+        { status: "Cancelado", at: reversal.at, reason: "Venda desistida" },
+      ];
+      delete legacy.salesOrders[0].stockEvents;
+      const restored = validateDatabase(legacy).salesOrders[0];
+      expect(restored.events.map((event) => event.status)).toEqual(["Em aberto", "Atendido", "Cancelado"]);
+      expect(restored.stockEvents.map((event) => event.type)).toEqual(["lancamento", "estorno"]);
+    });
+
+    it("lança contas por grupo, bloqueia cancelamento e permite estornar as contas", () => {
+      const bank = { id: "bank", name: "Conta principal", bank: "Banco", agency: "1", account: "1", kind: "Corrente" as const, active: true };
+      const data = saveBankAccount(demoDatabase(), bank);
+      const input = draftInput(data);
+      input.items.push({ id: "sale-line-2", kind: "servico" as const, referenceId: data.services[0].id,
+        name: data.services[0].name, quantity: 1, price: 5000, discountPercent: 0 });
+      const draft = saveSalesOrderDraft(data, input);
+      const id = draft.salesOrders[0].id;
+      const preview = previewSalesOrderBilling(draft, id);
+      expect(preview.map((group) => group.kind)).toEqual(["Produtos", "Serviços"]);
+      expect(preview.reduce((sum, group) => sum + group.amount, 0)).toBe(salesOrderTotal(draft.salesOrders[0]));
+      expect(preview[1].orders[0].items?.map((item) => item.name)).toEqual([data.services[0].name, "Frete", "Outras despesas"]);
+      const terms = { accountId: bank.id, dueOn: "2026-11-20", paymentMethod: "Pix" as const };
+      const billed = billSalesOrder(draft, id, { Produtos: terms, Serviços: terms }, preview);
+      const entries = billed.finance.entries.filter((entry) => entry.description.endsWith("Pedido: PV-0001"));
+      expect(entries).toHaveLength(2);
+      const invoices = salesOrderInvoices(billed, id);
+      expect(invoices.map((invoice) => invoice.kind)).toEqual(["Produtos", "Serviços"]);
+      for (const invoice of invoices) {
+        const entry = entries.find((item) => item.invoiceId === invoice.id);
+        expect(entry).toMatchObject({ kind: "Receber", amount: invoice.amount, paymentMethod: "Pix", accountId: bank.id });
+        expect(invoice.orders[0]).toMatchObject({ orderId: id, code: "PV-0001" });
+      }
+      expect(previewSalesOrderBilling(billed, id)).toEqual([]);
+      expect(salesOrderEditable(billed, billed.salesOrders[0])).toBe(false);
+      expect(() => cancelSalesOrder(billed, id, "Cliente desistiu")).toThrow("Estorne as contas");
+
+      const reversed = reverseSalesOrderBilling(billed, id);
+      expect(salesOrderInvoices(reversed, id)).toHaveLength(0);
+      expect(reversed.finance.invoices.filter((invoice) => invoices.some((item) => item.id === invoice.id)).every((invoice) => invoice.canceled)).toBe(true);
+      expect(salesOrderEditable(reversed, reversed.salesOrders[0])).toBe(true);
+      expect(cancelSalesOrder(reversed, id, "Cliente desistiu").salesOrders[0].status).toBe("Cancelado");
+    });
+
+    it("gera ordem de serviço vinculada uma única vez", () => {
+      const data = demoDatabase();
+      const draft = saveSalesOrderDraft(data, draftInput(data));
+      const id = draft.salesOrders[0].id;
+      const result = createServiceOrderFromSalesOrder(draft, id);
+      const serviceOrder = result.orders.at(-1)!;
+      expect(result.salesOrders[0].serviceOrderId).toBe(serviceOrder.id);
+      expect(serviceOrder).toMatchObject({ clientId: draft.salesOrders[0].clientId, status: "Aberta" });
+      expect(serviceOrder.notes).toContain("Total do pedido");
+      expect(() => createServiceOrderFromSalesOrder(result, id)).toThrow("já está vinculado");
+    });
   });
   it("bloqueia desconto superior ao subtotal", () => {
     const data = demoDatabase();

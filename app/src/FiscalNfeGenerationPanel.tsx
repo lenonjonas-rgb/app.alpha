@@ -4,13 +4,17 @@ import { currency } from "./domain";
 import { fiscalRequest } from "./fiscalApi";
 import { generatedNfeResponseSchema, nfeGenerationFromForm } from "./fiscalNfeGeneration";
 import type { FiscalNumberingRecord } from "./fiscalNumberingSchema";
+import type { FiscalCatalogItem } from "./fiscalCatalogSchema";
 
-export function FiscalNfeGenerationPanel({ data, numbering, busy, certificateReady, schemaReady, act }: {
-  data: Database; numbering: FiscalNumberingRecord[]; busy: boolean; certificateReady: boolean; schemaReady: boolean;
-  act: (operation: () => Promise<void>, success: string) => Promise<void>;
+export function FiscalNfeGenerationPanel({ data, catalog, numbering, busy, certificateReady, schemaReady, act, initialInvoiceId = "" }: {
+  data: Database; catalog: FiscalCatalogItem[]; numbering: FiscalNumberingRecord[]; busy: boolean; certificateReady: boolean; schemaReady: boolean;
+  act: (operation: () => Promise<void>, success: string) => Promise<void>; initialInvoiceId?: string;
 }) {
   const [series, setSeries] = useState("");
+  const [invoiceId, setInvoiceId] = useState(initialInvoiceId);
   const counter = numbering.find((item) => item.environment === "homologacao" && String(item.series) === series);
+  const invoice = data.finance.invoices.find((item) => item.id === invoiceId && item.kind === "Produtos");
+  const invoiceItems = invoice?.orders.flatMap((order) => order.items?.map((item) => ({ order, item })) ?? []) ?? [];
   return <section>
     <h3>Gerar XML da NF-e de produtos · Homologação</h3>
     <p>Gera o XML automaticamente dos itens faturados e recalcula com cadastros/matrizes revisados. Apenas revenda interna SC/5102, ICMS00, PIS/COFINS01/02, IBS/CBS000/000001 e emissão em 2026. Não inclui ST/FCP/DIFAL/IPI, benefícios, devoluções ou exportações. Não use para operações fora desse escopo.</p>
@@ -23,7 +27,7 @@ export function FiscalNfeGenerationPanel({ data, numbering, busy, certificateRea
         generatedNfeResponseSchema.parse(await (await fiscalRequest("/documents/generate-nfe", "POST", nfeGenerationFromForm(form))).json());
       }, "XML NF-e gerado e rascunho salvo em homologação. Número consumido; nenhuma transmissão ou cobrança realizada. Confira em Documentos fiscais.");
     }}><fieldset disabled={busy || !certificateReady || !schemaReady}><legend>Dados da emissão de teste</legend><div className="form-grid">
-      <label className="field">Faturamento de produtos<select name="invoiceId" required defaultValue=""><option value="">Selecione</option>
+      <label className="field">Faturamento de produtos<select name="invoiceId" required value={invoiceId} onChange={(event) => setInvoiceId(event.target.value)}><option value="">Selecione</option>
         {data.finance.invoices.filter((invoice) => !invoice.canceled && invoice.kind === "Produtos").map((invoice) =>
           <option key={invoice.id} value={invoice.id}>{invoice.clientName} · {currency(invoice.amount)} · {invoice.orders.map((order) => order.code).join(", ")}</option>)}
       </select></label>
@@ -39,6 +43,19 @@ export function FiscalNfeGenerationPanel({ data, numbering, busy, certificateRea
       <label className="field">Condição de pagamento<select name="paymentTiming" required defaultValue=""><option value="">Selecione</option>
         <option value="0">À vista</option><option value="1">A prazo</option></select></label>
     </div>
+      {invoice && <div className="finance-table">
+        <table><thead><tr><th>Item faturado</th><th>NCM do cadastro</th><th>CEST do cadastro</th><th>Unidade</th></tr></thead>
+          <tbody>{invoiceItems.map(({ order, item }) => {
+            const classification = item.source === "item" && item.kind === "produto"
+              ? catalog.find((candidate) => candidate.kind === "nfe" && candidate.referenceId === item.referenceId && candidate.active)
+              : undefined;
+            return <tr key={`${order.orderId}:${item.id}`}><td>{item.name} · OS {order.code}</td>
+              <td>{classification?.kind === "nfe" ? classification.ncm : "Cadastro ausente"}</td>
+              <td>{classification?.kind === "nfe" ? classification.cest ?? "Não informado" : "Cadastro ausente"}</td>
+              <td>{classification?.kind === "nfe" ? classification.unit : "—"}</td></tr>;
+          })}</tbody>
+        </table>
+      </div>}
       <label className="checkbox-field"><input name="confirmNoGtin" type="checkbox" required />Confirmei que todos os produtos não possuem GTIN e usam a mesma unidade comercial/tributável (SEM GTIN).</label>
       <label className="checkbox-field"><input name="confirmNoFreight" type="checkbox" required />Não há transporte/frete, seguro ou outras despesas de produtos a declarar nesta NF-e (modalidade 9).</label>
       <label className="checkbox-field"><input name="confirmScope" type="checkbox" required />Conferi o enquadramento limitado, os parâmetros e a numeração. É teste sem valor fiscal; o número local será consumido.</label>

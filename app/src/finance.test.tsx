@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { demoDatabase, getOrderDetails, localDay, orderValues, validateDatabase } from "./domain";
 import { applyFinanceRetention, clearFinanceRetention, billOrders, billingItemSnapshots, cancelFinanceEntry, entryBalance, entryStatus, pendingBillingOrders, pendingBillingValues, previewBilling, reverseSettlement, saveBankAccount, saveFinanceEntry, settleFinanceEntry, splitBillingValues } from "./finance";
 import { FinancePanel } from "./FinancePanel";
+import { FiscalPanel } from "./FiscalPanel";
 import { FiscalInvoiceCalculation } from "./FiscalInvoiceCalculation";
 import type { FinanceEntry } from "./financeSchema";
 import { fiscalRetentionSchema } from "./fiscalRetentions";
@@ -381,9 +382,25 @@ describe("financeiro", () => {
   it("renderiza aba A faturar com OS, totais e navegação do módulo", () => {
     const data = fixture();
     const html = renderToStaticMarkup(<FinancePanel data={data} commit={() => {}} onSuccess={() => {}} onOpenOrder={() => {}} />);
-    for (const text of ["Contas a receber", "Contas a pagar", "Bancos", "Faturamentos", data.orders[0].code, "Faturar selecionadas"])
+    for (const text of ["Contas a receber", "Contas a pagar", "Bancos", "Faturamentos", data.orders[0].code,
+      "Buscar por OS, serviço ou cliente", "Resumo da seleção", "Revisar faturamento", "Faturar selecionadas",
+      "Selecionar ordens", "Condições e valores", "Nota fiscal", "não emite nem transmite a nota"])
       expect(html).toContain(text);
+    expect(html).not.toContain('class="finance-metrics"');
     expect(html).not.toContain("Gerar remessa");
+  });
+  it("mostra o próximo passo fiscal nos faturamentos internos ativos", () => {
+    const data = fixture();
+    const billed = billOrders(data, [data.orders[0].id], options);
+    const html = renderToStaticMarkup(<FinancePanel data={billed} initialTab="Faturamentos" commit={() => {}} onSuccess={() => {}} onOpenOrder={() => {}} />);
+    expect(html).toContain("CONTAS CRIADAS A PARTIR DAS OS E PEDIDOS");
+    expect(html).toContain("Faturamento interno ativo");
+    expect(html).toContain("Preparar nota fiscal");
+  });
+  it("abre diretamente a inclusão de nota fiscal quando vem do faturamento", () => {
+    const html = renderToStaticMarkup(<FiscalPanel data={fixture()} commit={() => {}} initialView="issue" />);
+    const activeTab = html.match(/<button[^>]*class="active"[^>]*>.*?<\/button>/)?.[0] ?? "";
+    expect(activeTab).toContain("Incluir nota fiscal");
   });
   it("congela itens, adicionais e descontos sem perder centavos nem incluir deslocamento interno", () => {
     for (const chargeTravel of [true, false]) {

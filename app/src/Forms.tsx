@@ -66,6 +66,7 @@ export type FormKind =
 export type Editor = {
   kind: FormKind;
   id?: string;
+  presentation?: "proposal";
   date?: string;
   time?: string;
   clientId?: string;
@@ -837,6 +838,7 @@ export function EditorModal({
               discount: Math.round(discount * 100),
               notes: getText(form, "notes"),
               orderId: existing?.orderId ?? "",
+              salesOrderId: existing?.salesOrderId ?? "",
               equipmentModels: selectedModels,
             };
             return { ...current, quotes: upsert(current.quotes, record) };
@@ -896,7 +898,9 @@ export function EditorModal({
 
   return (
     <Modal
-      title={`${editor.id ? "Editar" : "Novo"} ${titles[editor.kind]}`}
+      title={editor.kind === "quote" && editor.presentation === "proposal"
+        ? `${editor.id ? "Editar" : "Nova"} proposta comercial`
+        : `${editor.id ? "Editar" : "Novo"} ${titles[editor.kind]}`}
       wide={editor.kind === "quote"}
       onClose={() => { if (!travelBusy) onClose(); }}
     >

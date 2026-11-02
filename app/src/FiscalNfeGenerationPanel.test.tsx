@@ -29,7 +29,7 @@ describe("geração automática NF-e", () => {
     expect(() => generatedNfeResponseSchema.parse({ id: "id", key: "bad", status: "autorizado" })).toThrow();
   });
   it("sinaliza homologação limitada, consumo e dependências sem oferecer produção ou transmitir", () => {
-    const html = renderToStaticMarkup(<FiscalNfeGenerationPanel data={demoDatabase()} numbering={[]} busy={false}
+    const html = renderToStaticMarkup(<FiscalNfeGenerationPanel data={demoDatabase()} catalog={[]} numbering={[]} busy={false}
       certificateReady={false} schemaReady={false} act={async () => {}} />);
     for (const text of ["Homologação", "SEM GTIN", "2026", "consome o número", "transmissão é uma ação separada", "Cadastre o A1"])
       expect(html).toContain(text);

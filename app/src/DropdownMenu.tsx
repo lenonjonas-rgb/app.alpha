@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef } from "react";
+import { Fragment, useEffect, useId, useRef } from "react";
 import type { LucideIcon } from "lucide-react";
 import { ChevronDown } from "lucide-react";
 
@@ -9,13 +9,18 @@ export type DropdownAction = {
   disabled?: boolean;
   danger?: boolean;
   current?: boolean;
+  hint?: string;
+  separatorBefore?: boolean;
+  section?: string;
 };
 
-export function DropdownMenu({ label = "Mais ações", accessibleLabel = label, actions, active = false }: {
+export function DropdownMenu({ label = "Mais ações", accessibleLabel = label, actions, active = false, triggerIcon: TriggerIcon, compact = false }: {
   label?: string;
   accessibleLabel?: string;
   actions: DropdownAction[];
   active?: boolean;
+  triggerIcon?: LucideIcon;
+  compact?: boolean;
 }) {
   const id = useId();
   const trigger = useRef<HTMLButtonElement>(null);
@@ -41,18 +46,18 @@ export function DropdownMenu({ label = "Mais ações", accessibleLabel = label, 
   }
 
   return <div className="dropdown">
-    <button ref={trigger} type="button" className={`button ${active ? "primary" : "secondary"} dropdown-trigger`}
-      popoverTarget={id} aria-haspopup="menu" aria-expanded="false" aria-label={accessibleLabel}
+    <button ref={trigger} type="button" className={TriggerIcon ? "icon-button dropdown-trigger" : `button ${active ? "primary" : "secondary"} dropdown-trigger`}
+      popoverTarget={id} aria-haspopup="menu" aria-expanded="false" aria-label={accessibleLabel} title={TriggerIcon ? label : undefined}
       onKeyDown={(event) => {
         if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
         event.preventDefault();
         popup.current?.showPopover();
         focusItem(event.key === "ArrowUp");
       }}>
-      {label}<ChevronDown size={15} />
+      {TriggerIcon ? <TriggerIcon size={17} /> : <>{label}<ChevronDown size={15} /></>}
     </button>
     <div ref={popup} id={id} popover="auto" role="menu" aria-label={accessibleLabel}
-      className="dropdown-popup"
+      className={`dropdown-popup${compact ? " compact" : ""}`}
       onToggle={(event) => {
         const open = event.newState === "open";
         trigger.current?.setAttribute("aria-expanded", String(open));
@@ -88,16 +93,20 @@ export function DropdownMenu({ label = "Mais ações", accessibleLabel = label, 
           (index + (event.key === "ArrowDown" ? 1 : -1) + items.length) % items.length;
         items[next]?.focus();
       }}>
-      {actions.map((action) => <button type="button" role="menuitem" key={action.label}
-        className={`dropdown-action${action.danger ? " danger" : ""}`}
-        disabled={action.disabled} aria-current={action.current ? "page" : undefined}
-        onClick={() => {
-          popup.current?.hidePopover();
-          trigger.current?.focus();
-          action.onSelect();
-        }}>
-        {action.icon && <action.icon size={17} />}<span>{action.label}</span>
-      </button>)}
+      {actions.map((action) => <Fragment key={action.label}>
+        {action.section ? <span className="dropdown-section" role="presentation">{action.section}</span>
+          : action.separatorBefore && <span className="dropdown-separator" role="separator" />}
+        <button type="button" role="menuitem"
+          className={`dropdown-action${action.danger ? " danger" : ""}`}
+          disabled={action.disabled} aria-current={action.current ? "page" : undefined}
+          onClick={() => {
+            popup.current?.hidePopover();
+            trigger.current?.focus();
+            action.onSelect();
+          }}>
+          {action.icon && <action.icon size={17} />}<span>{action.label}</span>{action.hint && <small>{action.hint}</small>}
+        </button>
+      </Fragment>)}
       {!available.length && <span className="dropdown-empty">Nenhuma ação disponível</span>}
     </div>
   </div>;

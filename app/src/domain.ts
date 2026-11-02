@@ -8,6 +8,9 @@ import { reportSettingsSchema } from "./reportSettings";
 import { servicePointSchema, travelSchema, travelValues } from "./travel";
 import { financeSchema, validateFinance } from "./financeSchema";
 import type { FinanceEntry } from "./financeSchema";
+import { outgoingInvoiceSchema } from "./outgoingInvoiceSchema";
+import { serviceInvoiceSchema } from "./serviceInvoiceSchema";
+import { contractBillingSchema, contractChargeSchema } from "./contractChargeSchema";
 export type { QuestionnaireTemplate, QuestionDefinition } from "./questionnaireSchema";
 
 const id = z.string().min(1);
@@ -21,6 +24,18 @@ const day = z
     return !Number.isNaN(parsed.getTime()) && localDay(parsed) === value;
   }, "Data invalida.");
 const status = z.enum(["Aberta", "Em atendimento", "Pausada", "Finalizada"]);
+/** Situações da OS como no Bling; cada uma pertence a um dos 4 status gravados (usados pelo Supabase e pelo app do técnico). */
+export const orderSituationGroups = {
+  Aberta: ["Em aberto", "Orçada", "Aprovada", "Não aprovada"],
+  "Em atendimento": ["Em andamento", "Serviço concluído"],
+  Pausada: ["Aguardando componentes"],
+  Finalizada: ["Finalizada", "Finalizada sem conserto"],
+} as const;
+export const orderSituations = [
+  "Em aberto", "Orçada", "Aprovada", "Não aprovada", "Em andamento", "Aguardando componentes",
+  "Serviço concluído", "Finalizada", "Finalizada sem conserto",
+] as const;
+export type OrderSituation = (typeof orderSituations)[number];
 const clientSchema = z.object({
   id,
   name: text,
@@ -81,7 +96,7 @@ export const attachmentSchema = z
     "Arquivo invalido.",
   );
 const maintenanceContractEventSchema = z.object({
-  status: z.enum(["Ativo", "Suspenso", "Cancelado"]),
+  status: z.enum(["Ativo", "Suspenso", "Cancelado", "Isento", "Avaliação"]),
   at: z.iso.datetime(),
   reason: z.string().trim().min(5).max(1000),
 });
@@ -103,6 +118,7 @@ export const maintenanceContractSchema = z.object({
     z.object({ kind: z.literal("Dias"), days: z.number().int().min(1).max(3650) }),
   ]),
   createdAt: z.iso.datetime(),
+  billing: contractBillingSchema.optional(),
   events: z.array(maintenanceContractEventSchema).max(1000),
 }).superRefine((contract, context) => {
   if (contract.endsOn < contract.startsOn)
@@ -205,6 +221,7 @@ export const serviceLocationSchema = z.object({
 });
 export const orderDetailsSchema = z.object({
   archived: z.boolean().default(false),
+  situation: z.enum(orderSituations).optional(),
   createdAt: z.iso.datetime().nullable().default(null),
   report: z.string().max(10000).default(""),
   externalCode: z.string().max(100).default(""),
@@ -273,6 +290,7 @@ const quoteSchema = z
     discount: money,
     notes: z.string(),
     orderId: z.string(),
+    salesOrderId: z.string().default(""),
     equipmentModels: z.array(equipmentSelectionSchema).default([]),
     approval: z
       .object({
@@ -308,6 +326,112 @@ const quoteSchema = z
     (value) => value.discount <= subtotal(value.items),
     "Desconto maior que o subtotal.",
   );
+const salesOrderItemSchema = lineSchema.extend({
+  discountPercent: z.number().int().min(0).max(10000).default(0),
+});
+export const salesOrderStatuses = ["Em aberto", "Em andamento", "Atendido", "Cancelado"] as const;
+export type SalesOrderStatus = typeof salesOrderStatuses[number];
+const legacySalesOrderStatus = (value: unknown) =>
+  value === "Rascunho" ? "Em aberto" : value === "Confirmado" ? "Atendido" : value;
+const salesOrderStatusSchema = z.preprocess(legacySalesOrderStatus, z.enum(salesOrderStatuses));
+const salesOrderEventSchema = z.object({
+  status: salesOrderStatusSchema,
+  at: z.iso.datetime(),
+  reason: z.string().trim().min(5).max(1000),
+});
+const salesOrderStockEventSchema = z.object({
+  type: z.enum(["lancamento", "estorno"]),
+  at: z.iso.datetime(),
+  reason: z.string().trim().min(5).max(1000),
+  locationId: id,
+  items: z.array(z.object({
+    lineId: id, productId: id, quantity: z.number().int().positive().max(10000),
+  })).min(1).max(200),
+});
+// Pedidos gravados antes das situações do Bling registravam a baixa de estoque como confirmação.
+function migrateLegacySalesOrder(input: unknown) {
+  if (!input || typeof input !== "object" || "stockEvents" in input) return input;
+  const order = input as { events?: unknown; items?: unknown; stockLocationId?: unknown };
+  if (!Array.isArray(order.events) || !Array.isArray(order.items)) return input;
+  const items = order.items
+    .filter((item): item is { id: string; referenceId: string; quantity: number } =>
+      Boolean(item) && typeof item === "object" && (item as { kind?: unknown }).kind === "produto")
+    .map((item) => ({ lineId: item.id, productId: item.referenceId, quantity: item.quantity }));
+  const stockEvents: unknown[] = [];
+  if (items.length) {
+    let posted = false;
+    for (const event of order.events as { status?: unknown; at?: unknown; reason?: unknown }[]) {
+      if (event?.status === "Confirmado" && !posted) {
+        stockEvents.push({ type: "lancamento", at: event.at, reason: "Estoque lançado na confirmação do pedido", locationId: order.stockLocationId, items });
+        posted = true;
+      } else if (event?.status === "Cancelado" && posted) {
+        stockEvents.push({ type: "estorno", at: event.at, reason: event.reason, locationId: order.stockLocationId, items });
+        posted = false;
+      }
+    }
+  }
+  return { ...order, stockEvents };
+}
+export const salesOrderSchema = z.preprocess(migrateLegacySalesOrder, z.object({
+  id,
+  code: text,
+  clientId: id,
+  date: day,
+  expectedOn: z.union([z.literal(""), day]).default(""),
+  status: salesOrderStatusSchema,
+  quoteId: z.string().default(""),
+  serviceOrderId: z.string().default(""),
+  stockLocationId: id,
+  seller: z.string().trim().max(160).default(""),
+  paymentTerms: z.string().trim().max(500).default(""),
+  shippingCost: money.default(0),
+  otherExpenses: money.default(0),
+  discount: money.default(0),
+  notes: z.string().max(5000).default(""),
+  internalNotes: z.string().max(5000).default(""),
+  items: z.array(salesOrderItemSchema).min(1).max(200),
+  createdAt: z.iso.datetime(),
+  events: z.array(salesOrderEventSchema).min(1).max(100),
+  stockEvents: z.array(salesOrderStockEventSchema).max(200).default([]),
+}).superRefine((order, context) => {
+  if (order.expectedOn && order.expectedOn < order.date)
+    context.addIssue({ code: "custom", path: ["expectedOn"], message: "A previsão de entrega não pode anteceder a venda." });
+  if (new Set(order.items.map((item) => item.id)).size !== order.items.length)
+    context.addIssue({ code: "custom", path: ["items"], message: "Os itens do pedido não podem se repetir." });
+  if (order.discount > order.items.reduce((sum, item) => sum + salesOrderLineTotal(item), 0))
+    context.addIssue({ code: "custom", path: ["discount"], message: "Desconto maior que o subtotal dos itens." });
+  if (order.items.some((item) => item.kind === "produto" &&
+    (!Number.isSafeInteger(item.quantity) || item.quantity <= 0)))
+    context.addIssue({ code: "custom", path: ["items"], message: "Produtos exigem quantidades inteiras positivas." });
+  let previousStatus: SalesOrderStatus = "Em aberto";
+  let previousAt = order.createdAt;
+  for (const [index, event] of order.events.entries()) {
+    const validTransition = index === 0
+      ? event.status === "Em aberto"
+      : previousStatus !== "Cancelado" && event.status !== previousStatus;
+    if (!validTransition || event.at < previousAt)
+      context.addIssue({ code: "custom", path: ["events", index], message: "Histórico de situação do pedido inválido." });
+    previousStatus = event.status;
+    previousAt = event.at;
+  }
+  if (order.events.at(-1)?.status !== order.status)
+    context.addIssue({ code: "custom", path: ["events"], message: "Situação do pedido diverge do histórico." });
+  const cancelledAt = order.status === "Cancelado" ? order.events.at(-1)!.at : undefined;
+  previousAt = order.createdAt;
+  for (const [index, event] of order.stockEvents.entries()) {
+    const previous = order.stockEvents[index - 1];
+    const expectedType = index % 2 === 0 ? "lancamento" : "estorno";
+    if (event.type !== expectedType || (index > 0 && event.at <= previousAt) || event.at < order.createdAt ||
+      (cancelledAt && event.at > cancelledAt) ||
+      new Set(event.items.map((item) => item.lineId)).size !== event.items.length ||
+      (event.type === "estorno" && (event.locationId !== previous.locationId ||
+        JSON.stringify(event.items) !== JSON.stringify(previous.items))))
+      context.addIssue({ code: "custom", path: ["stockEvents", index], message: "Histórico de estoque do pedido inválido." });
+    previousAt = event.at;
+  }
+  if (cancelledAt && order.stockEvents.at(-1)?.type === "lancamento")
+    context.addIssue({ code: "custom", path: ["stockEvents"], message: "Pedido cancelado com estoque ainda lançado." });
+}));
 const movementSchema = z.object({
   id,
   productId: id,
@@ -322,7 +446,7 @@ const movementSchema = z.object({
   averageCostBefore: money.optional(),
   averageCostAfter: money.optional(),
   source: z.object({
-    type: z.enum(["legacy", "opening", "manual", "purchase", "purchaseReturn", "consumption", "consumptionReversal", "transfer", "migration", "inventory"]),
+    type: z.enum(["legacy", "opening", "manual", "purchase", "purchaseReturn", "consumption", "consumptionReversal", "sale", "saleReversal", "transfer", "migration", "inventory"]),
     referenceId: id.optional(), lineId: id.optional(),
   }).optional(),
 }).superRefine((movement, context) => {
@@ -392,6 +516,10 @@ export const databaseSchema = z.object({
   services: z.array(serviceSchema),
   orders: z.array(orderSchema),
   quotes: z.array(quoteSchema),
+  salesOrders: z.array(salesOrderSchema).default([]),
+  outgoingInvoices: z.array(outgoingInvoiceSchema).max(100000).default([]),
+  serviceInvoices: z.array(serviceInvoiceSchema).max(100000).default([]),
+  contractCharges: z.array(contractChargeSchema).max(100000).default([]),
   maintenanceContracts: z.array(maintenanceContractSchema).max(10000).default([]),
   maintenanceEquipmentTypes: z.array(maintenanceEquipmentTypeSchema).max(1000).default([]),
   movements: z.array(movementSchema),
@@ -469,6 +597,13 @@ export type ConsumptionReversal = z.infer<typeof consumptionReversalSchema>;
 export type InventoryCount = z.infer<typeof inventoryCountSchema>;
 export type StockReservation = z.infer<typeof stockReservationSchema>;
 export type Quote = z.infer<typeof quoteSchema>;
+export type SalesOrder = z.infer<typeof salesOrderSchema>;
+export type SalesOrderItem = SalesOrder["items"][number];
+export type SalesOrderDraftInput = Pick<SalesOrder,
+  "clientId" | "date" | "expectedOn" | "quoteId" | "serviceOrderId" | "stockLocationId" |
+  "seller" | "paymentTerms" | "shippingCost" | "otherExpenses" | "discount" |
+  "notes" | "internalNotes" | "items"
+>;
 export type QuoteApprovalSnapshot = z.infer<typeof quoteApprovalSnapshotSchema>;
 export type Expense = z.infer<typeof expenseSchema>;
 export type Line = z.infer<typeof lineSchema>;
@@ -1058,6 +1193,13 @@ export const subtotal = (items: Line[]) =>
   items.reduce((sum, item) => sum + Math.round(item.quantity * item.price), 0);
 export const total = (quote: Pick<Quote, "items" | "discount">) =>
   subtotal(quote.items) - quote.discount;
+export const salesOrderLineTotal = (item: SalesOrderItem) =>
+  Math.round(Math.round(item.quantity * item.price) * (10000 - item.discountPercent) / 10000);
+export const salesOrderSubtotal = (items: SalesOrderItem[]) =>
+  items.reduce((sum, item) => sum + salesOrderLineTotal(item), 0);
+export const salesOrderTotal = (order: Pick<SalesOrder,
+  "items" | "discount" | "shippingCost" | "otherExpenses"
+>) => salesOrderSubtotal(order.items) - order.discount + order.shippingCost + order.otherExpenses;
 
 export function quoteApprovalSnapshot(quote: Quote): QuoteApprovalSnapshot {
   return quoteApprovalSnapshotSchema.parse({
@@ -1082,7 +1224,8 @@ export function changeQuoteStatus(
   const quote = data.quotes.find((record) => record.id === quoteId);
   if (!quote) throw new Error("Orçamento não encontrado.");
   if (quote.status === next) return data;
-  if (quote.orderId) throw new Error("Este orçamento já gerou uma OS.");
+  if (quote.orderId || quote.salesOrderId)
+    throw new Error("Este orçamento já foi convertido em documento comercial.");
   if (quote.status === "Aprovado")
     throw new Error("Orçamento aprovado não pode ter a situação alterada.");
   if (next === "Aprovado" && quote.expires < localDay())
@@ -1120,6 +1263,10 @@ export function emptyDatabase(
     services: [],
     orders: [],
     quotes: [],
+    salesOrders: [],
+    outgoingInvoices: [],
+    serviceInvoices: [],
+    contractCharges: [],
     maintenanceContracts: [],
     maintenanceEquipmentTypes: [],
     movements: [],
@@ -1162,7 +1309,13 @@ export function validateMobileDatabase(input: unknown): Database {
 function validateDatabaseDocument(input: unknown, scope: "company" | "mobile"): Database {
   let data = databaseSchema.parse(input);
   if (!data.inventory) data = migrateInventory(data);
-  validateFinance(data.finance, new Set(data.clients.map((item) => item.id)), new Map(data.orders.map((item) => [item.id, item.clientId])));
+  validateFinance(data.finance, new Set(data.clients.map((item) => item.id)), new Map([
+    ...data.orders.map((item) => [item.id, item.clientId] as const),
+    ...data.salesOrders.map((item) => [item.id, item.clientId] as const),
+  ]));
+  if (data.salesOrders.some((order) => order.status === "Cancelado" && data.finance.invoices.some((invoice) =>
+    !invoice.canceled && invoice.orders.some((item) => item.orderId === order.id))))
+    throw new Error("Pedido de venda cancelado com contas ativas.");
   for (const collection of [
     data.clients,
     data.equipment,
@@ -1172,6 +1325,10 @@ function validateDatabaseDocument(input: unknown, scope: "company" | "mobile"): 
     data.services,
     data.orders,
     data.quotes,
+    data.salesOrders,
+    data.outgoingInvoices,
+    data.serviceInvoices,
+    data.contractCharges,
     data.maintenanceContracts,
     data.maintenanceEquipmentTypes,
     data.movements,
@@ -1253,10 +1410,33 @@ function validateDatabaseDocument(input: unknown, scope: "company" | "mobile"): 
             !(item.kind === "produto" ? data.products : data.services).some(
               (record) => record.id === item.referenceId,
             ),
-        ),
+        ) ||
+        (quote.salesOrderId &&
+          !data.salesOrders.some((order) =>
+            order.id === quote.salesOrderId && order.quoteId === quote.id &&
+            order.clientId === quote.clientId)),
     )
   )
     throw new Error("Orcamento com referencias invalidas.");
+  if (
+    data.salesOrders.some((order) =>
+      !hasClient(order.clientId) ||
+      (order.serviceOrderId && !data.orders.some((serviceOrder) =>
+        serviceOrder.id === order.serviceOrderId && serviceOrder.clientId === order.clientId)) ||
+      (order.quoteId && !data.quotes.some((quote) =>
+        quote.id === order.quoteId && quote.salesOrderId === order.id &&
+        quote.clientId === order.clientId && quote.status === "Aprovado")) ||
+      !data.inventory!.locations.some((location) => location.id === order.stockLocationId) ||
+      order.items.some((item) =>
+        !(item.kind === "produto" ? data.products : data.services).some((record) =>
+          record.id === item.referenceId))
+    )
+  )
+    throw new Error("Pedido de venda com referencias invalidas.");
+  if (new Set(data.salesOrders.filter((order) => order.quoteId).map((order) => order.quoteId)).size !==
+    data.salesOrders.filter((order) => order.quoteId).length)
+    throw new Error("Um orçamento não pode ser convertido em mais de um pedido de venda.");
+  validateOutgoingInvoices(data);
   if (
     data.movements.some(
       (record) =>
@@ -1265,7 +1445,7 @@ function validateDatabaseDocument(input: unknown, scope: "company" | "mobile"): 
   )
     throw new Error("Movimentacao sem produto valido.");
   validateInventory(data);
-  for (const collection of [data.orders, data.quotes]) {
+  for (const collection of [data.orders, data.quotes, data.salesOrders]) {
     if (
       new Set(collection.map((record) => record.code)).size !==
       collection.length
@@ -1276,6 +1456,82 @@ function validateDatabaseDocument(input: unknown, scope: "company" | "mobile"): 
 }
 
 const defaultStockLocationId = "stock-location:principal";
+function validateOutgoingInvoices(data: Database) {
+  const numbers = new Set<string>();
+  for (const invoice of data.outgoingInvoices) {
+    const key = `${Number(invoice.series)}:${invoice.number}`;
+    if (numbers.has(key)) throw new Error("Número de nota fiscal repetido na mesma série.");
+    numbers.add(key);
+    const order = invoice.salesOrderId ? data.salesOrders.find((item) => item.id === invoice.salesOrderId) : undefined;
+    if (invoice.salesOrderId && (!order || (invoice.recipient.clientId && order.clientId !== invoice.recipient.clientId)))
+      throw new Error("Nota fiscal com pedido de venda inválido.");
+    if (invoice.recipient.clientId && !data.clients.some((client) => client.id === invoice.recipient.clientId))
+      throw new Error("Nota fiscal com destinatário inválido.");
+    if (invoice.invoiceId) {
+      const billing = data.finance.invoices.find((item) => item.id === invoice.invoiceId);
+      if (!billing || billing.kind !== "Produtos" || !invoice.salesOrderId ||
+        !billing.orders.some((item) => item.orderId === invoice.salesOrderId))
+        throw new Error("Nota fiscal vinculada a faturamento inválido.");
+    }
+    if (invoice.entryIds.some((entryId) => !data.finance.entries.some((entry) =>
+      entry.id === entryId && entry.kind === "Receber" && !entry.invoiceId)))
+      throw new Error("Nota fiscal vinculada a contas inválidas.");
+  }
+  const linkedEntries = data.outgoingInvoices.flatMap((invoice) => invoice.entryIds);
+  if (new Set(linkedEntries).size !== linkedEntries.length)
+    throw new Error("Conta a receber vinculada a mais de uma nota fiscal.");
+  validateServiceInvoices(data);
+  validateContractCharges(data);
+}
+
+function validateServiceInvoices(data: Database) {
+  const numbers = new Set<string>();
+  for (const invoice of data.serviceInvoices) {
+    const key = `${invoice.rpsSeries.toUpperCase()}:${invoice.rpsNumber}`;
+    if (numbers.has(key)) throw new Error("Número de RPS repetido na mesma série.");
+    numbers.add(key);
+    if (invoice.recipient.clientId && !data.clients.some((client) => client.id === invoice.recipient.clientId))
+      throw new Error("Nota de serviço com cliente inválido.");
+    if (invoice.salesOrderId && !data.salesOrders.some((order) => order.id === invoice.salesOrderId))
+      throw new Error("Nota de serviço com pedido de venda inválido.");
+    if (invoice.serviceOrderId && !data.orders.some((order) => order.id === invoice.serviceOrderId))
+      throw new Error("Nota de serviço com ordem de serviço inválida.");
+    if (invoice.contractChargeId && !data.contractCharges.some((charge) => charge.id === invoice.contractChargeId))
+      throw new Error("Nota de serviço com cobrança de contrato inválida.");
+    if (invoice.invoiceId) {
+      const billing = data.finance.invoices.find((item) => item.id === invoice.invoiceId);
+      if (!billing || billing.kind === "Produtos")
+        throw new Error("Nota de serviço vinculada a faturamento inválido.");
+    }
+    if (invoice.entryIds.some((entryId) => !data.finance.entries.some((entry) =>
+      entry.id === entryId && entry.kind === "Receber" && !entry.invoiceId)))
+      throw new Error("Nota de serviço vinculada a contas inválidas.");
+  }
+  const outgoing = new Set(data.outgoingInvoices.flatMap((invoice) => invoice.entryIds));
+  const linked = data.serviceInvoices.filter((invoice) => invoice.status !== "Cancelada").flatMap((invoice) => invoice.entryIds);
+  if (new Set(linked).size !== linked.length || linked.some((entryId) => outgoing.has(entryId)))
+    throw new Error("Conta a receber vinculada a mais de uma nota fiscal.");
+}
+
+function validateContractCharges(data: Database) {
+  const periods = new Set<string>();
+  for (const charge of data.contractCharges) {
+    const key = `${charge.contractId}:${charge.period}`;
+    if (periods.has(key)) throw new Error("Cobrança de contrato repetida no mesmo mês.");
+    periods.add(key);
+    if (!data.maintenanceContracts.some((contract) => contract.id === charge.contractId))
+      throw new Error("Cobrança vinculada a contrato inválido.");
+    if (!data.clients.some((client) => client.id === charge.clientId))
+      throw new Error("Cobrança de contrato com cliente inválido.");
+    if (!data.finance.entries.some((entry) => entry.id === charge.entryId && entry.kind === "Receber"))
+      throw new Error("Cobrança de contrato sem conta a receber.");
+    if (charge.serviceInvoiceId && !data.serviceInvoices.some((invoice) => invoice.id === charge.serviceInvoiceId))
+      throw new Error("Cobrança de contrato com nota de serviço inválida.");
+    if (charge.serviceOrderId && !data.orders.some((order) => order.id === charge.serviceOrderId))
+      throw new Error("Cobrança de contrato com ordem de serviço inválida.");
+  }
+}
+
 function migrateInventory(data: Database): Database {
   const location = { id: defaultStockLocationId, name: "Principal", active: true };
   const movements = data.movements.map((movement) => ({
@@ -1375,6 +1631,7 @@ function validateInventory(data: Database) {
   const purchaseMovements = new Set<string>(), purchaseReturnMovements = new Set<string>();
   const consumptionMovements = new Set<string>();
   const reversalMovements = new Set<string>();
+  const salesMovements = new Set<string>();
   const inventoryMovements = new Map<string, StockMovement>();
   const costMovements = new Map<string, StockMovement>();
   for (const movement of data.movements) {
@@ -1442,6 +1699,19 @@ function validateInventory(data: Database) {
         movement.averageCostAfter !== movement.averageCostBefore || reversalMovements.has(reference))
         throw new Error("Reposição de peça sem vínculo único com estorno de consumo da OS.");
       reversalMovements.add(reference);
+    } else if (movement.source?.type === "sale" || movement.source?.type === "saleReversal") {
+      const type = movement.source.type === "sale" ? "lancamento" : "estorno";
+      const order = data.salesOrders.find((item) => item.id === movement.source!.referenceId);
+      const event = order?.stockEvents.find((item) => item.type === type && item.at === movement.at);
+      const line = event?.items.find((item) => item.lineId === movement.source!.lineId);
+      const reference = `${order?.id}:${type}:${movement.at}:${movement.source.lineId}`;
+      if (!order || !event || !line || line.productId !== movement.productId ||
+        event.locationId !== movement.locationId ||
+        movement.delta !== (type === "lancamento" ? -line.quantity : line.quantity) || salesMovements.has(reference))
+        throw new Error(type === "lancamento"
+          ? "Baixa de estoque sem vínculo único com lançamento do pedido de venda."
+          : "Estorno de venda sem vínculo único com estorno de estoque do pedido.");
+      salesMovements.add(reference);
     } else if (movement.source?.type === "inventory") {
       const reference = movement.source.referenceId;
       if (!reference || inventoryMovements.has(reference))
@@ -1454,6 +1724,11 @@ function validateInventory(data: Database) {
     if (movement.averageCostAfter !== undefined && !costMovements.has(movement.productId))
       costMovements.set(movement.productId, movement);
   }
+  for (const order of data.salesOrders)
+    for (const event of order.stockEvents)
+      for (const line of event.items)
+        if (!salesMovements.has(`${order.id}:${event.type}:${event.at}:${line.lineId}`))
+          throw new Error("Movimentações de estoque do pedido de venda estão incompletas.");
   for (const product of data.products) {
     const latestCost = costMovements.get(product.id);
     if (latestCost && product.cost !== latestCost.averageCostAfter)
@@ -1882,6 +2157,8 @@ export function changeOrderStatus(
         ? {
             ...record,
             status: next,
+            ...(record.details?.situation && !situationBelongs(record.details.situation, next)
+              ? { details: { ...record.details, situation: undefined } } : {}),
             history: [
               ...record.history,
               {
@@ -1893,6 +2170,34 @@ export function changeOrderStatus(
           }
         : record,
     ),
+  });
+}
+
+export function orderSituationStatus(situation: OrderSituation): OrderStatus {
+  return (Object.keys(orderSituationGroups) as OrderStatus[])
+    .find((key) => situationBelongs(situation, key))!;
+}
+function situationBelongs(situation: OrderSituation, status: OrderStatus) {
+  return (orderSituationGroups[status] as readonly string[]).includes(situation);
+}
+/** Situação exibida da OS; se o status mudou por fora (ex.: app do técnico), usa a situação padrão do status. */
+export function orderSituation(order: Pick<Order, "status" | "details">): OrderSituation {
+  const saved = order.details?.situation;
+  return saved && situationBelongs(saved, order.status) ? saved : orderSituationGroups[order.status][0];
+}
+export function changeOrderSituation(data: Database, orderId: string, next: OrderSituation): Database {
+  const order = data.orders.find((record) => record.id === orderId);
+  if (!order) throw new Error("OS nao encontrada.");
+  const previous = orderSituation(order);
+  if (previous === next) return data;
+  const result = changeOrderStatus(data, orderId, orderSituationStatus(next));
+  return validateDatabase({
+    ...result,
+    orders: result.orders.map((record) => record.id === orderId ? {
+      ...record,
+      details: { ...getOrderDetails(record), situation: next },
+      history: [...record.history, { id: makeId(), at: new Date().toISOString(), description: `Situação: ${previous} -> ${next}` }],
+    } : record),
   });
 }
 
@@ -1950,6 +2255,209 @@ export function convertQuote(data: Database, quoteId: string): Database {
     quotes: data.quotes.map((record) =>
       record.id === quoteId ? { ...record, orderId } : record,
     ),
+  });
+}
+
+export const salesOrderStockPosted = (order: Pick<SalesOrder, "stockEvents">) =>
+  order.stockEvents.at(-1)?.type === "lancamento";
+export const salesOrderHasActiveInvoices = (data: Database, orderId: string) =>
+  data.finance.invoices.some((invoice) => !invoice.canceled && invoice.orders.some((item) => item.orderId === orderId));
+export function salesOrderEditable(data: Database, order: SalesOrder) {
+  return (order.status === "Em aberto" || order.status === "Em andamento") &&
+    !salesOrderStockPosted(order) && !salesOrderHasActiveInvoices(data, order.id);
+}
+function salesOrderEventAt(order: SalesOrder) {
+  const now = new Date().toISOString();
+  const latest = [order.events.at(-1)?.at ?? "", order.stockEvents.at(-1)?.at ?? ""].sort().at(-1)!;
+  return now > latest ? now : new Date(new Date(latest).getTime() + 1).toISOString();
+}
+function findSalesOrder(data: Database, orderId: string) {
+  const order = data.salesOrders.find((item) => item.id === orderId);
+  if (!order) throw new Error("Pedido de venda não encontrado.");
+  return order;
+}
+
+export function saveSalesOrderDraft(data: Database, input: SalesOrderDraftInput, orderId?: string): Database {
+  const existing = orderId ? data.salesOrders.find((item) => item.id === orderId) : undefined;
+  if (orderId && !existing) throw new Error("Pedido de venda não encontrado.");
+  if (existing && !salesOrderEditable(data, existing))
+    throw new Error("Somente pedidos em aberto ou em andamento, sem estoque lançado e sem contas, podem ser editados.");
+  if (existing?.quoteId && existing.quoteId !== input.quoteId)
+    throw new Error("O vínculo com o orçamento de origem não pode ser alterado.");
+  const quote = input.quoteId ? data.quotes.find((item) => item.id === input.quoteId) : undefined;
+  if (input.quoteId && (!quote || quote.status !== "Aprovado"))
+    throw new Error("Somente um orçamento aprovado pode gerar pedido de venda.");
+  if (quote?.salesOrderId && quote.salesOrderId !== existing?.id)
+    throw new Error("Este orçamento já foi convertido em pedido de venda.");
+  if (quote && quote.clientId !== input.clientId)
+    throw new Error("O cliente do pedido deve corresponder ao orçamento de origem.");
+  const createdAt = existing?.createdAt ?? new Date().toISOString();
+  const candidate = salesOrderSchema.parse({
+    ...input,
+    id: existing?.id ?? makeId(),
+    code: existing?.code ?? nextCode(data.salesOrders, "PV"),
+    status: existing?.status ?? "Em aberto",
+    createdAt,
+    events: existing?.events ?? [{
+      status: "Em aberto", at: createdAt, reason: "Pedido de venda criado",
+    }],
+    stockEvents: existing?.stockEvents ?? [],
+  });
+  return validateDatabase({
+    ...data,
+    salesOrders: existing
+      ? data.salesOrders.map((item) => item.id === existing.id ? candidate : item)
+      : [...data.salesOrders, candidate],
+    quotes: quote
+      ? data.quotes.map((item) => item.id === quote.id ? { ...item, salesOrderId: candidate.id } : item)
+      : data.quotes,
+  });
+}
+
+export function convertQuoteToSalesOrder(data: Database, quoteId: string): Database {
+  const quote = data.quotes.find((item) => item.id === quoteId);
+  if (!quote) throw new Error("Orçamento não encontrado.");
+  if (quote.status !== "Aprovado")
+    throw new Error("Aprove o orçamento antes de gerar o pedido de venda.");
+  if (quote.salesOrderId)
+    throw new Error("Este orçamento já possui um pedido de venda.");
+  return saveSalesOrderDraft(data, {
+    clientId: quote.clientId,
+    date: localDay(),
+    expectedOn: "",
+    quoteId: quote.id,
+    serviceOrderId: "",
+    stockLocationId: data.inventory!.defaultLocationId,
+    seller: "",
+    paymentTerms: "",
+    shippingCost: 0,
+    otherExpenses: 0,
+    discount: quote.discount,
+    notes: quote.notes,
+    internalNotes: "",
+    items: quote.items.map((item) => ({ ...item, discountPercent: 0 })),
+  });
+}
+
+export function postSalesOrderStock(data: Database, orderId: string): Database {
+  const order = findSalesOrder(data, orderId);
+  if (order.status === "Cancelado") throw new Error("Pedidos cancelados não movimentam estoque.");
+  if (salesOrderStockPosted(order)) throw new Error("O estoque deste pedido já foi lançado.");
+  const location = data.inventory!.locations.find((item) =>
+    item.id === order.stockLocationId && item.active);
+  if (!location) throw new Error("Ative ou selecione um depósito antes de lançar o estoque.");
+  const productLines = order.items.filter((item) => item.kind === "produto");
+  if (!productLines.length) throw new Error("O pedido não possui produtos para lançar no estoque.");
+  for (const line of productLines) {
+    const product = data.products.find((item) => item.id === line.referenceId);
+    if (!product) throw new Error("O pedido contém um produto que não existe no catálogo.");
+    const required = productLines.filter((item) => item.referenceId === product.id)
+      .reduce((sum, item) => sum + item.quantity, 0);
+    if (stockAvailable(data, product.id, location.id) < required)
+      throw new Error(`Estoque disponível insuficiente para ${product.name} (${required}) em ${location.name}.`);
+  }
+  const at = salesOrderEventAt(order);
+  let result: Database = {
+    ...data,
+    salesOrders: data.salesOrders.map((item) => item.id === orderId
+      ? { ...item, stockEvents: [...item.stockEvents, {
+        type: "lancamento", at, reason: `Estoque lançado - Depósito: ${location.name}`, locationId: location.id,
+        items: productLines.map((line) => ({ lineId: line.id, productId: line.referenceId, quantity: line.quantity })),
+      }] }
+      : item),
+  };
+  for (const line of productLines)
+    result = appendStockMovement(result, line.referenceId, location.id, -line.quantity,
+      `Baixa do pedido de venda ${order.code}`, { type: "sale", referenceId: order.id, lineId: line.id }, at);
+  return validateDatabase(result);
+}
+
+function appendSalesOrderStockReversal(data: Database, order: SalesOrder, reason: string, at: string): Database {
+  const posted = order.stockEvents.at(-1);
+  if (!posted || posted.type !== "lancamento") throw new Error("Este pedido não possui estoque lançado.");
+  let result: Database = {
+    ...data,
+    salesOrders: data.salesOrders.map((item) => item.id === order.id
+      ? { ...item, stockEvents: [...item.stockEvents, { ...posted, type: "estorno", at, reason }] }
+      : item),
+  };
+  for (const line of posted.items)
+    result = appendStockMovement(result, line.productId, posted.locationId, line.quantity,
+      `Estorno do pedido de venda ${order.code}: ${reason}`,
+      { type: "saleReversal", referenceId: order.id, lineId: line.lineId }, at);
+  return result;
+}
+
+export function reverseSalesOrderStock(data: Database, orderId: string): Database {
+  const order = findSalesOrder(data, orderId);
+  return validateDatabase(appendSalesOrderStockReversal(data, order, "Estoque estornado", salesOrderEventAt(order)));
+}
+
+export function changeSalesOrderStatus(data: Database, orderId: string, status: Exclude<SalesOrderStatus, "Cancelado">): Database {
+  const order = findSalesOrder(data, orderId);
+  if (order.status === "Cancelado") throw new Error("Pedidos cancelados não podem mudar de situação.");
+  if (order.status === status) throw new Error(`O pedido já está ${status.toLocaleLowerCase("pt-BR")}.`);
+  const at = salesOrderEventAt(order);
+  return validateDatabase({
+    ...data,
+    salesOrders: data.salesOrders.map((item) => item.id === orderId
+      ? { ...item, status, events: [...item.events, { status, at, reason: `Situação alterada para ${status}` }] }
+      : item),
+  });
+}
+
+export function cancelSalesOrder(data: Database, orderId: string, reason: string): Database {
+  const order = findSalesOrder(data, orderId);
+  if (order.status === "Cancelado") throw new Error("Este pedido já está cancelado.");
+  const justification = reason.trim();
+  if (justification.length < 5 || justification.length > 1000)
+    throw new Error("Informe um motivo de cancelamento com pelo menos 5 caracteres.");
+  if (salesOrderHasActiveInvoices(data, orderId))
+    throw new Error("Estorne as contas do pedido antes de cancelá-lo.");
+  const at = salesOrderEventAt(order);
+  let result: Database = salesOrderStockPosted(order)
+    ? appendSalesOrderStockReversal(data, order, justification, at)
+    : data;
+  result = {
+    ...result,
+    salesOrders: result.salesOrders.map((item) => item.id === orderId
+      ? { ...item, status: "Cancelado", events: [...item.events, { status: "Cancelado", at, reason: justification }] }
+      : item),
+  };
+  return validateDatabase(result);
+}
+
+export function createServiceOrderFromSalesOrder(data: Database, salesOrderId: string): Database {
+  const salesOrder = findSalesOrder(data, salesOrderId);
+  if (salesOrder.status === "Cancelado") throw new Error("Pedidos cancelados não geram ordem de serviço.");
+  if (salesOrder.serviceOrderId) throw new Error("Este pedido já está vinculado a uma ordem de serviço.");
+  const at = new Date().toISOString();
+  const order: Order = {
+    id: makeId(),
+    code: nextCode(data.orders, "OS"),
+    clientId: salesOrder.clientId,
+    equipmentId: "",
+    title: `Atendimento do pedido de venda ${salesOrder.code}`,
+    technician: data.settings.technician,
+    technicianUserId: "",
+    date: localDay(),
+    time: "09:00",
+    duration: 60,
+    type: "Corretiva",
+    priority: "Media",
+    status: "Aberta",
+    details: orderDetailsSchema.parse({ createdAt: at, ...defaultQuestionnaires(data, "Corretiva") }),
+    notes: [
+      salesOrder.notes,
+      salesOrder.items.map((item) => `${item.quantity} x ${item.name}: ${currency(salesOrderLineTotal(item))}`).join("\n"),
+      `Total do pedido: ${currency(salesOrderTotal(salesOrder))}`,
+    ].filter(Boolean).join("\n\n"),
+    history: [{ id: makeId(), at, description: `Criada a partir do pedido de venda ${salesOrder.code}` }],
+  };
+  return validateDatabase({
+    ...data,
+    orders: [...data.orders, order],
+    salesOrders: data.salesOrders.map((item) => item.id === salesOrderId ? { ...item, serviceOrderId: order.id } : item),
   });
 }
 
@@ -2158,6 +2666,7 @@ export function demoDatabase(): Database {
       discount: 0,
       notes: "Pagamento a combinar. Pecas e mao de obra inclusas.",
       orderId: "",
+      salesOrderId: "",
       equipmentModels: [],
     },
   ];

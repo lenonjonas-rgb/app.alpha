@@ -3,6 +3,7 @@ import {
   getOrderDetails,
   localDay,
   orderPending,
+  orderSituation,
   orderValues,
 } from "./domain";
 import type { Database, Expense, Order } from "./domain";
@@ -57,7 +58,8 @@ export function filterOrders(data: Database, filters: ReportFilters): Order[] {
         (!filters.to || order.date <= filters.to) &&
         (!filters.clientId || order.clientId === filters.clientId) &&
         (!filters.technician || order.technician === filters.technician) &&
-        (!filters.status || order.status === filters.status) &&
+        (!filters.status || (filters.status.startsWith("situacao:")
+          ? orderSituation(order) === filters.status.slice(9) : order.status === filters.status)) &&
         (!query ||
           terms.some((term) =>
             term.toLocaleLowerCase("pt-BR").includes(query),

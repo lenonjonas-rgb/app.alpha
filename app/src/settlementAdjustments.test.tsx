@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { demoDatabase, localDay, validateDatabase } from "./domain";
 import { entryBalance, entryStatus, reverseSettlement, saveBankAccount, saveFinanceEntry, settleFinanceEntry } from "./finance";
 import { financeSettlementSchema, settlementCashAmount } from "./financeSchema";
-import { activeBankMatch, banking, importStatement, matchBankSettlement, settlementCandidates } from "./bankReconciliation";
+import { activeBankMatch, banking, importStatement, matchBankSettlement, matchBankSettlementGroup, settlementCandidates } from "./bankReconciliation";
 import { managementCsv, managementReport } from "./financeManagement";
 import { saveFinanceInstallments } from "./financeInstallments";
 import { FinancePanel } from "./FinancePanel";
@@ -93,6 +93,28 @@ describe("ajustes manuais na baixa", () => {
     expect(entryBalance(reversed.finance.entries[0])).toBe(10000);
     expect(managementReport(reversed, filter).totals).toMatchObject({ received: 0, expectedReceipts: 10000 });
     expect(managementReport(reversed, filter).positions[0].balance).toBe(0);
+  });
+  it("concilia grupo pelo caixa efetivo das baixas ajustadas, não pelo principal", () => {
+    let data = fixture();
+    data.finance.entries[0].amount = 4000;
+    data = saveFinanceEntry(data, { ...data.finance.entries[0], id: "entry-extra", amount: 6000, settlements: [] });
+    data = settleFinanceEntry(data, "entry", { ...settlement, amount: 4000 }, true);
+    data = settleFinanceEntry(data, "entry-extra", { ...settlement, id: "payment-extra", amount: 6000,
+      adjustment: undefined }, true);
+    data = importStatement(data, "bank", { format: "CSV", bank: "", account: "", lines: [
+      { externalId: "adjusted-group", date: today, amount: 10700, description: "Recebimento agrupado com juros" },
+    ] }, "ajustes.csv", true);
+    const transaction = banking(data).transactions[0];
+    const settlements = [{ entryId: "entry", settlementId: "payment" },
+      { entryId: "entry-extra", settlementId: "payment-extra" }];
+
+    expect(() => matchBankSettlementGroup(data, [transaction.id], settlements, false)).toThrow("Confirme");
+    expect(() => matchBankSettlementGroup(data, [transaction.id], settlements, true)).not.toThrow();
+
+    const principalMismatch = structuredClone(data);
+    principalMismatch.finance.entries[0].settlements[0].adjustment!.interest = 0;
+    principalMismatch.finance.entries[0].settlements[0].adjustment!.fine = 0;
+    expect(() => matchBankSettlementGroup(principalMismatch, [transaction.id], settlements, true)).toThrow("exatamente");
   });
   it("CSV e interface discriminam principal/juros/multa/desconto sem somar ajustes duas vezes", () => {
     const data = settleFinanceEntry(fixture(), "entry", settlement, true);

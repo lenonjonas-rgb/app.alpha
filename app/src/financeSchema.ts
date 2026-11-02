@@ -263,9 +263,11 @@ export function validateFinance(finance: Finance, clientIds: Set<string>, orderC
         item.amount !== (invoice.kind === "Produtos" ? item.allocation.products : item.allocation.services))))
       throw new Error("Faturamento com referências ou total inválidos.");
     const entries = finance.entries.filter((item) => item.invoiceId === invoice.id);
-    if (entries.length !== 1 || entries[0].kind !== "Receber" || entries[0].clientId !== invoice.clientId ||
-      entries[0].amount !== invoice.amount || entries[0].canceled !== invoice.canceled ||
-      (invoice.kind !== "Legado" && entries[0].paymentMethod !== "Boleto" && entries[0].paymentMethod !== "Pix"))
+    // Faturamentos de produtos gerados pela NF-e podem ser parcelados; os demais mantêm uma única conta.
+    if (!entries.length || (entries.length > 1 && invoice.kind !== "Produtos") || entries.length > 120 ||
+      entries.reduce((sum, entry) => sum + entry.amount, 0) !== invoice.amount ||
+      entries.some((entry) => entry.kind !== "Receber" || entry.clientId !== invoice.clientId || entry.canceled !== invoice.canceled ||
+        (invoice.kind !== "Legado" && entry.paymentMethod !== "Boleto" && entry.paymentMethod !== "Pix")))
       throw new Error("Faturamento sem conta a receber correspondente.");
     if (!invoice.canceled) for (const item of invoice.orders) {
       const kinds = billed.get(item.orderId) ?? [];

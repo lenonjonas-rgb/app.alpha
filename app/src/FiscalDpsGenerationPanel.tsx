@@ -6,9 +6,9 @@ import { generatedDpsResponseSchema, dpsGenerationFromForm } from "./fiscalDpsGe
 import type { FiscalNumberingRecord } from "./fiscalNumberingSchema";
 import type { FiscalCatalogItem } from "./fiscalCatalogSchema";
 
-export function FiscalDpsGenerationPanel({ data, catalog, numbering, busy, certificateReady, schemaReady, act }: {
+export function FiscalDpsGenerationPanel({ data, catalog, numbering, busy, certificateReady, schemaReady, act, initialInvoiceId = "" }: {
   data: Database; catalog: FiscalCatalogItem[]; numbering: FiscalNumberingRecord[]; busy: boolean; certificateReady: boolean; schemaReady: boolean;
-  act: (operation: () => Promise<void>, success: string) => Promise<void>;
+  act: (operation: () => Promise<void>, success: string) => Promise<void>; initialInvoiceId?: string;
 }) {
   const [series, setSeries] = useState("");
   const counter = numbering.find((item) => item.environment === "homologacao" && String(item.series) === series);
@@ -24,7 +24,7 @@ export function FiscalDpsGenerationPanel({ data, catalog, numbering, busy, certi
         generatedDpsResponseSchema.parse(await (await fiscalRequest("/documents/generate-dps", "POST", dpsGenerationFromForm(form))).json());
       }, "DPS gerada em homologação, número local consumido. Nenhuma transmissão, NFS-e autorizada ou cobrança bancária realizada.");
     }}><fieldset disabled={busy || !certificateReady || !schemaReady}><legend>Dados da DPS de teste</legend><div className="form-grid">
-      <label className="field">Faturamento de serviços<select name="invoiceId" required defaultValue=""><option value="">Selecione</option>
+      <label className="field">Faturamento de serviços      <select name="invoiceId" required defaultValue={initialInvoiceId}><option value="">Selecione</option>
         {data.finance.invoices.filter((invoice) => !invoice.canceled && invoice.kind === "Serviços").map((invoice) =>
           <option key={invoice.id} value={invoice.id}>{invoice.clientName} · {currency(invoice.amount)} · {invoice.orders.map((order) => order.code).join(", ")}</option>)}
       </select></label>

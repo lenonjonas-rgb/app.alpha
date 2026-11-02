@@ -19,3 +19,7 @@ export function loginEmail(login: string): string {
 export function displayLogin(email: string): string {
   return email.endsWith("@users.aupha.invalid") ? email.slice(0, -"@users.aupha.invalid".length) : email;
 }
+
+export function quoteApprovalActor(userId: string | null, login: string) {
+  return { userId: userId ?? "local", name: login.trim() || userId || "Usuário local" };
+}

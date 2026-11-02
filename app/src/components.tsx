@@ -61,13 +61,13 @@ export function Empty({
 }
 
 export function Badge({ value }: { value: string }) {
-  const color = ["Finalizada", "Aprovado", "Ativo"].includes(value)
+  const color = ["Finalizada", "Aprovado", "Ativo", "Aprovada", "Serviço concluído"].includes(value)
     ? "green"
-    : ["Alta", "Recusado", "Sem estoque", "Inativo"].includes(value)
+    : ["Alta", "Recusado", "Cancelado", "Sem estoque", "Inativo", "Não aprovada", "Finalizada sem conserto"].includes(value)
       ? "red"
-      : ["Em atendimento", "Enviado"].includes(value)
+      : ["Em atendimento", "Enviado", "Em andamento", "Orçada"].includes(value)
         ? "blue"
-        : ["Pausada", "Estoque baixo"].includes(value)
+        : ["Pausada", "Estoque baixo", "Aguardando componentes"].includes(value)
           ? "amber"
           : "neutral";
   return (

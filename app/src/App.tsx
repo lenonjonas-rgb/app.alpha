@@ -16,13 +16,16 @@ import {
   ClipboardCheck,
   CircleCheck,
   Clock3,
+  Copy,
   FileText,
   LayoutList,
   Menu,
+  MoreVertical,
   Package,
   Pencil,
   Plus,
   Printer,
+  Receipt,
   Search,
   Settings,
   ShieldCheck,
@@ -34,12 +37,16 @@ import {
   X,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
-import type { Database, Order, OrderStatus, Quote } from "./domain";
+import type { Database, Order, OrderSituation, OrderStatus, Quote } from "./domain";
 import {
+  changeOrderSituation,
   changeOrderStatus,
+  orderSituation,
+  orderSituationGroups,
   changeQuoteStatus,
   countStock,
   convertQuote,
+  convertQuoteToSalesOrder,
   currency,
   stockAvailable,
   stockLocationBalance,
@@ -48,6 +55,7 @@ import {
   displayDate,
   getOrderDetails,
   orderServiceAddress,
+  replicateOrder,
   initials,
   localDay,
   moveStock,
@@ -59,6 +67,7 @@ import {
 import { downloadFile, errorMessage, useDatabase } from "./useDatabase";
 import { Badge, Empty, Modal } from "./components";
 import { DropdownMenu } from "./DropdownMenu";
+import type { DropdownAction } from "./DropdownMenu";
 import { GroupedNavigation } from "./GroupedNavigation";
 import { EditorModal, InventoryCountModal, MovementModal } from "./Forms";
 import type { Editor, FormKind } from "./Forms";
@@ -71,9 +80,10 @@ import { TravelSettings } from "./TravelSettings";
 import { QuestionnaireCatalog } from "./QuestionnaireCatalog";
 import { EquipmentBrandCatalog } from "./EquipmentBrandCatalog";
 import { EquipmentSelectionSummary } from "./EquipmentModelPicker";
+import { QuoteTable } from "./QuoteTable";
 import { ClientEquipment } from "./ClientEquipment";
 import { maintenanceVisitAlerts } from "./maintenanceContracts";
-import { roleLabels } from "./userAccess";
+import { quoteApprovalActor, roleLabels } from "./userAccess";
 import type { CompanyRole } from "./userAccess";
 import { formatCnpj, isValidCnpj, lookupCompanyByCnpj, normalizeCnpj } from "./cnpj";
 import type { CompanyRegistration } from "./cnpj";
@@ -85,8 +95,8 @@ const ReportsPanel = lazy(() =>
 const FinancePanel = lazy(() =>
   import("./FinancePanel").then((module) => ({ default: module.FinancePanel })),
 );
-const MaintenanceContractsPanel = lazy(() =>
-  import("./MaintenanceContractsPanel").then((module) => ({ default: module.MaintenanceContractsPanel })),
+const SalesPanel = lazy(() =>
+  import("./SalesPanel").then((module) => ({ default: module.SalesPanel })),
 );
 
 type View =
@@ -94,7 +104,7 @@ type View =
   | "orders"
   | "clients"
   | "equipment"
-  | "contracts"
+  | "sales"
   | "stock"
   | "quotes"
   | "reports"
@@ -115,7 +125,7 @@ const navigation: {
     group: "Operação",
   },
   { id: "quotes", label: "Orçamentos", icon: LayoutList, group: "Operação" },
-  { id: "contracts", label: "Contratos de manutenção", icon: ClipboardCheck, group: "Operação" },
+  { id: "sales", label: "Vendas", icon: ArrowRightLeft, group: "Operação" },
   { id: "clients", label: "Clientes", icon: Users, group: "Cadastros" },
   { id: "equipment", label: "Equipamentos", icon: Wrench, group: "Cadastros" },
   { id: "questionnaires", label: "Questionários", icon: FileText, group: "Cadastros" },
@@ -146,7 +156,8 @@ function readEditorDraft(scope: string): Editor | null {
       ("time" in value && typeof value.time !== "string") ||
       ("clientId" in value && typeof value.clientId !== "string") ||
       ("equipmentId" in value && typeof value.equipmentId !== "string") ||
-      ("contractId" in value && typeof value.contractId !== "string"))
+      ("contractId" in value && typeof value.contractId !== "string") ||
+      ("presentation" in value && (value.presentation !== "proposal" || value.kind !== "quote")))
       return null;
     return { ...value, kind: value.kind as FormKind };
   } catch (error) {
@@ -159,15 +170,17 @@ function readEditorDraft(scope: string): Editor | null {
     return null;
   }
 }
-const statuses: OrderStatus[] = [
-  "Aberta",
-  "Em atendimento",
-  "Pausada",
-  "Finalizada",
-];
-const viewFromHash = () =>
-  navigation.find((item) => item.id === location.hash.slice(1).split("/")[0])
+const salesTabNames = ["orders", "proposals", "nfe", "contracts", "nfse", "charges"] as const;
+const salesTabFromHash = () => {
+  const [section, tab] = location.hash.slice(1).split("/");
+  return section === "sales" ? salesTabNames.find((item) => item === tab) : undefined;
+};
+const viewFromHash = () => {
+  // Contratos agora ficam em Vendas; mantém links antigos funcionando.
+  if (location.hash.slice(1).split("/")[0] === "contracts") history.replaceState(null, "", "#sales/contracts");
+  return navigation.find((item) => item.id === location.hash.slice(1).split("/")[0])
     ?.id ?? "agenda";
+};
 const orderFromHash = () => {
   if (!location.hash.startsWith("#orders/")) return null;
   try {
@@ -311,13 +324,25 @@ export default function App() {
   const [detail, setDetail] = useState<{
     kind: "order" | "quote";
     id: string;
+    presentation?: "proposal";
   } | null>(null);
   const [notice, setNotice] = useState("");
+  const [salesStart, setSalesStart] = useState<{ tab: "nfe" | "nfse"; serviceOrderId: string; nonce: number } | null>(null);
+  const [printRequest, setPrintRequest] = useState<{ id: string; technician: boolean } | null>(null);
   const [error, setError] = useState("");
   const calendar = useRef<FullCalendar>(null);
   useEffect(() => {
+    if (!printRequest) return;
+    const timer = window.setTimeout(() => {
+      window.print();
+      setPrintRequest(null);
+    }, 50);
+    return () => window.clearTimeout(timer);
+  }, [printRequest]);
+  useEffect(() => {
     function route() {
       setView(viewFromHash());
+      if (viewFromHash() !== "sales") setSalesStart(null);
       setExpandedOrderId(orderFromHash());
       setQuery("");
       setStatusFilter("Todos");
@@ -423,7 +448,7 @@ export default function App() {
         ) &&
         (statusFilter === "Todos" ||
           statusFilter === "Arquivadas" ||
-          item.status === statusFilter) &&
+          (statusFilter.startsWith("status:") ? item.status === statusFilter.slice(7) : orderSituation(item) === statusFilter)) &&
         (!clientFilter || item.clientId === clientFilter),
     )
     .sort((first, second) =>
@@ -513,8 +538,8 @@ export default function App() {
       return false;
     }
   }
-  function openEditor(kind: FormKind, id?: string) {
-    setEditor({ kind, id });
+  function openEditor(kind: FormKind, id?: string, presentation?: "proposal") {
+    setEditor({ kind, id, ...(presentation ? { presentation } : {}) });
     setDetail(null);
   }
   function closeEditor(saved = false) {
@@ -538,10 +563,7 @@ export default function App() {
   }
   function quoteStatus(id: string, next: Quote["status"]) {
     act((current) => {
-      return changeQuoteStatus(current, id, next, {
-        userId: cloud.userId ?? "local",
-        name: cloud.email ?? cloud.userId ?? "Usuário local",
-      });
+      return changeQuoteStatus(current, id, next, quoteApprovalActor(cloud.userId, cloud.email));
     }, "Situação do orçamento atualizada.");
   }
   function orderStatus(id: string, next: OrderStatus) {
@@ -549,6 +571,50 @@ export default function App() {
       (current) => changeOrderStatus(current, id, next),
       "Situação da OS atualizada.",
     );
+  }
+  function orderSituationChange(id: string, next: OrderSituation) {
+    act((current) => changeOrderSituation(current, id, next), `Situação da OS alterada para ${next}.`);
+  }
+  function openSalesFromOrder(tab: "nfe" | "nfse", serviceOrderId: string) {
+    setDetail(null);
+    setSalesStart({ tab, serviceOrderId, nonce: Date.now() });
+    setView("sales");
+    location.hash = `sales/${tab}`;
+  }
+  function printOrder(id: string, technician: boolean) {
+    setPrintRequest({ id, technician });
+  }
+  function cloneOrder(item: Order) {
+    let copyId = "";
+    if (act((current) => {
+      const next = replicateOrder(current, item.id, localDay(), item.time);
+      copyId = next.orders.at(-1)!.id;
+      return next;
+    }, `OS ${item.code} clonada; a execução anterior não foi copiada.`) && copyId) openEditor("order", copyId);
+  }
+  function orderActions(item: Order): DropdownAction[] {
+    const current = orderSituation(item);
+    const details = getOrderDetails(item);
+    const hasServices = details.items.some((line) => line.kind === "servico") || details.costs.length > 0;
+    const hasProducts = details.items.some((line) => line.kind === "produto");
+    return [
+      { label: "Abrir OS completa", icon: FileText, onSelect: () => openFullOrder(item.id) },
+      { label: "Editar", icon: Pencil, onSelect: () => openEditor("order", item.id) },
+      { label: "Gerar nota de serviço", icon: Receipt, separatorBefore: true, disabled: !hasServices,
+        hint: hasServices ? undefined : "sem serviços", onSelect: () => openSalesFromOrder("nfse", item.id) },
+      { label: "Gerar nota fiscal", icon: FileText, disabled: !hasProducts,
+        hint: hasProducts ? undefined : "sem produtos", onSelect: () => openSalesFromOrder("nfe", item.id) },
+      { label: "Imprimir", icon: Printer, separatorBefore: true, onSelect: () => printOrder(item.id, false) },
+      { label: "Imprimir para técnico", icon: Printer, hint: "sem valores", onSelect: () => printOrder(item.id, true) },
+      { label: "Clonar", icon: Copy, onSelect: () => cloneOrder(item) },
+      { label: "Imprimir etiqueta", icon: Printer, disabled: true, hint: "em breve", onSelect: () => undefined },
+      { label: "Enviar por e-mail", icon: FileText, disabled: true, hint: "em breve", onSelect: () => undefined },
+      ...(Object.entries(orderSituationGroups) as [OrderStatus, readonly OrderSituation[]][]).flatMap(([group, situations]) =>
+        situations.filter((situation) => situation !== current).map((situation, position) => ({
+          label: situation, section: position === 0 ? `Mudar situação · ${group}` : undefined,
+          onSelect: () => orderSituationChange(item.id, situation),
+        }))),
+    ];
   }
   const newKind: FormKind =
     view === "clients"
@@ -677,17 +743,21 @@ export default function App() {
                 <Badge value={item.priority} />
               </td>
               <td>
-                <Badge value={item.status} />
+                <Badge value={orderSituation(item)} />
               </td>
               <td>
-                <button
-                  className="icon-button"
-                  title="Editar OS"
-                  aria-label={`Editar ${item.code}`}
-                  onClick={() => openEditor("order", item.id)}
-                >
-                  <Pencil size={16} />
-                </button>
+                <div className="row-actions">
+                  <button
+                    className="icon-button"
+                    title="Editar OS"
+                    aria-label={`Editar ${item.code}`}
+                    onClick={() => openEditor("order", item.id)}
+                  >
+                    <Pencil size={16} />
+                  </button>
+                  <DropdownMenu label="Mais ações" accessibleLabel={`Ações da ${item.code}`} triggerIcon={MoreVertical} compact
+                    actions={orderActions(item)} />
+                </div>
               </td>
             </tr>
           ))}
@@ -811,8 +881,6 @@ export default function App() {
                     })
                   : view === "orders"
                     ? `${activeOrders.length} atendimentos em aberto`
-                    : view === "contracts"
-                      ? `${database.maintenanceContracts.length} contratos cadastrados`
                     : view === "clients"
                       ? `${database.clients.length} clientes cadastrados`
                       : view === "equipment"
@@ -826,7 +894,7 @@ export default function App() {
                               : database.settings.company}
               </p>
             </div>
-            {view !== "settings" && view !== "reports" && view !== "questionnaires" && view !== "finance" && view !== "contracts" &&
+            {view !== "settings" && view !== "reports" && view !== "questionnaires" && view !== "finance" && view !== "sales" &&
               (view !== "stock" || stockTab === "products" || stockTab === "services") && (
               <button
                 className="button primary"
@@ -893,7 +961,7 @@ export default function App() {
               ))}
             </section>
           )}
-          {view !== "settings" && view !== "reports" && view !== "questionnaires" && view !== "finance" && view !== "contracts" && (
+          {view !== "settings" && view !== "reports" && view !== "questionnaires" && view !== "finance" && view !== "sales" && (
             <section className="module-section">
               <div className="module-toolbar">
                 <label className="search-field">
@@ -918,8 +986,11 @@ export default function App() {
                         }
                       >
                         <option value="Todos">Todas as situações</option>
-                        {statuses.map((value) => (
-                          <option key={value}>{value}</option>
+                        {(Object.entries(orderSituationGroups) as [OrderStatus, readonly OrderSituation[]][]).map(([group, situations]) => (
+                          <optgroup key={group} label={group}>
+                            <option value={`status:${group}`}>{group} (todas)</option>
+                            {situations.map((value) => <option key={value} value={value}>{value}</option>)}
+                          </optgroup>
                         ))}
                         {view === "orders" && <option>Arquivadas</option>}
                       </select>
@@ -1546,9 +1617,13 @@ export default function App() {
                                   <Badge
                                     value={item.source?.type === "inventory"
                                       ? "Inventário"
-                                      : item.source?.type === "consumptionReversal"
-                                        ? "Estorno de OS"
-                                      : item.delta > 0 ? "Entrada" : "Saída"}
+                                    : item.source?.type === "saleReversal"
+                                      ? "Estorno de venda"
+                                      : item.source?.type === "sale"
+                                        ? "Venda"
+                                    : item.source?.type === "consumptionReversal"
+                                      ? "Estorno de OS"
+                                    : item.delta > 0 ? "Entrada" : "Saída"}
                                   />
                                 </td>
                                 <td
@@ -1633,78 +1708,12 @@ export default function App() {
                 </>
               )}
               {view === "quotes" && (
-                <div className="table-scroll">
-                  <table>
-                    <thead>
-                      <tr>
-                        <th>Orçamento</th>
-                        <th>Cliente</th>
-                        <th>Emissão</th>
-                        <th>Validade</th>
-                        <th>Total</th>
-                        <th>Situação</th>
-                        <th>
-                          <span className="sr-only">Ações</span>
-                        </th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {quotes.map((item) => (
-                        <tr key={item.id}>
-                          <td>
-                            <button
-                              className="record-link"
-                              onClick={() =>
-                                setDetail({ kind: "quote", id: item.id })
-                              }
-                            >
-                              <strong>{item.code}</strong>
-                              <small>
-                                {item.items.length} itens
-                                {item.orderId ? " · OS gerada" : ""}
-                              </small>
-                            </button>
-                          </td>
-                          <td>{clientName(item.clientId)}</td>
-                          <td>{displayDate(item.date)}</td>
-                          <td
-                            className={
-                              item.expires < today && item.status !== "Aprovado"
-                                ? "overdue"
-                                : ""
-                            }
-                          >
-                            {displayDate(item.expires)}
-                          </td>
-                          <td className="amount">{currency(total(item))}</td>
-                          <td>
-                            <Badge value={item.status} />
-                          </td>
-                          <td>
-                            <button
-                              className="icon-button"
-                              title={
-                                item.orderId
-                                  ? "Orçamento vinculado à OS"
-                                  : item.status === "Aprovado"
-                                    ? "Orçamento aprovado: termos comerciais bloqueados"
-                                    : "Editar orçamento"
-                              }
-                              disabled={!!item.orderId || item.status === "Aprovado"}
-                              aria-label={`Editar ${item.code}`}
-                              onClick={() => openEditor("quote", item.id)}
-                            >
-                              <Pencil size={16} />
-                            </button>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                  {!quotes.length && (
-                    <Empty title="Nenhum orçamento encontrado" />
-                  )}
-                </div>
+                <QuoteTable
+                  data={database}
+                  quotes={quotes}
+                  onOpen={(id) => setDetail({ kind: "quote", id })}
+                  onEdit={(id) => openEditor("quote", id)}
+                />
               )}
               {(view !== "agenda" || agendaMode === "list") && (
                 <div className="table-footer">
@@ -1743,9 +1752,6 @@ export default function App() {
               )}
             </section>
           )}
-          {view === "contracts" && <Suspense fallback={<p role="status">Carregando contratos…</p>}>
-            <MaintenanceContractsPanel data={database} commit={commit} onSuccess={setNotice} />
-          </Suspense>}
           {view === "agenda" && (
             <section className="agenda-bottom">
               <div className="today-agenda">
@@ -1846,6 +1852,13 @@ export default function App() {
               approvalActor={{ userId: cloud.userId, name: cloud.email, role: cloud.role }}
               initialTab={location.hash === "#finance/fiscal" ? "Fiscal" : undefined} />
           </Suspense>}
+          {view === "sales" && <Suspense fallback={<p role="status">Carregando vendas…</p>}>
+            <SalesPanel key={salesStart?.nonce ?? "sales"} data={database} commit={commit} onOpenServiceOrder={openFullOrder}
+              initialTab={salesTabFromHash()} serviceOrderStart={salesStart ?? undefined}
+              onCreateProposal={() => openEditor("quote", undefined, "proposal")}
+              onOpenProposal={(id) => { setError(""); setDetail({ kind: "quote", id, presentation: "proposal" }); }}
+              onEditProposal={(id) => openEditor("quote", id, "proposal")} />
+          </Suspense>}
           {view === "questionnaires" && <QuestionnaireCatalog data={database} commit={commit} onSuccess={setNotice} />}
           {view === "settings" && (
             <SettingsPanel
@@ -1939,17 +1952,37 @@ export default function App() {
           onClose={() => setDetail(null)}
           onEdit={() => openEditor("order", activeOrder.id)}
           onStatus={(next) => orderStatus(activeOrder.id, next)}
+          onSituation={(next) => orderSituationChange(activeOrder.id, next)}
           onMore={() => openFullOrder(activeOrder.id)}
         />
       )}
+      {printRequest && (() => {
+        const target = database.orders.find((item) => item.id === printRequest.id);
+        if (!target) return null;
+        const settings = database.settings.reportSettings;
+        const printData = printRequest.technician
+          ? { ...database, settings: { ...database.settings, reportSettings: { ...settings, sections: { ...settings.sections, values: false, quotes: false } } } }
+          : database;
+        return <div className="order-list-print"><OrderPrintable order={target} data={printData} details={getOrderDetails(target)} /></div>;
+      })()}
       {activeQuote && (
         <QuoteDetail
           quote={activeQuote}
           data={database}
           error={error}
+          isProposal={detail?.presentation === "proposal"}
           onClose={() => setDetail(null)}
-          onEdit={() => openEditor("quote", activeQuote.id)}
+          onEdit={() => openEditor("quote", activeQuote.id, detail?.presentation)}
           onStatus={(next) => quoteStatus(activeQuote.id, next)}
+          onConvertSale={() => {
+            act((current) => convertQuoteToSalesOrder(current, activeQuote.id),
+              "Pedido de venda criado em rascunho. Confirme o pedido para baixar o estoque.");
+          }}
+          onOpenSales={() => {
+            setDetail(null);
+            setView("sales");
+            location.hash = "sales/orders";
+          }}
           onConvert={() => {
             let generated = "";
             if (
@@ -1983,6 +2016,7 @@ function OrderDetail({
   onClose,
   onEdit,
   onStatus,
+  onSituation,
   onMore,
 }: {
   order: Order;
@@ -1991,6 +2025,7 @@ function OrderDetail({
   onClose: () => void;
   onEdit: () => void;
   onStatus: (next: OrderStatus) => void;
+  onSituation: (next: OrderSituation) => void;
   onMore: () => void;
 }) {
   const client = data.clients.find((item) => item.id === order.clientId)!;
@@ -2012,7 +2047,7 @@ function OrderDetail({
         </div>
         <div className="detail-heading">
           <h2>{order.title}</h2>
-          <Badge value={order.status} />
+          <Badge value={orderSituation(order)} />
         </div>
         <div className="detail-grid">
           <div>
@@ -2057,11 +2092,13 @@ function OrderDetail({
           <label className="field">
             Situação
             <select
-              value={order.status}
-              onChange={(event) => onStatus(event.target.value as OrderStatus)}
+              value={orderSituation(order)}
+              onChange={(event) => onSituation(event.target.value as OrderSituation)}
             >
-              {statuses.map((status) => (
-                <option key={status}>{status}</option>
+              {(Object.entries(orderSituationGroups) as [OrderStatus, readonly OrderSituation[]][]).map(([group, situations]) => (
+                <optgroup key={group} label={group}>
+                  {situations.map((situation) => <option key={situation}>{situation}</option>)}
+                </optgroup>
               ))}
             </select>
           </label>
@@ -2120,22 +2157,29 @@ function QuoteDetail({
   quote,
   data,
   error,
+  isProposal,
   onClose,
   onEdit,
   onStatus,
+  onConvertSale,
+  onOpenSales,
   onConvert,
   onOpenOrder,
 }: {
   quote: Quote;
   data: Database;
   error: string;
+  isProposal: boolean;
   onClose: () => void;
   onEdit: () => void;
   onStatus: (next: Quote["status"]) => void;
+  onConvertSale: () => void;
+  onOpenSales: () => void;
   onConvert: () => void;
   onOpenOrder: () => void;
 }) {
   const client = data.clients.find((item) => item.id === quote.clientId)!;
+  const salesOrder = data.salesOrders.find((item) => item.id === quote.salesOrderId);
   return (
     <Modal title={quote.code} wide onClose={onClose}>
       <div className="modal-body document-body">
@@ -2146,7 +2190,7 @@ function QuoteDetail({
         )}
         <div className="document-brand">
           <Brand data={data} compact />
-          <span>ORÇAMENTO</span>
+          <span>{isProposal ? "PROPOSTA COMERCIAL" : "ORÇAMENTO"}</span>
         </div>
         <div className="detail-heading">
           <h2>{client.name}</h2>
@@ -2204,9 +2248,10 @@ function QuoteDetail({
         )}
         {quote.status === "Aprovado" && !quote.approval && (
           <p className="approval-record" role="note">
-            Orçamento aprovado antes do registro auditável. Os termos permanecem bloqueados.
+            {isProposal ? "Proposta aprovada" : "Orçamento aprovado"} antes do registro auditável. Os termos permanecem bloqueados.
           </p>
         )}
+        {salesOrder && <p className="approval-record" role="note">Pedido de venda vinculado: <strong>{salesOrder.code}</strong></p>}
         <h3>Condições e observações</h3>
         <p className="preserve-lines">{quote.notes || "Não informadas."}</p>
         {!quote.orderId && (
@@ -2240,6 +2285,13 @@ function QuoteDetail({
             Editar
           </button>
         )}
+        {quote.status === "Aprovado" && (salesOrder
+          ? <button className="button secondary" onClick={onOpenSales}>
+            <ClipboardCheck size={17} />Ver pedidos de venda
+          </button>
+          : <button className="button secondary" onClick={onConvertSale}>
+            <Plus size={17} />Gerar pedido de venda
+          </button>)}
         {quote.orderId ? (
           <button className="button primary" onClick={onOpenOrder}>
             <FileText size={17} />
@@ -2683,6 +2735,10 @@ function SettingsPanel({
                   services: [],
                   orders: [],
                   quotes: [],
+                  salesOrders: [],
+                  outgoingInvoices: [],
+                  serviceInvoices: [],
+                  contractCharges: [],
                   movements: [],
                   expenses: [],
                   questionnaires: [],

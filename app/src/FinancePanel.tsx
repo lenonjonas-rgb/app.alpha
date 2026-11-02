@@ -46,9 +46,11 @@ export function FinancePanel({ data, commit, onSuccess, onOpenOrder, initialTab,
   const [editor, setEditor] = useState<Editor | null>(null);
   const [selected, setSelected] = useState<string[]>([]);
   const [clientId, setClientId] = useState("");
+  const [billingQuery, setBillingQuery] = useState("");
   const [query, setQuery] = useState("");
   const [status, setStatus] = useState("Todas");
   const [error, setError] = useState("");
+  const [initialFiscalView, setInitialFiscalView] = useState<"issue" | undefined>();
   const [fiscalLinks, setFiscalLinks] = useState<z.infer<typeof financeFiscalLinksSchema> | null>(null);
   const [linkedData, setLinkedData] = useState<Database | null>(null);
   const [fiscalBusy, setFiscalBusy] = useState(false);
@@ -56,7 +58,24 @@ export function FinancePanel({ data, commit, onSuccess, onOpenOrder, initialTab,
   const linked = (id: string) => currentLinks?.entries.find((item) => item.entryId === id);
   const available = pendingBillingOrders(data);
   const pending = available.filter((order) => !clientId || order.clientId === clientId);
+  const visiblePending = pending.filter((order) => {
+    const client = data.clients.find((item) => item.id === order.clientId);
+    return `${order.code} ${order.title} ${client?.name ?? ""}`.toLocaleLowerCase("pt-BR")
+      .includes(billingQuery.trim().toLocaleLowerCase("pt-BR"));
+  });
   const selectedOrders = available.filter((order) => selected.includes(order.id));
+  const selectedBillingTotals = selectedOrders.reduce((totals, order) => {
+    const values = pendingBillingValues(data, order);
+    return { products: totals.products + values.products, services: totals.services + values.services };
+  }, { products: 0, services: 0 });
+  const clientsInResults = new Set(visiblePending.map((order) => order.clientId));
+  const billingSelectionClientId = clientId || selectedOrders[0]?.clientId ||
+    (clientsInResults.size === 1 ? visiblePending[0]?.clientId ?? "" : "");
+  const selectableVisibleOrders = billingSelectionClientId
+    ? visiblePending.filter((order) => order.clientId === billingSelectionClientId)
+    : [];
+  const allVisibleSelected = selectableVisibleOrders.length > 0 &&
+    selectableVisibleOrders.every((order) => selected.includes(order.id));
   const direction = tab === "Contas a pagar" ? "Pagar" : "Receber";
   const today = localDay();
   const management = financeManagement(data);
@@ -69,6 +88,7 @@ export function FinancePanel({ data, commit, onSuccess, onOpenOrder, initialTab,
     catch (cause) { setError(errorMessage(cause)); }
   }
   function open(next: Editor) { setError(""); setEditor(next); }
+  function openFiscalIssue() { setInitialFiscalView("issue"); setTab("Fiscal"); }
   async function refreshLinks() {
     setFiscalBusy(true); setError(""); setFiscalLinks(null);
     try {
@@ -100,54 +120,101 @@ export function FinancePanel({ data, commit, onSuccess, onOpenOrder, initialTab,
   }
   return <section className="finance-panel">
     {error && <p className="error-message" role="alert">{error}</p>}
-    <div className="finance-metrics">
+    {tab !== "Fiscal" && tab !== "A faturar" && <div className="finance-metrics">
       <div><small>A faturar</small><strong>{currency(available.reduce((sum, order) => {
         const values = pendingBillingValues(data, order);
         return sum + values.products + values.services;
       }, 0))}</strong></div>
       <div><small>A receber em aberto</small><strong>{currency(outstanding("Receber"))}</strong></div>
       <div><small>A pagar em aberto</small><strong>{currency(outstanding("Pagar"))}</strong></div>
-    </div>
+    </div>}
     <nav className="finance-tabs" aria-label="Seções do financeiro">{tabGroups.map((group) =>
       <DropdownMenu key={group.label} label={group.tabs.includes(tab) ? tab : group.label}
         accessibleLabel={`Seções: ${group.label}`} active={group.tabs.includes(tab)}
         actions={group.tabs.map((item) => ({ label: item, current: tab === item,
-          onSelect: () => { setTab(item); setError(""); } }))} />)}</nav>
-    <p>O faturamento prepara contas internas; autorização fiscal é consultada na aba Fiscal. Boleto/Pix não são registrados automaticamente no banco.</p>
-    <p>Vínculos fiscais/bancários são consultados no backend, não fazem parte do backup JSON. Atualize após emitir, consultar ou gerar remessa. Homologação não é emissão válida em produção.</p>
-    <button className="button secondary" disabled={!fiscalConfigured || fiscalBusy} onClick={() => void refreshLinks()}>Atualizar vínculos fiscais e remessas</button>
-    {currentLinks && <p>Consulta do backend: {currentLinks.checkedAt}. Não é consulta em tempo real ao fisco/banco.</p>}
-    {!fiscalConfigured && <p>Backend fiscal não conectado. Cancelamentos de contas vinculadas a faturamentos da empresa exigem conexão. Contas manuais sem faturamento e a base demo local mantêm o fluxo interno.</p>}
+          onSelect: () => { if (item !== "Fiscal") setInitialFiscalView(undefined); setTab(item); setError(""); } }))} />)}</nav>
+    {tab !== "Fiscal" && tab !== "A faturar" && <>
+      <p>O faturamento prepara contas internas; autorização fiscal é consultada na aba Fiscal. Boleto/Pix não são registrados automaticamente no banco.</p>
+      <p>Vínculos fiscais/bancários são consultados no backend, não fazem parte do backup JSON. Atualize após emitir, consultar ou gerar remessa. Homologação não é emissão válida em produção.</p>
+      <button className="button secondary" disabled={!fiscalConfigured || fiscalBusy} onClick={() => void refreshLinks()}>Atualizar vínculos fiscais e remessas</button>
+      {currentLinks && <p>Consulta do backend: {currentLinks.checkedAt}. Não é consulta em tempo real ao fisco/banco.</p>}
+      {!fiscalConfigured && <p>Backend fiscal não conectado. Cancelamentos de contas vinculadas a faturamentos da empresa exigem conexão. Contas manuais sem faturamento e a base demo local mantêm o fluxo interno.</p>}
+    </>}
     {(tab === "Painel gerencial" || tab === "Fluxo de caixa" || tab === "Relatórios" || tab === "Cadastros gerenciais") &&
       <FinanceManagementPanel data={data} tab={tab} commit={commit} onSuccess={onSuccess} />}
     {tab === "Conciliação bancária" && <BankReconciliationPanel data={data} commit={commit} onSuccess={onSuccess} />}
     {tab === "Transferências" && <FinanceTransfersPanel data={data} commit={commit} onSuccess={onSuccess} />}
     {tab === "Recorrências" && <FinanceRecurrencesPanel data={data} commit={commit} onSuccess={onSuccess} />}
     {tab === "Compras e fornecedores" && <PurchasingPanel data={data} commit={commit} onSuccess={onSuccess} approvalActor={approvalActor} />}
-    {tab === "Fiscal" && <FiscalPanel data={data} commit={commit} />}
+    {tab === "Fiscal" && <FiscalPanel data={data} commit={commit} initialView={initialFiscalView} />}
     {tab === "Remessas" && <RemittancePanel data={data} />}
-    {tab === "A faturar" && <>
-      <div className="section-heading">
-        <label className="field">Cliente<select value={clientId} onChange={(event) => { setClientId(event.target.value); setSelected([]); }}>
-          <option value="">Todos os clientes</option>{data.clients.map((client) => <option key={client.id} value={client.id}>{client.name}</option>)}
-        </select></label>
-        <button className="button primary" disabled={!selectedOrders.length} onClick={() => open({ kind: "bill", ids: selectedOrders.map((order) => order.id) })}>
-          Faturar selecionadas ({selectedOrders.length})
-        </button>
+    {tab === "A faturar" && <section className="billing-page">
+      <header className="billing-heading">
+        <div><small className="fiscal-eyebrow">VENDAS · FATURAMENTO</small><h2>Faturar ordens de serviço</h2></div>
+        <p>{available.length} {available.length === 1 ? "ordem aguardando faturamento" : "ordens aguardando faturamento"}</p>
+      </header>
+      <ol className="billing-steps" aria-label="Etapas do faturamento">
+        <li className="current" aria-current="step"><span>1</span><div><strong>Selecionar ordens</strong><small>OS finalizadas</small></div></li>
+        <li><button type="button" disabled={!selectedOrders.length} onClick={() => open({ kind: "bill", ids: selectedOrders.map((order) => order.id) })}>
+          <span>2</span><div><strong>Revisar faturamento</strong><small>Condições e valores</small></div></button></li>
+        <li><button type="button" onClick={openFiscalIssue}><span>3</span><div><strong>Nota fiscal</strong><small>Após faturar, no módulo Fiscal</small></div></button></li>
+      </ol>
+      <div className="billing-guidance" role="note">
+        Selecione OS do mesmo cliente, revise as contas a receber de produtos e serviços e confirme. Depois, abra <strong>Fiscal &gt; Incluir nota fiscal</strong> para preparar a NF-e ou NFS-e. O faturamento financeiro não emite nem transmite a nota.
       </div>
-      <div className="finance-table"><table><thead><tr><th>Selecionar</th><th>OS</th><th>Cliente</th><th>Data</th><th>Produtos</th><th>Serviços</th><th>Total pendente</th></tr></thead>
-        <tbody>{pending.map((order) => {
+      <div className="billing-workspace">
+        <aside className="billing-filters">
+          <h3>Filtrar ordens</h3>
+          <label className="field">Cliente<select value={clientId} onChange={(event) => { setClientId(event.target.value); setSelected([]); }}>
+            <option value="">Todos os clientes</option>{data.clients.map((client) => <option key={client.id} value={client.id}>{client.name}</option>)}
+          </select></label>
+          <div className="billing-filter-status"><small>Situação</small><strong>Finalizadas · não faturadas</strong></div>
+          <button type="button" className="text-button" onClick={() => { setClientId(""); setBillingQuery(""); setSelected([]); }}>Limpar filtros</button>
+        </aside>
+        <div className="billing-results">
+          <div className="billing-toolbar">
+            <label className="fiscal-search"><input type="search" aria-label="Buscar ordens para faturar"
+              placeholder="Buscar por OS, serviço ou cliente" value={billingQuery} onChange={(event) => setBillingQuery(event.target.value)} /></label>
+          </div>
+          <div className="billing-result-count">{visiblePending.length} {visiblePending.length === 1 ? "ordem disponível" : "ordens disponíveis"}
+            {selectedOrders.length > 0 && ` · ${selectedOrders.length} selecionada${selectedOrders.length === 1 ? "" : "s"}`}
+          </div>
+          <div className="finance-table billing-table"><table><thead><tr><th><input type="checkbox" aria-label="Selecionar todas as ordens visíveis deste cliente"
+            checked={allVisibleSelected} disabled={!selectableVisibleOrders.length}
+            onChange={(event) => setSelected(event.target.checked
+              ? [...new Set([...selected, ...selectableVisibleOrders.map((order) => order.id)])]
+              : selected.filter((id) => !selectableVisibleOrders.some((order) => order.id === id)))} /></th>
+            <th>Ordem de serviço</th><th>Cliente</th><th>Data</th><th>Produtos</th><th>Serviços</th><th>Total pendente</th></tr></thead>
+            <tbody>{visiblePending.map((order) => {
           const values = pendingBillingValues(data, order);
           return <tr key={order.id}>
           <td><input type="checkbox" aria-label={`Faturar ${order.code}`} checked={selected.includes(order.id)}
             disabled={selectedOrders.length > 0 && selectedOrders[0].clientId !== order.clientId}
             onChange={(event) => setSelected(event.target.checked ? [...selected, order.id] : selected.filter((id) => id !== order.id))} /></td>
-          <td><button className="text-button" onClick={() => onOpenOrder(order.id)}>{order.code} · {order.title}</button></td>
+          <td><button className="text-button" onClick={() => onOpenOrder(order.id)}>{order.code}<small>{order.title}</small></button></td>
           <td>{data.clients.find((client) => client.id === order.clientId)?.name}</td><td>{displayDate(order.date)}</td>
           <td>{currency(values.products)}</td><td>{currency(values.services)}</td><td>{currency(values.products + values.services)}</td>
-        </tr>; })}</tbody></table></div>
-      {!pending.length && <Empty title="Nenhuma OS finalizada aguardando faturamento" />}
-    </>}
+            </tr>; })}</tbody></table></div>
+          {!visiblePending.length && <Empty title={pending.length ? "Nenhuma ordem encontrada" : "Nenhuma OS finalizada aguardando faturamento"} />}
+        </div>
+        <aside className="billing-selection">
+          <h3>Resumo da seleção</h3>
+          <p>{selectedOrders.length ? `${selectedOrders.length} ${selectedOrders.length === 1 ? "ordem selecionada" : "ordens selecionadas"}` : "Selecione uma ou mais ordens"}</p>
+          {selectedOrders.length > 0 && <dl>
+            <div><dt>Produtos</dt><dd>{currency(selectedBillingTotals.products)}</dd></div>
+            <div><dt>Serviços</dt><dd>{currency(selectedBillingTotals.services)}</dd></div>
+            <div className="billing-total"><dt>Total</dt><dd>{currency(selectedBillingTotals.products + selectedBillingTotals.services)}</dd></div>
+          </dl>}
+          {selectedOrders.length > 0 && <p className="billing-client-name">Cliente: <strong>{data.clients.find((client) => client.id === selectedOrders[0].clientId)?.name}</strong></p>}
+          <p className="billing-selection-note">Só é possível faturar ordens do mesmo cliente. Produtos e serviços viram contas separadas, cada uma com vencimento, pagamento e conta bancária próprios.</p>
+          {selectedOrders.length > 0 && <button className="text-button" onClick={() => setSelected([])}>Limpar seleção</button>}
+          <button className="button primary" disabled={!selectedOrders.length}
+            onClick={() => open({ kind: "bill", ids: selectedOrders.map((order) => order.id) })}>
+            Faturar selecionadas
+          </button>
+        </aside>
+      </div>
+    </section>}
     {(tab === "Contas a receber" || tab === "Contas a pagar") && <>
       <div className="section-heading">
         <label className="field">Buscar conta<input type="search" value={query} onChange={(event) => setQuery(event.target.value)} /></label>
@@ -206,17 +273,29 @@ export function FinancePanel({ data, commit, onSuccess, onOpenOrder, initialTab,
       {!data.finance.accounts.length && <Empty title="Nenhum banco cadastrado" />}
     </>}
     {tab === "Faturamentos" && <>
-      <div className="finance-table"><table><thead><tr><th>Cliente</th><th>Cadastro</th><th>Grupo / documento previsto</th><th>OS vinculadas</th><th>Total</th><th>Situação</th></tr></thead>
+      <div className="billing-history-intro"><div><small className="fiscal-eyebrow">CONTAS CRIADAS A PARTIR DAS OS E PEDIDOS</small><h2>Faturamentos</h2></div>
+        <p>Confira o faturamento interno e, quando estiver pronto, prossiga para preparar o documento fiscal no módulo Fiscal.</p></div>
+      <div className="finance-table"><table><thead><tr><th>Cliente</th><th>Cadastro</th><th>Grupo / documento previsto</th><th>OS / pedidos vinculados</th><th>Total</th><th>Situação</th><th>Próxima etapa</th></tr></thead>
         <tbody>{data.finance.invoices.map((invoice) => <tr key={invoice.id}><td>{invoice.clientName}</td><td>{displayDate(invoice.createdOn)}</td>
           <td>{invoice.kind === "Legado" ? "Consolidado anterior" : `${invoice.kind} · ${invoice.kind === "Produtos" ? "NF-e" : "NFS-e"}`}</td>
-          <td>{invoice.orders.map((order) => <div key={order.orderId}><button className="text-button" onClick={() => onOpenOrder(order.orderId)}>{order.code} · {order.title}</button> · {currency(order.amount)}</div>)}</td>
+          <td>{invoice.orders.map((order) => <div key={order.orderId}>{data.orders.some((item) => item.id === order.orderId)
+            ? <button className="text-button" onClick={() => onOpenOrder(order.orderId)}>{order.code} · {order.title}</button>
+            : <span>{order.code} · {order.title}</span>} · {currency(order.amount)}</div>)}</td>
           <td>{currency(invoice.amount)}</td><td>{invoice.canceled ? "Cancelado internamente" : "Faturamento interno ativo"}
-            <FinanceFiscalStatus link={linked(data.finance.entries.find((entry) => entry.invoiceId === invoice.id)?.id ?? "")} /></td></tr>)}</tbody>
+            <FinanceFiscalStatus link={linked(data.finance.entries.find((entry) => entry.invoiceId === invoice.id)?.id ?? "")} /></td>
+          <td>{!invoice.canceled && invoice.kind !== "Legado" && <button type="button" className="button secondary" onClick={openFiscalIssue}>
+            Preparar nota fiscal
+          </button>}</td></tr>)}</tbody>
       </table></div>
       {!data.finance.invoices.length && <Empty title="Nenhum faturamento gerado" />}
     </>}
     {editor && <FinanceEditor key={editor.kind === "bank" ? editor.account?.id ?? "new-bank" : editor.kind} data={data} editor={editor} onClose={() => setEditor(null)}
-      onSave={(update) => { commit(update); setEditor(null); setSelected([]); setError(""); onSuccess("Registro financeiro salvo."); }} />}
+      onSave={(update) => { commit(update); setEditor(null); setSelected([]); setError("");
+        if (editor.kind === "bill") {
+          setTab("Faturamentos");
+          onSuccess("Faturamento criado. Confira as contas em Faturamentos; a nota fiscal deve ser preparada depois no módulo Fiscal.");
+        } else onSuccess("Registro financeiro salvo.");
+      }} />}
   </section>;
 }
 
@@ -240,7 +319,7 @@ function FinanceEditor({ data, editor, onClose, onSave }: {
     discount: Math.round(Number(adjustmentValues.discount) * 100),
   };
   const effectiveAmount = settlementCashAmount({ amount: Math.round(Number(principalValue) * 100), adjustment: adjustmentAmounts });
-  const title = editor.kind === "bank" ? "Conta bancária" : editor.kind === "bill" ? "Faturar OS selecionadas"
+  const title = editor.kind === "bank" ? "Conta bancária" : editor.kind === "bill" ? "Revisar faturamento"
     : editor.kind === "settlement" ? "Registrar baixa" : editor.kind === "classification" ? "Classificação gerencial" : `Conta a ${editor.direction.toLowerCase()}`;
   const accounts = data.finance.accounts.filter((account) => account.active);
   let groups: ReturnType<typeof previewBilling> = [];
@@ -329,10 +408,10 @@ function FinanceEditor({ data, editor, onClose, onSave }: {
           <label className="field">Tipo de conta<select name="accountKind" defaultValue={bank?.kind ?? "Corrente"}><option>Corrente</option><option>Poupança</option><option>Caixa</option></select></label>
           <label className="checkbox-field"><input type="checkbox" name="active" defaultChecked={bank?.active ?? true} />Ativa</label>
         </> : editor.kind === "bill" ? <>
-          <p className="full">Uma cobrança independente por grupo. Descontos rateados; deslocamento, pedágio e acréscimos nos serviços.</p>
+          <p className="full billing-review-intro">Confira cliente, ordens, valores e condições de recebimento. Esta confirmação cria contas a receber; não emite nota fiscal nem registra boleto ou Pix no banco.</p>
           {!!groups.length && <p className="full">Cliente: <strong>{groups[0].clientName}</strong></p>}
           {groups.map((group) => <fieldset className="finance-billing-group full" key={group.kind}>
-            <legend>{group.kind} · {group.kind === "Produtos" ? "NF-e prevista" : "NFS-e prevista"} · {currency(group.amount)}</legend>
+            <legend>{group.kind} · {group.kind === "Produtos" ? "Documento previsto: NF-e" : "Documento previsto: NFS-e"} · {currency(group.amount)}</legend>
             {group.orders.map((order) => <p key={order.orderId}>{order.code} · {currency(order.amount)}</p>)}
             <div className="form-grid">
               <label className="field">Vencimento — {group.kind}<input name={`${group.kind}.dueOn`} type="date" required defaultValue={localDay()} /></label>
@@ -342,7 +421,7 @@ function FinanceEditor({ data, editor, onClose, onSave }: {
               </select></label>
             </div>
           </fieldset>)}
-          <p className="full">Total: <strong>{currency(groups.reduce((sum, group) => sum + group.amount, 0))}</strong></p>
+          <p className="full billing-review-total">Total do faturamento: <strong>{currency(groups.reduce((sum, group) => sum + group.amount, 0))}</strong></p>
           {!accounts.length && <p role="alert" className="full">Cadastre uma conta bancária ativa na aba Bancos.</p>}
         </> : <>
           {editor.kind === "entry" && <>
@@ -422,6 +501,7 @@ function FinanceEditor({ data, editor, onClose, onSave }: {
         </>}
       </div>
     </div>
-    <footer className="modal-actions"><button type="button" className="button secondary" onClick={onClose}>Cancelar</button><button className="button primary">Salvar</button></footer>
+    <footer className="modal-actions"><button type="button" className="button secondary" onClick={onClose}>{editor.kind === "bill" ? "Voltar" : "Cancelar"}</button>
+      <button className="button primary">{editor.kind === "bill" ? "Confirmar faturamento" : "Salvar"}</button></footer>
   </form></Modal>;
 }

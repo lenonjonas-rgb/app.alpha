@@ -1,4 +1,4 @@
-import { getOrderDetails, localDay, makeId, orderValues, validateDatabase } from "./domain";
+import { getOrderDetails, localDay, makeId, orderValues, salesOrderLineTotal, validateDatabase } from "./domain";
 import type { Database, OrderDetails } from "./domain";
 import { bankAccountSchema, billingKinds, financeEntrySchema, financeSettlementSchema } from "./financeSchema";
 import type { BankAccount, BillingKind, BillingTerms, FinanceEntry, Invoice } from "./financeSchema";
@@ -36,6 +36,10 @@ export function billingItemSnapshots(details: OrderDetails, kind: BillingKind, a
     }
   }
   if (new Set(items.map((item) => item.id)).size !== items.length) throw new Error("Itens duplicados na OS.");
+  return distributeOrderDiscount(items, amount);
+}
+
+function distributeOrderDiscount(items: BillingItem[], amount: number) {
   const base = items.reduce((sum, item) => sum + item.gross - item.itemDiscount, 0);
   const discount = base - amount;
   if (!Number.isSafeInteger(base) || discount < 0 || discount > base) throw new Error("Snapshot dos itens não confere com o rateio.");
@@ -51,6 +55,88 @@ export function billingItemSnapshots(details: OrderDetails, kind: BillingKind, a
 
 function activeInvoices(data: Database, orderId: string) {
   return data.finance.invoices.filter((invoice) => !invoice.canceled && invoice.orders.some((item) => item.orderId === orderId));
+}
+
+export function salesOrderInvoices(data: Database, orderId: string) {
+  return activeInvoices(data, orderId);
+}
+
+export function previewSalesOrderBilling(data: Database, orderId: string) {
+  const order = data.salesOrders.find((item) => item.id === orderId);
+  if (!order) throw new Error("Pedido de venda não encontrado.");
+  if (order.status === "Cancelado") throw new Error("Pedidos cancelados não geram contas.");
+  const client = data.clients.find((item) => item.id === order.clientId);
+  if (!client) throw new Error("Cliente do pedido não encontrado.");
+  const lineTotal = (kind: "produto" | "servico") => order.items.filter((item) => item.kind === kind)
+    .reduce((sum, item) => sum + salesOrderLineTotal(item), 0);
+  const products = lineTotal("produto");
+  const services = lineTotal("servico") + order.shippingCost + order.otherExpenses;
+  const base = products + services;
+  if (order.discount > base) throw new Error("Confira os valores e descontos do pedido antes de lançar as contas.");
+  // Mesmo rateio proporcional das OS: o restante do desconto fica com os serviços.
+  const productDiscount = base ? Number((BigInt(order.discount) * BigInt(products) * 2n + BigInt(base)) / (BigInt(base) * 2n)) : 0;
+  const allocation = { products: products - productDiscount, services: services - (order.discount - productDiscount) };
+  const previous = activeInvoices(data, order.id).flatMap((invoice) => invoice.orders).find((item) => item.orderId === order.id)?.allocation;
+  const effective = previous ?? allocation;
+  const billed = new Set(activeInvoices(data, order.id).map((invoice) => invoice.kind));
+  const preview = billingKinds.filter((kind) => !billed.has(kind)).map((kind) => {
+    const amount = kind === "Produtos" ? effective.products : effective.services;
+    const items: BillingItem[] = order.items.filter((item) => item.kind === (kind === "Produtos" ? "produto" : "servico")).map((item) => {
+      const gross = Math.round(item.quantity * item.price);
+      return { id: `item:${item.id}`, source: "item", kind: item.kind, referenceId: item.referenceId, name: item.name,
+        quantity: item.quantity, price: item.price, gross, itemDiscount: gross - salesOrderLineTotal(item), orderDiscount: 0 };
+    });
+    if (kind === "Serviços") {
+      if (order.shippingCost > 0) items.push({ id: "cost:frete", source: "cost", kind: "servico", name: "Frete", quantity: 1,
+        price: order.shippingCost, gross: order.shippingCost, itemDiscount: 0, orderDiscount: 0 });
+      if (order.otherExpenses > 0) items.push({ id: "cost:outras-despesas", source: "cost", kind: "servico", name: "Outras despesas", quantity: 1,
+        price: order.otherExpenses, gross: order.otherExpenses, itemDiscount: 0, orderDiscount: 0 });
+    }
+    return { kind, clientId: client.id, clientName: client.name, amount,
+      orders: [{ orderId: order.id, code: order.code, title: "Pedido de venda", amount, allocation: effective,
+        items: amount > 0 ? distributeOrderDiscount(items, amount) : items }] };
+  }).filter((group) => group.amount > 0);
+  return preview;
+}
+
+export function billSalesOrder(data: Database, orderId: string, options: Partial<Record<BillingKind, BillingTerms>>,
+  expected?: ReturnType<typeof previewSalesOrderBilling>) {
+  const preview = previewSalesOrderBilling(data, orderId);
+  if (!preview.length) throw new Error("Não há valores pendentes para lançar contas neste pedido.");
+  if (expected && JSON.stringify(expected) !== JSON.stringify(preview))
+    throw new Error("Os valores do pedido mudaram. Reabra o lançamento de contas para conferir.");
+  if (Object.keys(options).length !== preview.length || preview.some((item) => !options[item.kind]))
+    throw new Error("Informe o pagamento separado para cada grupo de produtos e serviços.");
+  const invoices: Invoice[] = [];
+  const entries: FinanceEntry[] = [];
+  for (const group of preview) {
+    const terms = options[group.kind]!;
+    activeAccount(data, terms.accountId);
+    if (terms.paymentMethod !== "Pix" && terms.paymentMethod !== "Boleto")
+      throw new Error("Escolha Boleto ou Pix para cada grupo.");
+    const invoice: Invoice = { ...group, id: makeId(), createdOn: localDay(), canceled: false };
+    invoices.push(invoice);
+    entries.push(financeEntrySchema.parse({
+      id: makeId(), kind: "Receber", party: group.clientName, clientId: group.clientId,
+      description: `${group.kind} · Pedido: ${group.orders[0].code}`, amount: group.amount,
+      issuedOn: invoice.createdOn, ...terms, invoiceId: invoice.id,
+    }));
+  }
+  return validateDatabase({ ...data, finance: { ...data.finance, invoices: [...data.finance.invoices, ...invoices], entries: [...data.finance.entries, ...entries] } });
+}
+
+export function reverseSalesOrderBilling(data: Database, orderId: string) {
+  const invoices = activeInvoices(data, orderId);
+  if (!invoices.length) throw new Error("Este pedido não possui contas lançadas.");
+  let result = data;
+  for (const invoice of invoices) {
+    const entries = result.finance.entries.filter((item) => item.invoiceId === invoice.id);
+    if (!entries.length) throw new Error("Conta a receber do pedido não encontrada.");
+    if (entries.some((entry) => entry.settlements.some((item) => !item.reversed)))
+      throw new Error("Estorne os recebimentos das contas antes de estornar o lançamento.");
+    result = cancelFinanceEntry(result, entries[0].id);
+  }
+  return result;
 }
 
 export function pendingBillingValues(data: Database, order: Database["orders"][number]) {
@@ -218,9 +304,13 @@ export function cancelFinanceEntry(data: Database, id: string, expected?: { entr
     JSON.stringify(data.finance.invoices.find((item) => item.id === entry?.invoiceId)) !== JSON.stringify(expected.invoice)))
     throw new Error("Conta alterada durante a verificação. Cancelamento pode estar reservado no backend; atualize e retente sem recriar o título.");
   if (!entry || entry.canceled) throw new Error("Conta indisponível para cancelamento.");
-  if (entry.settlements.some((item) => !item.reversed)) throw new Error("Estorne as baixas antes de cancelar a conta.");
+  // Parcelas de um mesmo faturamento são canceladas juntas, como o próprio faturamento.
+  const group = entry.invoiceId ? data.finance.entries.filter((item) => item.invoiceId === entry.invoiceId) : [entry];
+  if (group.some((item) => item.settlements.some((settlement) => !settlement.reversed)))
+    throw new Error("Estorne as baixas antes de cancelar a conta.");
+  const ids = new Set(group.map((item) => item.id));
   return validateDatabase({ ...data, finance: { ...data.finance,
-    entries: data.finance.entries.map((item) => item.id === id ? { ...item, canceled: true } : item),
+    entries: data.finance.entries.map((item) => ids.has(item.id) ? { ...item, canceled: true } : item),
     invoices: data.finance.invoices.map((item) => item.id === entry.invoiceId ? { ...item, canceled: true } : item),
   } });
 }

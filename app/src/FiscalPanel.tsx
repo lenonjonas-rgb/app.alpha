@@ -1,5 +1,6 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { FormEvent } from "react";
+import { FilePlus2, FileText, Settings2 } from "lucide-react";
 import { z } from "zod";
 import type { Database } from "./domain";
 import { currency } from "./domain";
@@ -21,6 +22,10 @@ import { FiscalDpsGenerationPanel } from "./FiscalDpsGenerationPanel";
 import { FiscalNfseReconciliation } from "./FiscalNfseReconciliation";
 import { FiscalPdfActions } from "./FiscalPdfActions";
 import { FiscalEventActions } from "./FiscalEventActions";
+import { FiscalOutgoingDocuments } from "./FiscalOutgoingDocuments";
+import { transmitFiscalDocuments } from "./fiscalDocumentActions";
+import { Modal } from "./components";
+import { downloadFiscalPdf, fiscalPdfFile } from "./fiscalPdf";
 
 const ruleSchema = z.object({ id: z.string(), kind: z.enum(["nfe", "nfse"]), name: z.string(), source: z.string(), scope: z.string(), reviewed: z.boolean(), fields: z.record(z.string(), z.string()) });
 const statusSchema = z.object({
@@ -37,19 +42,60 @@ const statusSchema = z.object({
   rules: z.array(ruleSchema),
   catalog: fiscalCatalogSchema,
   documents: z.array(z.object({
-    id: z.string(), invoiceId: z.string(), kind: z.string(), environment: z.string(), key: z.string(),
-    status: z.string(), message: z.string().optional(), protocol: z.string().optional(), accessKey: z.string().optional(),
+    id: z.string(), invoiceId: z.string(), kind: z.enum(["nfe", "nfse"]), environment: z.enum(["homologacao", "producao"]), key: z.string(),
+    status: z.enum(["rascunho", "enviando", "incerto", "processando", "autorizado", "rejeitado", "cancelado"]),
+    createdAt: z.iso.datetime(), message: z.string().optional(), protocol: z.string().optional(), accessKey: z.string().optional(),
+    issuedAt: z.string().optional(), number: z.string().optional(), series: z.string().optional(),
+    recipientName: z.string().optional(), recipientDocument: z.string().optional(),
+    destinationState: z.string().optional(), amount: z.number().int().nonnegative().optional(),
+    products: z.array(z.string()).optional(),
   })),
 });
 type Status = z.infer<typeof statusSchema>;
+type FiscalView = "documents" | "issue" | "settings";
 
-export function FiscalPanel({ data, commit }: { data: Database; commit: (update: (current: Database) => Database) => void }) {
+export function FiscalPanel({ data, commit, initialView, documentKind, eyebrow, presentation, initialInvoiceId, onBackToList, onIncludeDocument }: {
+  documentKind?: "nfe" | "nfse";
+  eyebrow?: string;
+  presentation?: "sales";
+  data: Database;
+  commit: (update: (current: Database) => Database) => void;
+  initialView?: FiscalView;
+  initialInvoiceId?: string;
+  onBackToList?: () => void;
+  onIncludeDocument?: () => void;
+}) {
   const [status, setStatus] = useState<Status | null>(null);
+  const [view, setView] = useState<FiscalView>(initialView ?? "documents");
   const [busy, setBusy] = useState(false);
+  const [loadingStatus, setLoadingStatus] = useState(fiscalConfigured);
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
   const [rule, setRule] = useState<z.infer<typeof ruleSchema> | null>(null);
+  const [printUrl, setPrintUrl] = useState("");
+  const inSales = presentation === "sales";
+  const heading = inSales && view === "issue"
+    ? documentKind === "nfse" ? "Incluir nota de serviço" : "Incluir nota fiscal de saída"
+    : inSales && view === "settings" ? "Configuração fiscal"
+      : documentKind === "nfse" ? "Notas de serviço" : "Notas fiscais de saída";
+  useEffect(() => () => { if (printUrl) URL.revokeObjectURL(printUrl); }, [printUrl]);
   async function refresh() { setStatus(statusSchema.parse(await (await fiscalRequest("/status")).json())); }
+  useEffect(() => {
+    if (!fiscalConfigured) return;
+    let active = true;
+    void fiscalRequest("/status")
+      .then((response) => response.json())
+      .then((result) => {
+        if (active) setStatus(statusSchema.parse(result));
+      })
+      .catch((cause: unknown) => {
+        if (active) setError(errorMessage(cause));
+      })
+      .finally(() => {
+        if (active) setLoadingStatus(false);
+      });
+    return () => { active = false; };
+  }, []);
   async function act(operation: () => Promise<void>, success: string, refreshOnFailure = false) {
     setBusy(true); setError(""); setMessage("");
     try { await operation(); await refresh(); setMessage(success); }
@@ -90,16 +136,70 @@ export function FiscalPanel({ data, commit }: { data: Database; commit: (update:
     anchor.href = url; anchor.download = `fiscal-${id}.xml`; anchor.click();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
+  async function exportDocuments(ids: string[], format: "xml" | "pdf" | "print") {
+    await act(async () => {
+      const response = await fiscalRequest("/documents/export", "POST", { ids, format });
+      if (format === "print") {
+        const file = await fiscalPdfFile(response, "notas-fiscais.pdf");
+        setPrintUrl(URL.createObjectURL(file));
+      } else {
+        if (response.headers.get("Content-Type")?.split(";")[0] !== "application/zip")
+          throw new Error("O backend não retornou um arquivo ZIP fiscal.");
+        const blob = await response.blob();
+        if (!blob.size) throw new Error("A exportação fiscal retornou um arquivo vazio.");
+        downloadFiscalPdf(new File([blob], `notas-${format}.zip`, { type: "application/zip" }));
+      }
+    }, format === "print" ? "PDF preparado. Abra a visualização para imprimir." : "Exportação baixada em ZIP.");
+  }
+  const documentActions = (item: NonNullable<Status>["documents"][number]) =>
+    <div className="finance-actions">
+      {item.status === "rascunho" && <button className="button primary" disabled={busy} onClick={() => {
+        const confirmation = window.prompt(`Transmitir ${item.kind.toUpperCase()} em ${item.environment}? Digite a chave/Id para confirmar:`, "");
+        if (confirmation === null) return;
+        void act(async () => { await fiscalRequest(`/documents/${item.id}/transmit`, "POST", { confirmation }); }, "Transmissão concluída. Confira a situação retornada pelo fisco.", true);
+      }}>Assinar e transmitir</button>}
+      {item.status === "rascunho" && <button className="text-button" disabled={busy} onClick={() => {
+        if (!window.confirm("Descartar este rascunho nunca transmitido? A numeração não poderá ser reutilizada. Isso não cancela nota autorizada.")) return;
+        void act(async () => { await fiscalRequest(`/documents/${item.id}/discard`, "POST", {}); }, "Rascunho descartado; nenhuma operação no fisco.");
+      }}>Descartar rascunho</button>}
+      {!["rascunho", "enviando", "cancelado"].includes(item.status) && <button className="button secondary" disabled={busy} onClick={() => void act(async () => {
+        await fiscalRequest(`/documents/${item.id}/consult`, "POST", {});
+      }, "Situação consultada no fisco.")}>Consultar situação</button>}
+      <button className="text-button" disabled={busy} onClick={() => void act(() => download(item.id), "XML baixado. Confira se é rascunho, assinado ou autorizado.")}>Baixar XML</button>
+      <FiscalPdfActions key={`${item.id}-${item.status}-${item.key}-${item.protocol ?? item.accessKey ?? ""}`} item={item} busy={busy} />
+      <FiscalEventActions item={item} busy={busy} act={(operation, success) => act(operation, success, true)} />
+    </div>;
   return <section className="finance-panel">
-    <h2>Emissão fiscal e certificado A1</h2>
+    {view !== "documents" && <header className="fiscal-module-header">
+      <div><span className="fiscal-eyebrow">{eyebrow ?? "FINANCEIRO · FISCAL"}</span><h2>{heading}</h2></div>
+      {(inSales || fiscalConfigured) && <div className="finance-actions">
+        {inSales && <button type="button" className="button secondary" onClick={() => onBackToList ? onBackToList() : setView("documents")}>Voltar para notas</button>}
+        {inSales && view === "issue" && <button type="button" className="button secondary" onClick={() => setView("settings")}>Configuração fiscal</button>}
+        {inSales && view === "settings" && <button type="button" className="button secondary" onClick={() => onIncludeDocument ? onIncludeDocument() : setView("issue")}>Incluir nota fiscal</button>}
+        {fiscalConfigured && <button className="button secondary" disabled={busy || loadingStatus}
+          onClick={() => void act(async () => {}, "Dados fiscais atualizados.")}>Atualizar</button>}
+      </div>}
+    </header>}
     {!fiscalConfigured && <p role="alert">Backend não conectado. Publique o serviço fiscal Docker e configure VITE_FISCAL_API_URL no frontend. Não envie o certificado até conectar o ambiente seguro.</p>}
-    <p>NF-e: SEFAZ/SVRS de Santa Catarina. NFS-e: Emissor Nacional, Florianópolis. Produção depende de homologação e liberação explícita do servidor.</p>
-    <p>O fluxo atual recebe XML fiscal preparado para o faturamento e valida uma cópia assinada no XSD antes de permitir transmissão. Cadastre primeiro o A1. Referências do Bling não substituem a revisão da operação. Não há cálculo tributário automático universal.</p>
-    <button className="button secondary" disabled={!fiscalConfigured || busy} onClick={() => void act(async () => {}, "Backend atualizado.")}>Conectar / atualizar backend</button>
     {error && <p role="alert" className="error-message">{error}</p>}
     {message && <p role="status">{message}</p>}
-    {status && <>
-      <p>Schemas: NF-e {status.schemas.nfe ? "instalado" : "ausente"} · NFS-e {status.schemas.nfse ? "instalado" : "ausente"}</p>
+    {!inSales && <nav className="fiscal-module-tabs fiscal-context-tabs" aria-label="Fiscal">
+      <button type="button" className={view === "documents" ? "active" : ""} aria-current={view === "documents" ? "page" : undefined}
+        onClick={() => setView("documents")}><FileText size={17} />{documentKind === "nfse" ? "Notas de serviço" : "Notas fiscais de saída"}</button>
+      <button type="button" className={view === "issue" ? "active" : ""} aria-current={view === "issue" ? "page" : undefined}
+        onClick={() => setView("issue")}><FilePlus2 size={17} />Incluir nota fiscal</button>
+      <button type="button" className={view === "settings" ? "active" : ""} aria-current={view === "settings" ? "page" : undefined}
+        onClick={() => setView("settings")}><Settings2 size={17} />Configuração fiscal</button>
+    </nav>}
+    {!status && loadingStatus && <p role="status">Conectando ao serviço fiscal…</p>}
+    {!status && !loadingStatus && !error && <p role="status">Atualize para carregar a listagem fiscal.</p>}
+    {status && view === "settings" && <>
+      <div className="fiscal-configuration-intro">
+        <p>NF-e: SEFAZ/SVRS de Santa Catarina. NFS-e: Emissor Nacional, Florianópolis. Produção depende de homologação e liberação explícita do servidor.</p>
+        <p>Não há cálculo tributário automático universal. Revise o enquadramento e a operação com a contabilidade antes de transmitir.</p>
+        <p>Schemas: NF-e {status.schemas.nfe ? "instalado" : "ausente"} · NFS-e {status.schemas.nfse ? "instalado" : "ausente"}.
+          {" "}Cancelamento NF-e {status.schemas.nfeCancellation ? "instalado" : "ausente"} · Cancelamento NFS-e {status.schemas.nfseCancellation ? "instalado" : "ausente"}.</p>
+      </div>
       <p>Schema de cancelamento NF-e: {status.schemas.nfeCancellation ? "instalado" : "ausente (instale no backend antes de solicitar evento)"}.</p>
       <p>Schema do pedido de cancelamento NFS-e: {status.schemas.nfseCancellation ? "instalado" : "ausente (instale os schemas NFS-e no backend antes de solicitar evento)"}.</p>
       <form key={status.issuer?.cnpj ?? "new"} onSubmit={(event) => submit(event, async (form) => {
@@ -159,11 +259,21 @@ export function FiscalPanel({ data, commit }: { data: Database; commit: (update:
       <FiscalMatrixPanel matrices={status.matrices} rules={status.rules} busy={busy} act={act} />
       <FiscalInvoiceCalculation data={data} catalog={status.catalog} calculations={status.calculations} busy={busy} act={act} commit={commit} />
       <FiscalNumberingPanel records={status.numbering} reservations={status.numberReservations} busy={busy} act={act} />
-      <FiscalNfeGenerationPanel data={data} numbering={status.numbering} busy={busy}
-        certificateReady={Boolean(status.certificate)} schemaReady={status.schemas.nfe === true} act={act} />
-      <FiscalNumberingPanel records={status.dpsNumbering} reservations={status.dpsNumberReservations} busy={busy} act={act} model="nfse" />
-      <FiscalDpsGenerationPanel data={data} catalog={status.catalog} numbering={status.dpsNumbering} busy={busy}
-        certificateReady={Boolean(status.certificate)} schemaReady={status.schemas.nfse === true} act={act} />
+    </>}
+    {status && view === "issue" && <>
+      <div className="fiscal-issue-intro">
+        <h3>Preparar uma nota fiscal</h3>
+        <p>Selecione um faturamento existente para emitir o documento correspondente. A NF-e de produtos e a NFS-e de serviços são fluxos separados; a autorização depende de validação fiscal e retorno do ambiente escolhido.</p>
+        {!status.issuer && <p role="alert">Cadastre e valide o emitente na Configuração fiscal antes de preparar uma nota.</p>}
+        {!status.certificate && <p role="alert">Cadastre o certificado A1 no ambiente seguro antes de gerar ou transmitir documentos.</p>}
+      </div>
+      {documentKind !== "nfse" && <FiscalNfeGenerationPanel data={data} catalog={status.catalog} numbering={status.numbering} busy={busy}
+        certificateReady={Boolean(status.certificate)} schemaReady={status.schemas.nfe === true} act={act} initialInvoiceId={initialInvoiceId} />}
+      {documentKind !== "nfe" && <>
+        <FiscalNumberingPanel records={status.dpsNumbering} reservations={status.dpsNumberReservations} busy={busy} act={act} model="nfse" />
+        <FiscalDpsGenerationPanel data={data} catalog={status.catalog} numbering={status.dpsNumbering} busy={busy}
+          certificateReady={Boolean(status.certificate)} schemaReady={status.schemas.nfse === true} act={act} initialInvoiceId={initialInvoiceId} />
+      </>}
       <form onSubmit={(event) => submit(event, async (form, element) => {
         const invoice = data.finance.invoices.find((item) => item.id === form.get("invoiceId"));
         if (!invoice || invoice.kind === "Legado") throw new Error("Selecione um faturamento separado.");
@@ -173,39 +283,41 @@ export function FiscalPanel({ data, commit }: { data: Database; commit: (update:
         <h3>Preparar documento fiscal</h3>
         <p>Aguarde o financeiro ficar Sincronizado. O backend confere cliente, total, modelo e forma de pagamento na base da nuvem antes da emissão.</p>
         <div className="form-grid">
-          <label className="field">Faturamento<select name="invoiceId" required defaultValue=""><option value="">Selecione</option>
-            {data.finance.invoices.filter((invoice) => !invoice.canceled && invoice.kind !== "Legado").map((invoice) => <option key={invoice.id} value={invoice.id}>
+          <label className="field">Faturamento<select name="invoiceId" required defaultValue={initialInvoiceId ?? ""}><option value="">Selecione</option>
+            {data.finance.invoices.filter((invoice) => !invoice.canceled && invoice.kind !== "Legado" &&
+              (!documentKind || invoice.kind === (documentKind === "nfe" ? "Produtos" : "Serviços"))).map((invoice) => <option key={invoice.id} value={invoice.id}>
               {invoice.kind} · {invoice.clientName} · {currency(invoice.amount)} · {invoice.orders.map((order) => order.code).join(", ")}
             </option>)}</select></label>
           <label className="field">Ambiente<select name="environment"><option value="homologacao">Homologação</option><option value="producao">Produção (exige liberação no servidor)</option></select></label>
           <label className="field">Referência revisada<select name="ruleId" required defaultValue=""><option value="">Selecione</option>
-            {status.rules.filter((item) => item.reviewed).map((item) => <option key={item.id} value={item.id}>{item.kind.toUpperCase()} · {item.name}</option>)}</select></label>
+            {status.rules.filter((item) => item.reviewed && (!documentKind || item.kind === documentKind)).map((item) => <option key={item.id} value={item.id}>{item.kind.toUpperCase()} · {item.name}</option>)}</select></label>
           <label className="field">XML não assinado<input name="file" type="file" required accept=".xml" /></label>
         </div><button disabled={busy || !status.certificate} className="button primary">Validar e salvar rascunho</button>
       </form>
-      <FiscalNfseReconciliation documents={status.documents} busy={busy} act={act} />
-      <h3>Documentos fiscais</h3>
-      <p>DANFE/DANFSe disponíveis apenas para documentos autorizados no backend. O PDF é auxiliar e não substitui o XML nem consulta a situação atual no fisco. Compartilhamento envia um arquivo, não cria link público.</p>
-      <div className="finance-table"><table><thead><tr><th>Documento / ambiente</th><th>Situação</th><th>Protocolo / mensagem</th><th>Ações</th></tr></thead><tbody>
-        {status.documents.map((item) => <tr key={item.id}><td>{item.kind.toUpperCase()} · {item.environment}<br /><small>{item.accessKey ?? item.key}</small></td><td>{item.status}</td><td>{item.protocol}<br />{item.message}</td>
-          <td><div className="finance-actions">
-            {item.status === "rascunho" && <button className="button primary" disabled={busy} onClick={() => {
-              const confirmation = window.prompt(`Transmitir ${item.kind.toUpperCase()} em ${item.environment}? Digite a chave/Id para confirmar:`, "");
-              if (confirmation === null) return;
-              void act(async () => { await fiscalRequest(`/documents/${item.id}/transmit`, "POST", { confirmation }); }, "Transmissão concluída. Confira a situação retornada pelo fisco.");
-            }}>Assinar e transmitir</button>}
-            {item.status === "rascunho" && <button className="text-button" disabled={busy} onClick={() => {
-              if (!window.confirm("Descartar este rascunho nunca transmitido? A numeração não poderá ser reutilizada. Isso não cancela nota autorizada.")) return;
-              void act(async () => { await fiscalRequest(`/documents/${item.id}/discard`, "POST", {}); }, "Rascunho descartado; nenhuma operação no fisco.");
-            }}>Descartar rascunho</button>}
-            {!["rascunho", "enviando", "cancelado"].includes(item.status) && <button className="button secondary" disabled={busy} onClick={() => void act(async () => {
-              await fiscalRequest(`/documents/${item.id}/consult`, "POST", {});
-            }, "Situação consultada no fisco.")}>Consultar situação</button>}
-            <button className="text-button" disabled={busy} onClick={() => void act(() => download(item.id), "XML baixado. Confira se é rascunho, assinado ou autorizado.")}>Baixar XML</button>
-            <FiscalPdfActions key={`${item.id}-${item.status}-${item.key}-${item.protocol ?? item.accessKey ?? ""}`} item={item} busy={busy} />
-            <FiscalEventActions item={item} busy={busy} act={(operation, success) => act(operation, success, true)} />
-          </div></td></tr>)}
-      </tbody></table></div>
+      {documentKind !== "nfe" && <FiscalNfseReconciliation documents={status.documents} busy={busy} act={act} />}
+      <p>DANFE/DANFSe só ficam disponíveis para documentos autorizados. O PDF é auxiliar; o XML permanece como documento fiscal oficial.</p>
     </>}
+    {view === "documents" && <FiscalOutgoingDocuments
+      fixedKind={documentKind}
+      documents={status?.documents ?? []}
+      invoices={data.finance.invoices}
+      clients={data.clients}
+      busy={busy}
+      loading={loadingStatus}
+      renderActions={documentActions}
+      onInclude={() => setView("issue")}
+      onConfigure={inSales ? () => setView("settings") : undefined}
+      onRefresh={() => void act(async () => {}, "Listagem atualizada.")}
+      onTransmit={(documents) => void act(() => transmitFiscalDocuments(documents, fiscalRequest),
+        "Envio concluído. Confira a situação de cada nota na listagem.", true)}
+      onExport={(ids, format) => void exportDocuments(ids, format)}
+    />}
+    {printUrl && <Modal title="Imprimir notas fiscais selecionadas" wide onClose={() => setPrintUrl("")}>
+      <div className="modal-body">
+        <p>Use o comando de impressão do visualizador de PDF. Documentos de homologação não têm validade fiscal.</p>
+        <a className="button secondary" href={printUrl} target="_blank" rel="noopener noreferrer">Abrir PDF para imprimir</a>
+        <iframe className="fiscal-print-preview" title="Prévia dos documentos fiscais para impressão" src={printUrl} />
+      </div>
+    </Modal>}
   </section>;
 }

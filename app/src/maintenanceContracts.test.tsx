@@ -170,10 +170,10 @@ describe("contratos de manutenção", () => {
     expect(maintenanceContractLifecycle(contract)).toBe("Ativo");
   });
 
-  it("exibe a administração e deixa explícito que não gera OS ou cobranças", () => {
+  it("exibe a administração e explica que a cobrança só ocorre ao gerar cobranças", () => {
     const html = renderToStaticMarkup(<MaintenanceContractsPanel data={fixture()} commit={() => {}} onSuccess={() => {}} />);
     expect(html).toContain("Novo contrato");
-    expect(html).toContain("O valor só entra na OS se o contrato for selecionado nela.");
+    expect(html).toContain("&quot;Gerar cobranças&quot; lança as contas a receber dos contratos ativos");
     expect(html).not.toContain("Tipos de equipamento cobertos (além das unidades)");
     expect(html).toContain("Nenhum contrato encontrado");
   });

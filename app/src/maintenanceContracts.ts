@@ -127,10 +127,12 @@ export function addMaintenanceContractCharge(details: OrderDetails, contract: Ma
   };
 }
 
+export type MaintenanceContractLifecycle = "Ativo" | "Suspenso" | "Cancelado" | "Isento" | "Avaliação";
+
 export function changeMaintenanceContractStatus(
   data: Database,
   expected: MaintenanceContract,
-  status: "Ativo" | "Suspenso" | "Cancelado",
+  status: MaintenanceContractLifecycle,
   reason: string,
   confirmed: boolean,
 ) {

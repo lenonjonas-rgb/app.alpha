@@ -32,6 +32,9 @@ import {
   currency,
   displayDate,
   getOrderDetails,
+  changeOrderSituation,
+  orderSituation,
+  orderSituationGroups,
   orderServiceAddress,
   localDay,
   makeId,
@@ -52,6 +55,8 @@ import type {
   Checklist,
   Database,
   Order,
+  OrderSituation,
+  OrderStatus,
   OrderDetails,
 } from "./domain";
 import { Badge, Empty, Modal } from "./components";
@@ -543,7 +548,7 @@ export function OrderWorkspace({
             </p>
           </div>
           <div className="order-heading-actions">
-            <Badge value={details.archived ? "Arquivada" : order.status} />
+            <Badge value={details.archived ? "Arquivada" : orderSituation(order)} />
             {pending.length > 0 && (
               <button
                 className="pending-pill"
@@ -608,6 +613,13 @@ export function OrderWorkspace({
                     );
                   } },
               ]} />
+              <DropdownMenu label={`Situação: ${orderSituation(order)}`} accessibleLabel="Mudar situação da OS"
+                actions={(Object.entries(orderSituationGroups) as [OrderStatus, readonly OrderSituation[]][]).flatMap(([group, situations]) =>
+                  situations.map((situation, position) => ({
+                    label: situation, section: position === 0 ? group : undefined, current: situation === orderSituation(order),
+                    disabled: situation === orderSituation(order),
+                    onSelect: () => act((current) => changeOrderSituation(current, order.id, situation), `Situação alterada para ${situation}.`),
+                  })))} />
             </>
           )}
         </div>
@@ -2661,7 +2673,7 @@ export function OrderPrintable({
             data.settings.phone, data.settings.email,
           ].filter(Boolean).join(" · ")}</p></>}
           <p>
-            {order.code} · {order.title} · {order.status}
+            {order.code} · {order.title} · {orderSituation(order)}
             {show.pending && pending.length ? " com pendências" : ""}
           </p>
         </div>

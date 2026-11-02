@@ -8,7 +8,7 @@ describe("cadastro fiscal básico", () => {
   it("exibe produtos/serviços, situação e revisão pendente sem prometer emissão", () => {
     const data = demoDatabase();
     const catalog = fiscalCatalogSchema.parse([
-      { kind: "nfe", referenceId: data.products[0].id, ruleId: "product-rule", unit: "UN", ncm: "84821010", origin: "0",
+      { kind: "nfe", referenceId: data.products[0].id, ruleId: "product-rule", unit: "UN", ncm: "84821010", cest: "1234567", origin: "0",
         active: true, notes: "", updatedAt: "2026-10-15T20:00:00Z" },
       { kind: "nfse", referenceId: data.services[0].id, ruleId: "service-rule", nationalCode: "140101", municipalCode: "",
         nbs: "120029000", active: false, notes: "", updatedAt: "2026-10-15T20:00:00Z" },
@@ -18,6 +18,7 @@ describe("cadastro fiscal básico", () => {
       { id: "service-rule", kind: "nfse", name: "Referência de serviço", reviewed: true },
     ]} busy={false} act={async () => {}} />);
     expect(html).toContain("NCM 84821010");
+    expect(html).toContain("CEST 1234567");
     expect(html).toContain("NBS 120029000");
     expect(html).toContain("Revisão pendente");
     expect(html).toContain("Inativo");
@@ -26,7 +27,7 @@ describe("cadastro fiscal básico", () => {
   });
   it("mostra referências ou itens ausentes sem esconder registros persistidos", () => {
     const html = renderToStaticMarkup(<FiscalCatalogPanel data={demoDatabase()} catalog={[{
-      kind: "nfe", referenceId: "removed", ruleId: "removed-rule", unit: "UN", ncm: "84821010", origin: "0", active: true,
+      kind: "nfe", referenceId: "removed", ruleId: "removed-rule", unit: "UN", ncm: "84821010", cest: "1234567", origin: "0", active: true,
       notes: "", updatedAt: "2026-10-15T20:00:00Z",
     }]} rules={[]} busy={false} act={async () => {}} />);
     expect(html).toContain("Item ausente: removed");
