@@ -1175,6 +1175,7 @@ export default function App() {
                           new Date(`${item.date}T${item.time}`).getTime() +
                             item.duration * 60000,
                         ),
+                        extendedProps: { clientName: clientName(item.clientId) },
                         classNames: [
                           `event-${item.status === "Finalizada" ? "done" : item.status === "Em atendimento" ? "active" : item.priority === "Alta" ? "urgent" : "open"}`,
                         ],
@@ -1195,7 +1196,10 @@ export default function App() {
                       eventContent={(event) => (
                         <div className="calendar-event-content">
                           <span>{event.timeText}</span>
-                          <strong>{event.event.title}</strong>
+                          <div className="calendar-event-details">
+                            <strong>{event.event.title}</strong>
+                            <small>{event.event.extendedProps.clientName}</small>
+                          </div>
                         </div>
                       )}
                     />
