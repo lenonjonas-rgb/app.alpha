@@ -81,6 +81,7 @@ import { QuestionnaireCatalog } from "./QuestionnaireCatalog";
 import { EquipmentBrandCatalog } from "./EquipmentBrandCatalog";
 import { EquipmentSelectionSummary } from "./EquipmentModelPicker";
 import { QuoteTable } from "./QuoteTable";
+import { quoteInvoiceActions } from "./quoteInvoiceActions";
 import { ClientEquipment } from "./ClientEquipment";
 import { maintenanceVisitAlerts } from "./maintenanceContracts";
 import { quoteApprovalActor, roleLabels } from "./userAccess";
@@ -327,7 +328,7 @@ export default function App() {
     presentation?: "proposal";
   } | null>(null);
   const [notice, setNotice] = useState("");
-  const [salesStart, setSalesStart] = useState<{ tab: "nfe" | "nfse"; serviceOrderId: string; nonce: number } | null>(null);
+  const [salesStart, setSalesStart] = useState<{ tab: "nfe" | "nfse"; serviceOrderId?: string; quoteId?: string; nonce: number } | null>(null);
   const [printRequest, setPrintRequest] = useState<{ id: string; technician: boolean } | null>(null);
   const [error, setError] = useState("");
   const calendar = useRef<FullCalendar>(null);
@@ -578,6 +579,12 @@ export default function App() {
   function openSalesFromOrder(tab: "nfe" | "nfse", serviceOrderId: string) {
     setDetail(null);
     setSalesStart({ tab, serviceOrderId, nonce: Date.now() });
+    setView("sales");
+    location.hash = `sales/${tab}`;
+  }
+  function openSalesFromQuote(tab: "nfe" | "nfse", quoteId: string) {
+    setDetail(null);
+    setSalesStart({ tab, quoteId, nonce: Date.now() });
     setView("sales");
     location.hash = `sales/${tab}`;
   }
@@ -1978,6 +1985,7 @@ export default function App() {
             act((current) => convertQuoteToSalesOrder(current, activeQuote.id),
               "Pedido de venda criado em rascunho. Confirme o pedido para baixar o estoque.");
           }}
+          onGenerateInvoice={openSalesFromQuote}
           onOpenSales={() => {
             setDetail(null);
             setView("sales");
@@ -2162,6 +2170,7 @@ function QuoteDetail({
   onEdit,
   onStatus,
   onConvertSale,
+  onGenerateInvoice,
   onOpenSales,
   onConvert,
   onOpenOrder,
@@ -2174,6 +2183,7 @@ function QuoteDetail({
   onEdit: () => void;
   onStatus: (next: Quote["status"]) => void;
   onConvertSale: () => void;
+  onGenerateInvoice: (kind: "nfe" | "nfse", id: string) => void;
   onOpenSales: () => void;
   onConvert: () => void;
   onOpenOrder: () => void;
@@ -2278,6 +2288,7 @@ function QuoteDetail({
       <footer className="modal-footer document-controls">
         <DropdownMenu actions={[
           { label: "Imprimir", icon: Printer, onSelect: () => window.print() },
+          ...quoteInvoiceActions(data, quote, onGenerateInvoice).map((action, index) => ({ ...action, separatorBefore: index === 0 })),
         ]} />
         {!quote.orderId && quote.status !== "Aprovado" && (
           <button className="button secondary" onClick={onEdit}>

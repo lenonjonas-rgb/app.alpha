@@ -3,11 +3,12 @@ import { Plus, Search } from "lucide-react";
 import type { Database } from "./domain";
 import { QuoteTable } from "./QuoteTable";
 
-export function CommercialProposalsPanel({ data, onCreate, onOpen, onEdit }: {
+export function CommercialProposalsPanel({ data, onCreate, onOpen, onEdit, onGenerateInvoice }: {
   data: Database;
   onCreate: () => void;
   onOpen: (id: string) => void;
   onEdit: (id: string) => void;
+  onGenerateInvoice?: (kind: "nfe" | "nfse", id: string) => void;
 }) {
   const [query, setQuery] = useState("");
   const [status, setStatus] = useState("Todos");
@@ -38,6 +39,6 @@ export function CommercialProposalsPanel({ data, onCreate, onOpen, onEdit }: {
         <option>Todos</option><option>Rascunho</option><option>Enviado</option><option>Aprovado</option><option>Recusado</option>
       </select>
     </div>
-    <QuoteTable data={data} quotes={quotes} presentation="proposal" onOpen={onOpen} onEdit={onEdit} />
+    <QuoteTable data={data} quotes={quotes} presentation="proposal" onOpen={onOpen} onEdit={onEdit} onGenerateInvoice={onGenerateInvoice} />
   </section>;
 }

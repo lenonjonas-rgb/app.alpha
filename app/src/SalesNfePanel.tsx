@@ -17,6 +17,7 @@ import {
   nfeStockPosted, nfeTotals, nfeWarnings, postNfeAccounts, postNfeStock, reverseNfeAccounts, reverseNfeStock, saveNfe,
 } from "./outgoingInvoices";
 import type { OutgoingInvoice } from "./outgoingInvoiceSchema";
+import { nfeDraftFromQuote } from "./quoteInvoices";
 import "./NfeEditor.css";
 
 type View = { kind: "list" } | { kind: "edit"; nfe: OutgoingInvoice } | { kind: "settings" } | { kind: "backend" };
@@ -25,32 +26,35 @@ function soon(label: string, icon: DropdownAction["icon"], separatorBefore = fal
   return { label, icon, disabled: true, hint: "em breve", separatorBefore, onSelect: () => undefined };
 }
 
-function draftFor(data: Database, orderId?: string, serviceOrderId?: string) {
+function draftFor(data: Database, orderId?: string, serviceOrderId?: string, quoteId?: string) {
+  if (quoteId) return nfeDraftFromQuote(data, quoteId);
   return serviceOrderId ? nfeDraftFromServiceOrder(data, serviceOrderId) : nfeDraftFromSalesOrder(data, orderId!);
 }
 
-function initialView(data: Database, orderId?: string, serviceOrderId?: string): View {
-  if (!orderId && !serviceOrderId) return { kind: "list" };
+function initialView(data: Database, orderId?: string, serviceOrderId?: string, quoteId?: string): View {
+  if (!orderId && !serviceOrderId && !quoteId) return { kind: "list" };
   const existing = orderId ? data.outgoingInvoices.find((item) => item.salesOrderId === orderId && item.status === "Pendente") : undefined;
   if (existing) return { kind: "edit", nfe: existing };
   try {
-    return { kind: "edit", nfe: draftFor(data, orderId, serviceOrderId) };
+    return { kind: "edit", nfe: draftFor(data, orderId, serviceOrderId, quoteId) };
   } catch {
     return { kind: "list" };
   }
 }
 
-export function SalesNfePanel({ data, commit, initialOrderId, initialServiceOrderId, onOpenOrders }: {
+export function SalesNfePanel({ data, commit, initialOrderId, initialServiceOrderId, initialQuoteId, onOpenOrders }: {
   data: Database;
   commit: (update: (current: Database) => Database) => void;
   initialOrderId?: string;
   initialServiceOrderId?: string;
+  initialQuoteId?: string;
   onOpenOrders?: () => void;
 }) {
-  const [view, setView] = useState<View>(() => initialView(data, initialOrderId, initialServiceOrderId));
+  const [view, setView] = useState<View>(() => initialView(data, initialOrderId, initialServiceOrderId, initialQuoteId));
   const [startError] = useState(() => {
-    if ((!initialOrderId && !initialServiceOrderId) || initialView(data, initialOrderId, initialServiceOrderId).kind === "edit") return "";
-    try { draftFor(data, initialOrderId, initialServiceOrderId); return ""; } catch (cause) {
+    if ((!initialOrderId && !initialServiceOrderId && !initialQuoteId) ||
+      initialView(data, initialOrderId, initialServiceOrderId, initialQuoteId).kind === "edit") return "";
+    try { draftFor(data, initialOrderId, initialServiceOrderId, initialQuoteId); return ""; } catch (cause) {
       return cause instanceof Error ? cause.message : "Não foi possível gerar a nota.";
     }
   });

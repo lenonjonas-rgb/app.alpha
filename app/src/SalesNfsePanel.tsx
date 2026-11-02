@@ -18,9 +18,10 @@ import {
   blankNfse, cancelNfse, cloneNfse, deleteNfse, nfseAccountsPosted, nfseBillingTarget, nfseBlockingIssues, nfseDraftFromBillingInvoice,
   nfseDraftFromServiceOrder, nfseNumberLabel, nfseTotals, nfseWarnings, postNfseAccounts, registerNfseIssue, reverseNfseAccounts, saveNfse,
 } from "./serviceInvoices";
+import { nfseDraftFromQuote } from "./quoteInvoices";
 import "./NfeEditor.css";
 
-export type NfseStart = { kind: "invoice" | "serviceOrder"; id: string };
+export type NfseStart = { kind: "invoice" | "serviceOrder" | "quote"; id: string };
 type View = { kind: "list" } | { kind: "edit"; nfse: ServiceInvoice } | { kind: "settings" } | { kind: "backend" };
 
 function soon(label: string, icon: DropdownAction["icon"], separatorBefore = false): DropdownAction {
@@ -29,11 +30,12 @@ function soon(label: string, icon: DropdownAction["icon"], separatorBefore = fal
 
 function draftFor(data: Database, start?: NfseStart): { view: View; error: string } {
   if (!start) return { view: { kind: "list" }, error: "" };
-  const existing = data.serviceInvoices.find((item) => item.status !== "Cancelada" &&
+  const existing = start.kind === "quote" ? undefined : data.serviceInvoices.find((item) => item.status !== "Cancelada" &&
     (start.kind === "invoice" ? item.invoiceId === start.id : item.serviceOrderId === start.id));
   if (existing) return { view: { kind: "edit", nfse: existing }, error: "" };
   try {
-    const nfse = start.kind === "invoice" ? nfseDraftFromBillingInvoice(data, start.id) : nfseDraftFromServiceOrder(data, start.id);
+    const nfse = start.kind === "quote" ? nfseDraftFromQuote(data, start.id)
+      : start.kind === "invoice" ? nfseDraftFromBillingInvoice(data, start.id) : nfseDraftFromServiceOrder(data, start.id);
     return { view: { kind: "edit", nfse }, error: "" };
   } catch (cause) {
     return { view: { kind: "list" }, error: cause instanceof Error ? cause.message : "Não foi possível gerar a nota de serviço." };

@@ -34,6 +34,7 @@ Marcar somente apos implementar e verificar. Codigo local, publicacao e homologa
 ## 3. Comercial
 
 - [x] Criar e acompanhar propostas comerciais em Vendas usando os mesmos registros e aprovacao de Orcamentos, sem duplicacao (local).
+- [x] Gerar NFS-e (somente servicos) e NF-e de venda (somente produtos) a partir da proposta aprovada pelo menu ⋮; corrigido o bloqueio do trigger ao gerar pedido de venda de proposta aprovada (`20261102010000_quote_sales_order_link.sql`, pendente no Supabase de producao).
 - [x] Criar pedido de venda independente da OS, converter orcamento aprovado, permitir vinculo opcional com OS e lancar/estornar estoque pelo menu do pedido; cancelamento estorna o estoque lancado de forma rastreavel (local).
 - [x] Menu de acoes do pedido no padrao Bling: situacoes Em aberto/Em andamento/Atendido/Cancelado, lancar/estornar contas, gerar NF-e/NFS-e a partir do faturamento, gerar OS, clonar e imprimir (simples, comprovante, detalhes) (local).
 - [x] Tela de NF-e de venda de produto no padrao Bling: editor completo com abas do item, calculo automatico, parcelas, faturamento do pedido ao salvar e menu de tres pontos (validar, contas, estoque, clonar, espelho, cancelar, excluir) (local, sem transmissao).

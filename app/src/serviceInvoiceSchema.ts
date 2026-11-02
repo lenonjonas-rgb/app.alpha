@@ -103,6 +103,7 @@ export const serviceInvoiceSchema = z.object({
   complementary: optionalText(5000),
   salesOrderId: optionalText(200),
   serviceOrderId: optionalText(200),
+  quoteId: optionalText(200),
   contractChargeId: optionalText(200),
   invoiceId: optionalText(200),
   entryIds: z.array(id).max(120).default([]),

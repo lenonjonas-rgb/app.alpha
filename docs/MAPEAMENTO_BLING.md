@@ -105,6 +105,8 @@ Por decisao do usuario, **Propostas comerciais** em Vendas e **Orcamentos** usam
 
 A conversao para OS e orientada a assistencia: cria OS aberta com data de hoje, horario e duracao iniciais, tipo/prioridade padrao, tecnico padrao da empresa e os itens do orcamento descritos nas observacoes. A conversao para pedido de venda cria um rascunho independente; somente sua confirmacao baixa os produtos do estoque. Criar ou aprovar uma proposta nao movimenta estoque nem gera cobranca, nota fiscal ou conta a receber.
 
+Proposta aprovada tem menu ⋮ (na lista e em "Mais acoes" do detalhe) com **Gerar nota de servico** e **Gerar nota fiscal de venda**. Em proposta mista, a NFS-e leva somente os servicos e a NF-e de venda somente os produtos; o desconto e rateado pelo valor bruto de cada parte. Havendo pedido de venda vinculado, as notas usam os itens e o faturamento do pedido; sem pedido, usam os itens da proposta. Nota ja gerada e reaberta em vez de duplicada. A gravacao do vinculo `salesOrderId` em proposta aprovada e liberada pela migration `20261102010000_quote_sales_order_link.sql`.
+
 Em Vendas, a navegacao apresenta propostas comerciais, pedidos de venda, notas fiscais de saida e notas de servico nessa ordem; a abertura padrao mostra as propostas. Cada tipo de nota abre sua propria listagem, com inclusao e configuracao fiscal acessiveis na tela, sem repetir o menu de navegacao.
 
 Referencias locais: [editor de orcamentos](../app/src/Forms.tsx), [regras e conversoes](../app/src/domain.ts), [propostas comerciais](../app/src/CommercialProposalsPanel.tsx) e [abas Vendas](../app/src/SalesPanel.tsx).

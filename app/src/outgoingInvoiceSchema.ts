@@ -153,6 +153,7 @@ export const outgoingInvoiceSchema = z.object({
   }).prefault({}),
   salesOrderId: optionalText(200),
   serviceOrderId: optionalText(200),
+  quoteId: optionalText(200),
   invoiceId: optionalText(200),
   entryIds: z.array(id).max(120).default([]),
   createdAt: z.iso.datetime(),

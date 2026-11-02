@@ -2,7 +2,7 @@
 import { readFile } from "node:fs/promises";
 import { PGlite } from "@electric-sql/pglite";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { changeOrderStatus, changeQuoteStatus, countStock, demoDatabase, getOrderDetails, instantiateQuestionnaire,
+import { changeOrderStatus, changeQuoteStatus, convertQuoteToSalesOrder, countStock, demoDatabase, getOrderDetails, instantiateQuestionnaire,
   availablePurchaseReturnItems, createStockLocation, localDay, reversibleConsumptionItems,
   reverseOrderConsumption, returnPurchaseStock, stockAvailable, stockLocationBalance, transferStock, validateDatabase } from "./domain";
 import { saveQuestionnaire } from "./questionnaires";
@@ -126,6 +126,7 @@ beforeAll(async () => {
   await db.exec(await readFile(new URL("../../supabase/migrations/20261019010000_purchase_approval_guards.sql", import.meta.url), "utf8"));
   await db.exec(await readFile(new URL("../../supabase/migrations/20261021010000_skip_unchanged_company_guards.sql", import.meta.url), "utf8"));
   await db.exec(await readFile(new URL("../../supabase/migrations/20261022010000_quote_approval_guards.sql", import.meta.url), "utf8"));
+  await db.exec(await readFile(new URL("../../supabase/migrations/20261102010000_quote_sales_order_link.sql", import.meta.url), "utf8"));
 }, 30000);
 afterAll(async () => { await db.close(); });
 
@@ -1363,5 +1364,11 @@ describe("RPC Android e isolamento de dados", () => {
     altered.quotes[0].discount += 1;
     await expect(db.query("select public.save_company_data($1::jsonb,1)", [JSON.stringify(altered)]))
       .rejects.toThrow("imutáveis");
+
+    const withSalesOrder = convertQuoteToSalesOrder(stored, stored.quotes[0].id);
+    await db.query("select public.save_company_data($1::jsonb,1)", [JSON.stringify(withSalesOrder)]);
+    const linked = await db.query<{ payload: typeof approved }>(
+      "select payload from public.company_data where company_id=$1", [quoteCompany]);
+    expect(linked.rows[0].payload.quotes[0].salesOrderId).toBe(withSalesOrder.salesOrders.at(-1)!.id);
   });
 });

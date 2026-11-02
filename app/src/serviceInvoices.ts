@@ -67,7 +67,7 @@ export function blankNfse(data: Database): ServiceInvoice {
     taxes: { irRate: 0, issRate: 0, retainIss: false, discountIss: false, retainInss: false, retainFederal: false, ibptRate: 0 },
     discount: 0, seller: "", commissionRate: 0,
     payment: { terms: "", category: "Prestação de serviços", installments: [] },
-    complementary: "", salesOrderId: "", serviceOrderId: "", contractChargeId: "", invoiceId: "", entryIds: [],
+    complementary: "", salesOrderId: "", serviceOrderId: "", quoteId: "", contractChargeId: "", invoiceId: "", entryIds: [],
     createdAt: at, updatedAt: at, events: [{ at, description: "Nota de serviço incluída" }],
   };
 }
@@ -78,7 +78,7 @@ export type NfseBillingTarget =
   | { mode: "external"; message: string }
   | { mode: "create"; amount: number };
 
-function serviceInvoiceFor(data: Database, orderId: string) {
+export function serviceInvoiceFor(data: Database, orderId: string) {
   return salesOrderInvoices(data, orderId).find((invoice) => invoice.kind !== "Produtos");
 }
 
@@ -283,7 +283,7 @@ export function cloneNfse(data: Database, id: string): ServiceInvoice {
   const blank = blankNfse(data);
   return {
     ...source, id: blank.id, status: "Pendente", rpsNumber: nextRpsNumber(data, source.rpsSeries), nfseNumber: "",
-    issueDate: blank.issueDate, salesOrderId: "", serviceOrderId: "", contractChargeId: "", invoiceId: "", entryIds: [],
+    issueDate: blank.issueDate, salesOrderId: "", serviceOrderId: "", quoteId: "", contractChargeId: "", invoiceId: "", entryIds: [],
     createdAt: blank.createdAt, updatedAt: blank.updatedAt,
     payment: { ...source.payment, installments: [] },
     events: [{ at: blank.createdAt, description: `Nota de serviço clonada do RPS ${nfseNumberLabel(source)}` }],

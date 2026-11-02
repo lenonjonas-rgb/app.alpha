@@ -1,14 +1,17 @@
-import { Pencil } from "lucide-react";
+import { MoreVertical, Pencil } from "lucide-react";
 import { currency, displayDate, localDay, total } from "./domain";
 import type { Database, Quote } from "./domain";
 import { Badge, Empty } from "./components";
+import { DropdownMenu } from "./DropdownMenu";
+import { quoteInvoiceActions } from "./quoteInvoiceActions";
 
-export function QuoteTable({ data, quotes, presentation = "quote", onOpen, onEdit }: {
+export function QuoteTable({ data, quotes, presentation = "quote", onOpen, onEdit, onGenerateInvoice }: {
   data: Database;
   quotes: Quote[];
   presentation?: "quote" | "proposal";
   onOpen: (id: string) => void;
   onEdit: (id: string) => void;
+  onGenerateInvoice?: (kind: "nfe" | "nfse", id: string) => void;
 }) {
   const label = presentation === "proposal" ? "Proposta" : "Orçamento";
   const today = localDay();
@@ -29,7 +32,7 @@ export function QuoteTable({ data, quotes, presentation = "quote", onOpen, onEdi
           <td className={quote.expires < today && quote.status !== "Aprovado" ? "overdue" : ""}>{displayDate(quote.expires)}</td>
           <td className="amount">{currency(total(quote))}</td>
           <td><Badge value={quote.status} /></td>
-          <td><button
+          <td><div className="sales-order-actions"><button
             className="icon-button"
             title={quote.orderId || quote.salesOrderId ? `${label} ${presentation === "proposal" ? "vinculada" : "vinculado"} a um documento`
               : quote.status === "Aprovado" ? `${label} ${presentation === "proposal" ? "aprovada" : "aprovado"}: termos comerciais bloqueados`
@@ -37,7 +40,9 @@ export function QuoteTable({ data, quotes, presentation = "quote", onOpen, onEdi
             disabled={!!quote.orderId || !!quote.salesOrderId || quote.status === "Aprovado"}
             aria-label={`Editar ${quote.code}`}
             onClick={() => onEdit(quote.id)}
-          ><Pencil size={16} /></button></td>
+          ><Pencil size={16} /></button>
+          {onGenerateInvoice && <DropdownMenu label="Mais ações" accessibleLabel={`Mais ações de ${quote.code}`} triggerIcon={MoreVertical}
+            compact actions={quoteInvoiceActions(data, quote, onGenerateInvoice)} />}</div></td>
         </tr>
       ))}</tbody>
     </table>

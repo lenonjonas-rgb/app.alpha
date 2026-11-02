@@ -13,7 +13,7 @@ import "./SalesOrdersPanel.css";
 type SalesTab = "orders" | "proposals" | "nfe" | "contracts" | "nfse" | "charges";
 const salesTabs: SalesTab[] = ["orders", "proposals", "nfe", "contracts", "nfse", "charges"];
 
-export type SalesServiceOrderStart = { tab: "nfe" | "nfse"; serviceOrderId: string };
+export type SalesServiceOrderStart = { tab: "nfe" | "nfse"; serviceOrderId?: string; quoteId?: string };
 
 export function SalesPanel({ data, commit, initialTab, serviceOrderStart, onCreateProposal, onOpenProposal, onEditProposal, onOpenServiceOrder }: {
   data: Database;
@@ -27,6 +27,7 @@ export function SalesPanel({ data, commit, initialTab, serviceOrderStart, onCrea
 }) {
   const [tab, setTab] = useState<SalesTab>(serviceOrderStart?.tab ?? initialTab ?? "proposals");
   const [serviceOrderId, setServiceOrderId] = useState(serviceOrderStart?.serviceOrderId ?? "");
+  const [quoteId, setQuoteId] = useState(serviceOrderStart?.quoteId ?? "");
   const [fiscalInvoiceId, setFiscalInvoiceId] = useState("");
   const [nfeOrderId, setNfeOrderId] = useState("");
   const [contractNotice, setContractNotice] = useState("");
@@ -45,6 +46,7 @@ export function SalesPanel({ data, commit, initialTab, serviceOrderStart, onCrea
     setFiscalInvoiceId("");
     setNfeOrderId("");
     setServiceOrderId("");
+    setQuoteId("");
     setContractNotice("");
     location.hash = `sales/${next}`;
   }
@@ -69,16 +71,18 @@ export function SalesPanel({ data, commit, initialTab, serviceOrderStart, onCrea
         onIssueFiscal={(kind, invoiceId) => { selectTab(kind); setFiscalInvoiceId(invoiceId); }}
         onCreateNfe={(orderId) => { selectTab("nfe"); setNfeOrderId(orderId); }} />
       : tab === "proposals"
-        ? <CommercialProposalsPanel data={data} onCreate={onCreateProposal} onOpen={onOpenProposal} onEdit={onEditProposal} />
+        ? <CommercialProposalsPanel data={data} onCreate={onCreateProposal} onOpen={onOpenProposal} onEdit={onEditProposal}
+          onGenerateInvoice={(kind, id) => { selectTab(kind); setQuoteId(id); }} />
         : tab === "nfe"
-          ? <SalesNfePanel key={`nfe:${nfeOrderId}:${serviceOrderId}`} data={data} commit={commit} initialOrderId={nfeOrderId || undefined}
-            initialServiceOrderId={serviceOrderId || undefined}
+          ? <SalesNfePanel key={`nfe:${nfeOrderId}:${serviceOrderId}:${quoteId}`} data={data} commit={commit} initialOrderId={nfeOrderId || undefined}
+            initialServiceOrderId={serviceOrderId || undefined} initialQuoteId={quoteId || undefined}
             onOpenOrders={() => selectTab("orders")} />
           : tab === "contracts"
             ? <MaintenanceContractsPanel data={data} commit={commit} onSuccess={setContractNotice} />
             : tab === "charges"
               ? <SalesChargesPanel data={data} commit={commit} onOpenContracts={() => selectTab("contracts")} onOpenNfse={() => selectTab("nfse")} />
-              : <SalesNfsePanel key={`nfse:${fiscalInvoiceId}:${serviceOrderId}`} data={data} commit={commit}
-                start={fiscalInvoiceId ? { kind: "invoice", id: fiscalInvoiceId } : serviceOrderId ? { kind: "serviceOrder", id: serviceOrderId } : undefined} onOpenOrders={() => selectTab("orders")} />}
+              : <SalesNfsePanel key={`nfse:${fiscalInvoiceId}:${serviceOrderId}:${quoteId}`} data={data} commit={commit}
+                start={fiscalInvoiceId ? { kind: "invoice", id: fiscalInvoiceId } : serviceOrderId ? { kind: "serviceOrder", id: serviceOrderId }
+                  : quoteId ? { kind: "quote", id: quoteId } : undefined} onOpenOrders={() => selectTab("orders")} />}
   </section>;
 }

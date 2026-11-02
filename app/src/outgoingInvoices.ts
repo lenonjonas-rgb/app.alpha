@@ -502,7 +502,7 @@ export function blankNfe(data: Database): OutgoingInvoice {
     payment: { terms: "", category: "Vendas de mercadorias", installments: [] },
     xmlAuthorized: [],
     additional: { storeOrderNumber: "", storeOrigin: "", channel: "", complementary: "", natureComplementary: "", fiscoInfo: "" },
-    salesOrderId: "", serviceOrderId: "", invoiceId: "", entryIds: [], createdAt: at, updatedAt: at,
+    salesOrderId: "", serviceOrderId: "", quoteId: "", invoiceId: "", entryIds: [], createdAt: at, updatedAt: at,
     events: [{ at, description: "Nota fiscal incluída" }],
   };
 }
@@ -513,7 +513,7 @@ export function blankNfeItem(): NfeItem {
 }
 
 /** Distribui um valor proporcionalmente aos pesos, conservando os centavos. */
-function distribute(total: number, weights: number[]) {
+export function distribute(total: number, weights: number[]) {
   const sum = weights.reduce((a, b) => a + b, 0);
   let accumulated = 0, allocated = 0;
   return weights.map((weight) => {
@@ -805,7 +805,7 @@ export function cloneNfe(data: Database, id: string): OutgoingInvoice {
   const blank = blankNfe(data);
   return {
     ...source, id: blank.id, status: "Pendente", number: blank.number, issueDate: blank.issueDate, exitDate: blank.exitDate,
-    exitTime: "", salesOrderId: "", invoiceId: "", entryIds: [], createdAt: blank.createdAt, updatedAt: blank.updatedAt,
+    exitTime: "", salesOrderId: "", quoteId: "", invoiceId: "", entryIds: [], createdAt: blank.createdAt, updatedAt: blank.updatedAt,
     items: source.items.map((item) => ({ ...item, id: makeId(), salesOrderLineId: "" })),
     payment: { ...source.payment, installments: source.payment.installments.map((item) => ({
       ...item, id: makeId(), dueOn: addDays(blank.issueDate, item.days) })) },
