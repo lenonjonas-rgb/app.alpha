@@ -1,0 +1,25 @@
+services:
+  fiscal:
+    environment:
+      PORT: "8080"
+  proxy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    environment:
+      FISCAL_DOMAIN: ${FISCAL_DOMAIN:?Configure FISCAL_DOMAIN no arquivo .env}
+      ACME_EMAIL: ${ACME_EMAIL:?Configure ACME_EMAIL no arquivo .env}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      fiscal:
+        condition: service_healthy
+    security_opt:
+      - no-new-privileges:true
+volumes:
+  caddy-data:
+  caddy-config:

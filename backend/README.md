@@ -4,6 +4,7 @@ Servico Node.js 24 separado do frontend Vercel, com autenticacao Supabase, cofre
 
 ## O que esta implementado
 
+- Listagem em **Operacao > Vendas**: `GET /status` deriva `issuedAt`, `number`, `series`, destinatario, UF e produtos do XML historico, sem devolver XML/assinatura/resposta completos. Data de criacao nao e usada como emissao; DPS nao e numeracao final de NFS-e. `POST /documents/export` recebe `{ids:[UUID],format:"xml"|"pdf"|"print"}` (1 a 50 IDs unicos da empresa autenticada): XML/PDF devolvem ZIP, ate 50 MB descompactados; `print` devolve PDF unico ate 12 MB, para visualizacao/impressao. PDF e impressao reutilizam verificacao de XML autorizado, assinatura, protocolo, fontes e corte de texto; falha impede o download do lote inteiro. Nenhum envio de dados para renderizadores externos. Transmissao selecionada usa as rotas individuais existentes, apos confirmacao explicita na interface, sem retentativa automatica e sem liberar producao.
 - Apenas usuarios Master (`owner`) e Administrativo (`admin`) autenticados no Supabase. Empresa deriva da membership validada pelo servidor, nunca do JSON recebido. Tecnicos sao recusados. A troca de A1 exige Master.
 - Perfil do emitente de Florianopolis/SC, Lucro Real; upload PFX/P12, conferencias de senha, validade, chave RSA correspondente e CNPJ ICP-Brasil no certificado. Chave privada/certificado sao cifrados com AES-256-GCM e associados a empresa. A senha do PFX nao persiste. Nao ha verificacao local completa de cadeia ICP-Brasil/revogacao; o handshake/servico fiscal tambem deve aceitar o certificado.
 - Emitente possui endereco fiscal estruturado obrigatorio nos novos salvamentos, contato, CNPJ com DV, IE numerica e IM. Endereco deve corresponder a Florianopolis/SC. Cadastros legados sem endereco continuam legiveis para permitir completar pelo formulario. `PUT /recipients` salva dados fiscais nacionais de clientes conferindo o CPF/CNPJ contra o cadastro canonico; `GET /status` inclui `recipients`. Indicadores ICMS1/2/9, IE/IM, consumidor final, nome/endereco e contato ficam isolados por empresa e auditados. CPF/CNPJ sao verificados por DV; municipio e validado por formato/prefixo UF, nao por consulta ao IBGE. IE tem validacao de formato/consistencia, nao DV estadual nem consulta cadastral. Nao suporta estrangeiros, CNPJ alfanumerico ou CPF contribuinte/produtor rural.
@@ -91,6 +92,116 @@ Nao gera PDF de boleto, linha digitavel, QR Pix ou cobranca bancaria registrada.
 O numero NF-e e o contador local confirmado pelo operador no gerador, ou o numero do XML externo que deve coincidir com esse contador; e consumido atomicamente com o rascunho. O Alpha nao gerencia numeros globalmente fora de sua base. Coordenar series/numero com todos os outros emissores, inclusive Bling, preferindo serie exclusiva devidamente validada. Bloquear outras emissoes manuais concorrentes na mesma serie. Avanco manual pode deixar lacunas que exigem avaliacao/inutilizacao fiscal, ainda nao implementada. Descarte/rejeicao nao autorizam reutilizar numero ou chave ja consumidos; um novo rascunho exige novo numero livre. Backup/restauracao precisa reconciliar os ultimos numeros com as autoridades/outros emissores antes de liberar novas emissoes.
 
 ## Preparacao e execucao
+
+### Supabase, Vercel e servidor fiscal
+
+O Supabase continua responsavel por login, empresa e dados canonicos; nao e
+substituido pelo servidor fiscal. Este backend usa Node.js, SQLite persistente,
+OpenSSL e `xmllint`, portanto nao pode ser publicado sem adaptacao como uma Edge
+Function do Supabase. O frontend configurado no aplicativo Android e
+`https://app-alpha-theta.vercel.app`; confirme no painel Vercel que este e o
+deployment da empresa antes de configurar as origens.
+
+### Interface no mesmo servidor (opcional)
+
+O frontend pode continuar na Vercel. Para hospeda-lo no mesmo proxy fiscal,
+adicione [compose.app.yaml](compose.app.yaml) aos dois arquivos Compose abaixo.
+Defina `APP_DOMAIN=app.seudominio.com.br` no `.env` privado existente, sem
+recriar as chaves. Aponte o DNS ao servidor e inclua a origem HTTPS em
+`ALLOWED_ORIGINS`, preservando os clientes existentes.
+
+Compile o frontend com `npm ci` e `npm run build` no diretorio `app`, com
+`VITE_SUPABASE_URL`, `VITE_SUPABASE_PUBLISHABLE_KEY` e `VITE_FISCAL_API_URL`
+no ambiente de build. O pacote precisa incluir tambem `supabase/functions`,
+importado pelos testes compilados; em Docker, monte a raiz do repositorio,
+nao somente `app`. Nunca inclua service role ou chave mestra em `VITE_*`.
+
+O overlay monta **somente** `app/dist`, em modo leitura, e recusa criar uma
+pasta ausente. Confira que `app/dist/index.html` existe antes de iniciar.
+[app.Caddyfile](app.Caddyfile) serve a SPA com fallback para `index.html`,
+revalidacao de cache e 404 para assets ausentes, sem publicar codigo ou `.env`.
+Cadastre os enderecos HTTPS permitidos em Supabase Authentication > URL
+Configuration e so mude o Site URL depois de validar o novo site.
+
+No diretorio backend, valide sem exibir segredos:
+
+```sh
+docker compose -p alpha -f compose.yaml -f compose.https.yaml -f compose.app.yaml config --quiet
+docker compose -p alpha -f compose.yaml -f compose.https.yaml -f compose.app.yaml run --rm --no-deps proxy caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+```
+
+Depois de confirmar DNS e disponibilidade das portas 80/443, inicie com os
+mesmos tres arquivos e `up -d --wait`. Preserve backup e rollback do proxy
+anterior antes de liberar as portas. Verifique HTTPS da interface, assets,
+rota interna da SPA, `/health` fiscal e login autenticado. Use sempre o mesmo
+nome de projeto (`-p alpha`) em instalacoes existentes para preservar volumes.
+Nos comandos operacionais abaixo, inclua o terceiro arquivo quando usar este
+modo. Essa publicacao nao habilita producao fiscal nem comprova transmissao.
+
+### Novo servidor Linux com HTTPS
+
+Use um servidor Linux com Docker Engine e plugin Compose, disco local persistente
+e acesso administrativo privado. Uma unica instancia fiscal deve usar o volume.
+Escolha um subdominio proprio, por exemplo `fiscal.suaempresa.com.br`, e aponte
+seu registro DNS A ao IP publico do servidor. Se usar AAAA, ele tambem deve chegar
+ao mesmo servidor. Libere TCP 80/443 para o proxy e restrinja SSH; nao publique
+8080, banco de dados ou volumes. O proxy precisa de saida HTTPS para obter e
+renovar o certificado e o fiscal precisa de saida HTTPS para Supabase/autoridades.
+
+1. Disponibilize esta versao do repositorio no servidor e entre no diretorio do
+   backend. Nao execute a implantacao antes de enviar as alteracoes locais por
+   um canal privado aprovado. Crie o arquivo privado `.env` a partir de
+   [.env.example](.env.example), com permissao de leitura restrita ao administrador.
+2. Preencha `SUPABASE_URL` com `https://ippyxcxygatluaofuilk.supabase.co`, conferindo
+   o projeto no painel. As chaves publicavel e service role devem vir das
+   configuracoes de API do proprio projeto e ser inseridas somente no ambiente
+   privado. Nunca cole a service role no chat, Vercel frontend ou `VITE_*`.
+3. Defina `ALLOWED_ORIGINS=https://app-alpha-theta.vercel.app` apos confirmar o
+   endereco, `FISCAL_DOMAIN` com o subdominio escolhido **sem** `https://` e
+   `ACME_EMAIL` com o e-mail operacional. Gere/guarde a chave mestra conforme
+   abaixo e mantenha `ALLOW_PRODUCTION=false`. Nao reinicialize uma chave existente.
+4. Instale os schemas conforme abaixo; NF-e precisa do pacote completo vigente,
+   nao somente dos eventos de cancelamento. Se nao houver Node no host, o container
+   temporario oficial `node:24-bookworm-slim`, com este diretorio montado, pode
+   executar `npm ci` e os instaladores antes de subir o servico. Os esquemas ficam
+   no host e sao montados somente para leitura no fiscal.
+5. Use o compose base mais [compose.https.yaml](compose.https.yaml):
+   `docker compose -f compose.yaml -f compose.https.yaml config --quiet` para
+   validar sem imprimir configuracao/segredos, seguido de
+   `docker compose -f compose.yaml -f compose.https.yaml up --build -d`.
+   [Caddyfile](Caddyfile) configura HTTPS automatico, limite de corpo de 4 MB
+   e espera da resposta fiscal; nao habilita log de acesso/corpos/Authorization.
+   A porta fiscal permanece somente no loopback do host; o proxy acessa a rede
+   interna do Compose. Os volumes preservam SQLite e o estado TLS entre reinicios.
+6. Execute `docker compose -f compose.yaml -f compose.https.yaml exec -T fiscal npm run check`.
+   O diagnostico retorna codigo 1 se faltar configuracao, ferramenta, schema,
+   gravacao de dados ou conexao publica ao Supabase. Nao imprime segredos, nao
+   acessa certificados nem transmite documentos. Presenca de XSD nao valida
+   vigencia/includes, e resposta do Supabase nao valida sessao, membership ou
+   migracoes. Confira tambem `https://SEU-DOMINIO-FISCAL/health`.
+7. Na Vercel, abra o projeto Alpha em **Settings > Environment Variables**.
+   Configure `VITE_FISCAL_API_URL=https://SEU-DOMINIO-FISCAL`, mantenha
+   `VITE_SUPABASE_URL` e `VITE_SUPABASE_PUBLISHABLE_KEY` do mesmo Supabase
+   e faca um novo deployment. Nao use IP/HTTP no frontend HTTPS.
+   As variaveis Vite so entram no aplicativo depois do novo build.
+8. Acesse o Alpha publicado com usuario Master, confirme sincronizacao e abra
+   **Financeiro > Fiscal > Configuracao fiscal**. Somente depois de validar
+   HTTPS/origem/sessao envie o A1 pelo formulario seguro. Cadastre emitente,
+   destinatarios, classificacoes/matrizes revisadas e numeracao de homologacao
+   separada por modelo. Nao aplique migracoes cegamente sobre o banco existente:
+   reconcilie o historico e as protecoes financeiras primeiro.
+9. Gere e confira um rascunho NF-e de homologacao e outro DPS/NFS-e de
+   homologacao. Transmita cada um com confirmacao explicita, confira o retorno,
+   consulte a situacao e valide XML/PDF. Valide tambem rejeicao, interrupcao/
+   consulta sem reenvio e persistencia apos reinicio. Esta preparacao **nao**
+   constitui homologacao nem habilita producao. Credenciamento do emitente e
+   disponibilidade da API nacional para o municipio devem ser confirmados.
+
+Nao execute `docker compose down -v`: isso exclui os dados fiscais e certificados
+dos volumes. Antes de atualizar/restaurar, faca backup consistente do SQLite,
+guarde a chave mestra separadamente e confira numeracao/documentos.
+
+### Dependencias e configuracao privada
 
 1. Use Node >=24.13 e Docker Compose. Copie [.env.example](.env.example) para `.env`, fora do Git, e preencha Supabase/origens exatas. `SUPABASE_PUBLISHABLE_KEY` continua sendo a chave publica para validar sessao/empresa. Configure separadamente `SUPABASE_SERVICE_ROLE_KEY` **somente no servidor privado**, necessaria para as aprovacoes financeiras; nunca usar em `VITE_*`, navegador, logs, chat ou backup JSON. Em implantacao/upgrade, pause gravacoes financeiras, faca backup conjunto Supabase/SQLite, publique este backend e aplique a migracao de protecao acima em ambiente de teste antes de retomar operacoes. Backend antigo nao concede as autorizacoes exigidas pelo trigger novo; chave/migracao ausentes bloqueiam essas operacoes, sem impedir leituras.
 2. Gere uma unica chave mestra aleatoria de 32 bytes/base64 e guarde-a no gerenciador de segredos do servidor. Nunca coloque em `VITE_*`, chat, logs ou backup JSON da empresa. Perder/trocar a chave torna os A1 existentes indecifraveis; rotacao requer procedimento de recifragem ainda nao implementado.

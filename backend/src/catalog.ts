@@ -12,7 +12,7 @@ const common = {
 };
 export const fiscalItemSchema = z.discriminatedUnion("kind", [
   z.object({ ...common, kind: z.literal("nfe"), unit: z.string().trim().min(1).max(6),
-    ncm: z.string().regex(/^\d{8}$/), origin: z.string().regex(/^[0-8]$/) }),
+    ncm: z.string().regex(/^\d{8}$/), cest: z.string().regex(/^\d{7}$/).optional(), origin: z.string().regex(/^[0-8]$/) }),
   z.object({ ...common, kind: z.literal("nfse"), nationalCode: z.string().regex(/^\d{6}$/),
     municipalCode: z.string().trim().max(20), nbs: z.string().regex(/^\d{9}$/) }),
 ]);
@@ -45,6 +45,7 @@ export function assertClassificationMatches(item: FiscalItem, rule: TaxRule) {
   };
   if (item.kind === "nfe") {
     match(["NCM", "prod.NCM"], item.ncm);
+    if (item.cest) match(["CEST", "prod.CEST"], item.cest);
     match(["origem"], item.origin);
     for (const [key, expected] of Object.entries(rule.fields))
       if (key.startsWith("ICMS.") && key.endsWith(".orig")) requireValue(expected === item.origin, "Origem diverge da referência tributária.", 422);

@@ -89,6 +89,7 @@ export function generateNfe(calculation: InvoiceCalculationRecord, input: Genera
     accumulate("vBCIBSCBS", uf.base); accumulate("vIBSUF", uf.amount);
     accumulate("vIBSMun", mun.amount); accumulate("vCBS", cbs.amount); accumulate("vNF", result.net);
     const prod = tag("cProd", code) + tag("cEAN", "SEM GTIN") + tag("xProd", item.name) + tag("NCM", classification.ncm) +
+      (classification.cest ? tag("CEST", classification.cest) : "") +
       tag("CFOP", parameters.cfop) + tag("uCom", classification.unit) + tag("qCom", quantity) + tag("vUnCom", money(BigInt(item.price))) +
       tag("vProd", result.gross) + tag("cEANTrib", "SEM GTIN") + tag("uTrib", classification.unit) +
       tag("qTrib", quantity) + tag("vUnTrib", money(BigInt(item.price))) +

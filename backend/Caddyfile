@@ -1,0 +1,19 @@
+{
+	email {$ACME_EMAIL}
+}
+
+import /etc/caddy/sites/*.caddy
+
+{$FISCAL_DOMAIN} {
+	request_body {
+		max_size 4MB
+	}
+	reverse_proxy fiscal:8080 {
+		transport http {
+			dial_timeout 10s
+			response_header_timeout 100s
+			read_timeout 100s
+			write_timeout 100s
+		}
+	}
+}

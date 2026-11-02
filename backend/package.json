@@ -8,6 +8,7 @@
     "dev": "tsx watch src/server.ts",
     "build": "tsc",
     "start": "node dist/server.js",
+    "check": "node dist/checkDeployment.js",
     "schemas:nfse": "node scripts/install-nfse-schemas.mjs",
     "schemas:nfe-events": "node scripts/install-nfe-event-schemas.mjs",
     "test": "tsx --test test/*.test.ts"

@@ -1,0 +1,12 @@
+services:
+  proxy:
+    environment:
+      APP_DOMAIN: ${APP_DOMAIN:?Configure APP_DOMAIN no arquivo .env}
+    volumes:
+      - ./app.Caddyfile:/etc/caddy/sites/app.caddy:ro
+      - type: bind
+        source: ../app/dist
+        target: /srv/alpha
+        read_only: true
+        bind:
+          create_host_path: false

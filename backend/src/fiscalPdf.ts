@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { danfe, ErroDa, gerarPdf } from "@sinete/da/nfe";
+import type { Documento } from "@sinete/da/nfe";
 import { danfse } from "@sinete/da/nfse";
 import type { Context } from "./auth.js";
 import { AppError, requireValue } from "./errors.js";
@@ -17,9 +18,42 @@ function validPdf(bytes: Buffer) {
 }
 export class FiscalPdf {
   constructor(private store: Store) {}
-  download(context: Context, id: string) {
+  private layout(context: Context, id: string) {
     const document = this.store.document(context.tenant, id);
     const xml = document.kind === "nfe" ? authorizedNfeArtifact(document) : authorizedNfseArtifact(document);
+    const text = parseXml(xml).documentElement.textContent ?? "";
+    requireValue(!/[^\u0000-\u007f\u00a0-\u00ff\u0152\u0153\u0160\u0161\u0178\u017d\u017e\u0192\u02c6\u02dc\u2013\u2014\u2018-\u201a\u201c-\u201e\u2020-\u2022\u2026\u2030\u2039\u203a\u20ac]/u.test(text),
+      "XML contém caracteres não suportados pelas fontes do PDF; nenhum arquivo foi gerado.", 422);
+    try {
+      const layout = document.kind === "nfe" ? danfe(xml) : danfse(xml);
+      requireValue(layout.paginas.length > 0 && layout.estatisticas.cortados === 0,
+        "O leiaute cortaria texto do documento fiscal. Baixe o XML e solicite revisão do leiaute; PDF não gerado.", 422);
+      return layout;
+    } catch (error) {
+      if (error instanceof ErroDa) throw new AppError(422, `Não foi possível gerar o documento auxiliar (${error.code}). Confira o XML autorizado e o leiaute suportado.`);
+      throw error;
+    }
+  }
+  combined(context: Context, ids: string[]) {
+    requireValue(ids.length > 0 && ids.length <= 50, "Selecione de 1 a 50 documentos para imprimir.");
+    const layouts = ids.map((id) => this.layout(context, id));
+    const images: Record<string, Documento["imagens"][string]> = {};
+    const pages = layouts.flatMap((layout, index) => {
+      for (const [key, image] of Object.entries(layout.imagens)) images[`${index}-${key}`] = image;
+      return layout.paginas.map((page) => ({
+        ...page, ops: page.ops.map((op) => op.t === "imagem" ? { ...op, imagem: `${index}-${op.imagem}` } : op),
+      }));
+    });
+    const bytes = Buffer.from(gerarPdf({ titulo: "Notas fiscais selecionadas", paginas: pages, imagens: images,
+      estatisticas: { reduzidos: 0, quebrados: 0, cortados: 0 } }));
+    validPdf(bytes);
+    this.store.audit(context.tenant, context.actor, "pdf.print", ids.join(","));
+    return bytes;
+  }
+  download(context: Context, id: string) {
+    const document = this.store.document(context.tenant, id);
+    if (document.kind === "nfe") authorizedNfeArtifact(document);
+    else authorizedNfseArtifact(document);
     const source = hash(JSON.stringify({ renderer, kind: document.kind, environment: document.environment, key: document.key,
       accessKey: document.accessKey, protocol: document.protocol, xml: document.xml, signedXml: document.signedXml, artifact: document.artifact }));
     const filename = `${document.kind === "nfe" ? "DANFE" : "DANFSe"}-${document.environment}-${document.kind === "nfe" ? document.key.slice(3) : document.accessKey}.pdf`;
@@ -31,18 +65,7 @@ export class FiscalPdf {
       requireValue(saved.filename === filename && saved.size === bytes.length && saved.sha256 === hash(bytes),
         "PDF fiscal armazenado falhou na verificação de integridade; restaure o backup ou solicite suporte.", 409);
     } else {
-      const text = parseXml(xml).documentElement.textContent ?? "";
-      requireValue(!/[^\u0000-\u007f\u00a0-\u00ff\u0152\u0153\u0160\u0161\u0178\u017d\u017e\u0192\u02c6\u02dc\u2013\u2014\u2018-\u201a\u201c-\u201e\u2020-\u2022\u2026\u2030\u2039\u203a\u20ac]/u.test(text),
-        "XML contém caracteres não suportados pelas fontes do PDF; nenhum arquivo foi gerado.", 422);
-      try {
-        const layout = document.kind === "nfe" ? danfe(xml) : danfse(xml);
-        requireValue(layout.paginas.length > 0 && layout.estatisticas.cortados === 0,
-          "O leiaute cortaria texto do documento fiscal. Baixe o XML e solicite revisão do leiaute; PDF não gerado.", 422);
-        bytes = Buffer.from(gerarPdf(layout));
-      } catch (error) {
-        if (error instanceof ErroDa) throw new AppError(422, `Não foi possível gerar o documento auxiliar (${error.code}). Confira o XML autorizado e o leiaute suportado.`);
-        throw error;
-      }
+      bytes = Buffer.from(gerarPdf(this.layout(context, id)));
       validPdf(bytes);
       saved = { source, renderer, filename, sha256: hash(bytes), size: bytes.length, generatedAt: new Date().toISOString(), base64: bytes.toString("base64") };
       this.store.db.exec("BEGIN IMMEDIATE");

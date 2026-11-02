@@ -27,6 +27,7 @@ import { FiscalPdf } from "../src/fiscalPdf.js";
 import { pdfContents } from "./pdfInspection.js";
 import { AppError } from "../src/errors.js";
 import { danfe } from "@sinete/da/nfe";
+import { unzipSync } from "fflate";
 
 const context: Context = { tenant: "test", actor: "owner", role: "owner", token: "test" };
 const request: GeneratedNfeInput = { invoiceId: "invoice", environment: "homologacao", series: 1, expectedNumber: 10,
@@ -109,6 +110,37 @@ test("DANFE real autenticado: conteúdo, isolamento, cache persistente, integrid
     if (process.env.ALPHA_NFE_PDF_TEST_OUTPUT) await writeFile(process.env.ALPHA_NFE_PDF_TEST_OUTPUT, first.bytes);
     assert.match(contents, / re f/);
     assert.deepEqual(pdfs.download(context, document.id).bytes, first.bytes);
+    const combined = pdfs.combined(context, [document.id, document.id]);
+    assert.equal((combined.toString("latin1").match(/\/Type \/Page\b/g) ?? []).length,
+      2 * danfe(document.artifact!).paginas.length);
+    assert.ok(pdfContents(combined).includes(protocol));
+    assert.throws(() => pdfs.combined({ ...context, tenant: "other" }, [document.id]), /não encontrado/);
+    assert.throws(() => pdfs.combined(context, []), /1 a 50/);
+    const exportServer = createServer(createApi(f.service, {
+      authenticate: async () => context,
+      company: async () => { throw new Error("Exportação não deve reconstruir cadastros atuais"); },
+    }, new Set()));
+    await new Promise<void>((resolve) => exportServer.listen(0, "127.0.0.1", resolve));
+    try {
+      const exportUrl = `http://127.0.0.1:${(exportServer.address() as AddressInfo).port}/documents/export`;
+      for (const format of ["pdf", "print"]) {
+        const exported = await fetch(exportUrl, { method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ids: [document.id], format }) });
+        assert.equal(exported.status, 200, await exported.clone().text());
+        const bytes = Buffer.from(await exported.arrayBuffer());
+        if (format === "pdf") {
+          assert.equal(exported.headers.get("content-type"), "application/zip");
+          const files = Object.values(unzipSync(bytes));
+          assert.equal(files.length, 1);
+          assert.deepEqual(Buffer.from(files[0]!), first.bytes);
+        } else {
+          assert.equal(exported.headers.get("content-type"), "application/pdf");
+          assert.ok(pdfContents(bytes).includes(protocol));
+        }
+      }
+    } finally {
+      await new Promise<void>((resolve, reject) => exportServer.close((error) => error ? reject(error) : resolve()));
+    }
     assert.throws(() => pdfs.download({ ...context, tenant: "other" }, document.id), /não encontrado/);
     server = createServer(createApi(f.service, { authenticate: async (header) => {
       if (header === "Bearer test") return context;
@@ -129,6 +161,7 @@ test("DANFE real autenticado: conteúdo, isolamento, cache persistente, integrid
     for (const status of ["cancelado", "incerto", "rejeitado", "processando", "enviando", "rascunho"] as const) {
       f.store.saveDocument(context.tenant, { ...document, status });
       assert.throws(() => pdfs.download(context, document.id), /autorização/);
+      assert.throws(() => pdfs.combined(context, [document.id]), /autorização/);
       const denied = await fetch(base, { headers: { Authorization: "Bearer test" } });
       assert.equal(denied.status, 409);
       assert.ok(denied.headers.get("content-type")!.startsWith("application/json"));

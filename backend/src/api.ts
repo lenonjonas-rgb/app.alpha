@@ -15,6 +15,8 @@ import { financeLinks, reserveFinanceCancellation } from "./financeLinks.js";
 import { FiscalPdf } from "./fiscalPdf.js";
 import type { CancellationEvent } from "./nfeCancellation.js";
 import type { NfseCancellationEvent } from "./nfseCancellation.js";
+import { documentMetadata } from "./documentMetadata.js";
+import { zipSync } from "fflate";
 
 export type ApiAuth = {
   authenticate(header: string | undefined): Promise<Context>; company(context: Context): Promise<CompanyData>;
@@ -137,7 +139,7 @@ export function createApi(service: FiscalService, auth: ApiAuth, origins: Set<st
       }
       if (path === "/status" && request.method === "GET") {
         send(200, { issuer: service.profile(context), certificate: service.vault.metadata(context.tenant), schemas: await service.validator.ready(),
-          documents: service.store.documents(context.tenant).map(({ xml: _xml, signedXml: _signed, response: _response, artifact: _artifact, ...metadata }) => metadata),
+          documents: service.store.documents(context.tenant).map(documentMetadata),
           rules: service.rules(context), catalog: catalog.list(context), recipients: parties.list(context), matrices: matrix.list(context),
           calculations: invoiceCalculation.list(context),
           numbering: service.profile(context) ? numbering.list(context, service.profile(context)!.cnpj) : [],
@@ -222,6 +224,35 @@ export function createApi(service: FiscalService, auth: ApiAuth, origins: Set<st
       if (path === "/rules/import" && request.method === "POST") {
         const body = z.object({ xml: z.string().max(2_000_000) }).parse(await readBody(request));
         send(201, service.importRules(context, body.xml)); return;
+      }
+      if (path === "/documents/export" && request.method === "POST") {
+        const { ids, format } = z.object({
+          ids: z.array(z.uuid()).min(1).max(50).refine((ids) => new Set(ids).size === ids.length),
+          format: z.enum(["xml", "pdf", "print"]),
+        }).parse(await readBody(request));
+        const documents = ids.map((id) => service.store.document(context.tenant, id));
+        if (format === "print") {
+          const bytes = fiscalPdf.combined(context, ids);
+          response.writeHead(200, { "Content-Type": "application/pdf",
+            "Content-Disposition": 'inline; filename="notas-fiscais.pdf"' });
+          response.end(bytes); return;
+        }
+        const files: Record<string, Uint8Array> = {};
+        let size = 0;
+        for (const document of documents) {
+          const file = format === "pdf" ? fiscalPdf.download(context, document.id) : {
+            filename: `${document.kind}-${document.environment}-${document.id}-${document.status}.xml`,
+            bytes: Buffer.from(document.artifact ?? document.signedXml ?? document.xml),
+          };
+          size += file.bytes.length;
+          requireValue(size <= 50_000_000, "Exportação acima de 50 MB. Selecione menos documentos.", 413);
+          files[file.filename] = file.bytes;
+        }
+        const bytes = zipSync(files);
+        service.store.audit(context.tenant, context.actor, `documents.export.${format}`, ids.join(","));
+        response.writeHead(200, { "Content-Type": "application/zip",
+          "Content-Disposition": `attachment; filename="notas-${format}.zip"` });
+        response.end(Buffer.from(bytes)); return;
       }
       if (path === "/documents" && request.method === "POST") {
         const body = await readBody(request);

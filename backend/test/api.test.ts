@@ -12,6 +12,7 @@ import type { Context, CompanyData } from "../src/auth.js";
 import { fiscalAddress, issuerFixture } from "./partyFixtures.js";
 import { productParameters } from "./taxFixtures.js";
 import { authorizedNfe } from "./collectionFixtures.js";
+import { unzipSync, strFromU8 } from "fflate";
 
 test("API exige sessão/origem, valida banco canônico, persiste remessa e devolve o mesmo arquivo sem duplicar", async () => {
   const store = new Store(":memory:");
@@ -118,7 +119,35 @@ test("API exige sessão/origem, valida banco canônico, persiste remessa e devol
     const blocked = await call("/remittances", "POST", input);
     assert.equal(blocked.status, 409);
     assert.equal((await (await call("/remittances/config?accountId=bank")).json() as { nextNossoNumero: number }).nextNossoNumero, 1);
-    authorizedNfe(store, context, company, "invoice");
+    const fiscalDocument = authorizedNfe(store, context, company, "invoice");
+    const fiscalStatus = await (await call("/status")).json() as {
+      documents: Array<{ id: string; issuedAt: string; number: string; amount: number; xml?: string }>;
+    };
+    assert.equal(fiscalStatus.documents[0]!.issuedAt, "2026-10-15T12:00:00-03:00");
+    assert.equal(fiscalStatus.documents[0]!.number, "1");
+    assert.equal(fiscalStatus.documents[0]!.amount, 10000);
+    assert.equal(fiscalStatus.documents[0]!.xml, undefined);
+    assert.deepEqual((await (await call("/status", "GET", undefined, "other")).json() as { documents: unknown[] }).documents, []);
+    const exportBody = { ids: [fiscalDocument.id], format: "xml" };
+    const exported = await call("/documents/export", "POST", exportBody);
+    assert.equal(exported.status, 200);
+    assert.equal(exported.headers.get("content-type"), "application/zip");
+    const exportedFiles = Object.entries(unzipSync(new Uint8Array(await exported.arrayBuffer())));
+    assert.equal(exportedFiles.length, 1);
+    assert.ok(exportedFiles[0]![0].includes("producao"));
+    assert.equal(strFromU8(exportedFiles[0]![1]), fiscalDocument.artifact);
+    assert.equal((await call("/documents/export", "POST", exportBody, "invalid")).status, 401);
+    assert.equal((await call("/documents/export", "POST", exportBody, "other")).status, 404);
+    assert.equal((await call("/documents/export", "POST", { ...exportBody, ids: [] })).status, 422);
+    assert.equal((await call("/documents/export", "POST", { ...exportBody, ids: [fiscalDocument.id, fiscalDocument.id] })).status, 422);
+    assert.equal((await call("/documents/export", "POST", { ...exportBody, ids: Array(51).fill(fiscalDocument.id) })).status, 422);
+    store.saveDocument(context.tenant, { ...fiscalDocument, status: "incerto" });
+    for (const format of ["pdf", "print"]) {
+      const blockedExport = await call("/documents/export", "POST", { ...exportBody, format });
+      assert.equal(blockedExport.status, 409);
+      assert.equal(blockedExport.headers.get("content-type"), "application/json; charset=utf-8");
+    }
+    store.saveDocument(context.tenant, fiscalDocument);
     const created = await call("/remittances", "POST", input);
     assert.equal(created.status, 201, await created.clone().text());
     const record = await created.json() as { id: string; file?: string };

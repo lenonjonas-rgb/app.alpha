@@ -13,7 +13,7 @@ const company: CompanyData = {
   products: [{ id: "product", name: "Rolamento" }], services: [{ id: "service", name: "Montagem" }],
   clients: [], finance: { accounts: [], entries: [], invoices: [] },
 };
-const product = { kind: "nfe", referenceId: "product", ruleId: "bling-sale-reference", unit: "UN", ncm: "84821010", origin: "0", active: true, notes: "" };
+const product = { kind: "nfe", referenceId: "product", ruleId: "bling-sale-reference", unit: "UN", ncm: "84821010", cest: "1234567", origin: "0", active: true, notes: "" };
 const service = { kind: "nfse", referenceId: "service", ruleId: "bling-service-reference", nationalCode: "140101",
   municipalCode: "", nbs: "120029000", active: true, notes: "Revisar com contabilidade" };
 
@@ -31,6 +31,7 @@ test("catálogo fiscal edita e inativa sem duplicar, preserva zeros e não aprov
     assert.ok(blingReferences.every((rule) => !rule.reviewed));
     const withZero = fiscalItemSchema.parse({ ...product, ncm: "01012100" });
     assert.equal(withZero.kind === "nfe" && withZero.ncm, "01012100");
+    assert.equal(saved.kind === "nfe" && saved.cest, "1234567");
     assert.equal(store.db.prepare("SELECT COUNT(*) AS total FROM audit").get()!.total, 3);
   } finally { store.db.close(); }
 });
@@ -47,7 +48,7 @@ test("catálogo fiscal recusa item fora da empresa, modelo e classificação div
     assert.throws(() => save({ ...service, nationalCode: "140102" }), /cTribNac/);
     assert.throws(() => save({ ...service, nbs: "000000000" }), /cNBS/);
     for (const input of [{ ...product, unit: "" }, { ...product, origin: "9" }, { ...product, ncm: "8482" },
-      { ...product, active: "true" }, { ...service, nationalCode: "14.01.01" }, { ...service, nbs: "1200" }]) {
+      { ...product, cest: "123" }, { ...product, active: "true" }, { ...service, nationalCode: "14.01.01" }, { ...service, nbs: "1200" }]) {
       assert.throws(() => save(input));
     }
     assert.equal(catalog.list(context).length, 0);
