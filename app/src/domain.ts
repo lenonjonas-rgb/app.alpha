@@ -10,6 +10,7 @@ import { financeSchema, validateFinance } from "./financeSchema";
 import type { FinanceEntry } from "./financeSchema";
 import { outgoingInvoiceSchema } from "./outgoingInvoiceSchema";
 import { serviceInvoiceSchema } from "./serviceInvoiceSchema";
+import { nfseTaxSetsSchema } from "./nfseTaxSetSchema";
 import { contractBillingSchema, contractChargeSchema } from "./contractChargeSchema";
 export type { QuestionnaireTemplate, QuestionDefinition } from "./questionnaireSchema";
 
@@ -529,6 +530,7 @@ export const databaseSchema = z.object({
   orderTypeQuestionnaires: z.array(orderTypeQuestionnaireSchema).default([]),
   settings: z.object({
     reportSettings: reportSettingsSchema.prefault({}),
+    nfseTaxSets: nfseTaxSetsSchema.default([]),
     company: text,
     technician: text,
     kilometerRate: money.default(0),

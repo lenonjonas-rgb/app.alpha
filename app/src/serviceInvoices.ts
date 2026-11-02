@@ -9,6 +9,8 @@ import {
   NFSE_COFINS_RATE, NFSE_CSLL_RATE, NFSE_INSS_RATE, NFSE_PIS_RATE, serviceInvoiceSchema,
 } from "./serviceInvoiceSchema";
 import type { ServiceInvoice } from "./serviceInvoiceSchema";
+import { applyNfseTaxSet } from "./nfseTaxSets";
+import { existingFiscalCode, normalizedFiscalCode } from "./nfseTaxCodes";
 
 const percent = (base: number, rate: number) => Math.round((base * rate) / 100);
 
@@ -58,18 +60,20 @@ function eventAt(previous?: string) {
   return now.toISOString();
 }
 
-export function blankNfse(data: Database): ServiceInvoice {
+export function blankNfse(data: Database, options: { applyDefaultTaxSet?: boolean } = {}): ServiceInvoice {
   const at = new Date().toISOString();
-  return {
+  const nfse: ServiceInvoice = {
     id: makeId(), status: "Pendente", rpsNumber: nextRpsNumber(data), rpsSeries: "1", nfseNumber: "", issueDate: localDay(),
     operationNature: "1", recipient: nfseRecipientFromClient(undefined),
-    service: { description: "", amount: 0, taxSet: "", nationalCode: "", municipalCode: "", nbs: "", operationIndicator: "", cst: "", classification: "" },
+    service: { description: "", amount: 0, taxSetId: "", taxSet: "", nationalCode: "", municipalCode: "", nbs: "", operationIndicator: "", cst: "", classification: "" },
     taxes: { irRate: 0, issRate: 0, retainIss: false, discountIss: false, retainInss: false, retainFederal: false, ibptRate: 0 },
     discount: 0, seller: "", commissionRate: 0,
     payment: { terms: "", category: "Prestação de serviços", installments: [] },
     complementary: "", salesOrderId: "", serviceOrderId: "", quoteId: "", contractChargeId: "", invoiceId: "", entryIds: [],
     createdAt: at, updatedAt: at, events: [{ at, description: "Nota de serviço incluída" }],
   };
+  const defaultSet = options.applyDefaultTaxSet === false ? undefined : data.settings.nfseTaxSets.find((set) => set.active && set.isDefault);
+  return defaultSet ? applyNfseTaxSet(nfse, defaultSet) : nfse;
 }
 
 export type NfseBillingTarget =
@@ -117,10 +121,22 @@ export function nfseBlockingIssues(nfse: ServiceInvoice) {
 export function nfseWarnings(nfse: ServiceInvoice) {
   const warnings: string[] = [];
   if (!nfse.recipient.document) warnings.push("CPF/CNPJ do cliente não informado.");
-  if (!nfse.service.taxSet && !nfse.service.municipalCode) warnings.push("Código do serviço (tributação municipal) não informado.");
+  if (!nfse.service.municipalCode) warnings.push("Código municipal não informado; verifique se é exigido pelo município.");
   if (!nfse.service.nationalCode) warnings.push("Código de tributação nacional não informado.");
+  else if (!/^\d{6}$/.test(normalizedFiscalCode(nfse.service.nationalCode))) warnings.push("Confira o código de tributação nacional: são 6 dígitos.");
+  if (nfse.service.nbs && !/^\d{9}$/.test(normalizedFiscalCode(nfse.service.nbs))) warnings.push("Confira o NBS: são 9 dígitos.");
+  const operation = existingFiscalCode(nfse.service.operationIndicator, 6);
+  const cst = existingFiscalCode(nfse.service.cst, 3);
+  const classification = existingFiscalCode(nfse.service.classification, 6);
+  if (operation && !/^\d{6}$/.test(operation)) warnings.push("Confira o indicador de operação: são 6 dígitos.");
+  if (cst && !/^\d{3}$/.test(cst)) warnings.push("Confira o CST IBS/CBS: são 3 dígitos.");
+  if (classification && !/^\d{6}$/.test(classification)) warnings.push("Confira a classificação tributária: são 6 dígitos.");
+  if (cst && !operation) warnings.push("CST informado sem indicador de operação; revise os campos.");
+  if (classification && !cst) warnings.push("Classificação tributária informada sem CST; revise os campos.");
+  if (/^\d{3}$/.test(cst) && /^\d{6}$/.test(classification) && !classification.startsWith(cst))
+    warnings.push("A classificação tributária informada não corresponde ao CST; revise os campos.");
   if (!nfse.recipient.serviceCity) warnings.push("Município de prestação do serviço não informado.");
-  if (nfse.taxes.issRate <= 0 && nfse.operationNature === "1") warnings.push("Alíquota de ISS não informada para operação tributável.");
+  if (nfse.taxes.issRate <= 0 && nfse.operationNature === "1") warnings.push("ISS está em 0%; confirme a alíquota para a operação tributável.");
   return warnings;
 }
 

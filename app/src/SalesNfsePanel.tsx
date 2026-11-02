@@ -14,6 +14,8 @@ import { fiscalConfigured } from "./fiscalApi";
 import { NfseEditor } from "./NfseEditor";
 import { nfseOperationNatures } from "./serviceInvoiceSchema";
 import type { ServiceInvoice } from "./serviceInvoiceSchema";
+import { saveNfseTaxSet } from "./nfseTaxSets";
+import type { NfseTaxSet } from "./nfseTaxSetSchema";
 import {
   blankNfse, cancelNfse, cloneNfse, deleteNfse, nfseAccountsPosted, nfseBillingTarget, nfseBlockingIssues, nfseDraftFromBillingInvoice,
   nfseDraftFromServiceOrder, nfseNumberLabel, nfseTotals, nfseWarnings, postNfseAccounts, registerNfseIssue, reverseNfseAccounts, saveNfse,
@@ -106,6 +108,13 @@ export function SalesNfsePanel({ data, commit, start, onOpenOrders }: {
     setError("");
     setNotice(`Nota de serviço RPS ${saved ? nfseNumberLabel(saved) : ""} salva como Pendente${saved && saved.rpsNumber !== nfse.rpsNumber ? ` (número alterado de ${nfseNumberLabel(nfse)})` : ""}.`);
   }
+  function saveTaxSet(set: NfseTaxSet) {
+    try {
+      commit((current) => saveNfseTaxSet(current, set));
+    } catch (cause) {
+      return cause instanceof Error ? cause.message : "Não foi possível salvar o conjunto de tributação.";
+    }
+  }
   function actions(nfse: ServiceInvoice): DropdownAction[] {
     const pending = nfse.status === "Pendente";
     const target = nfseBillingTarget(data, nfse);
@@ -147,7 +156,7 @@ export function SalesNfsePanel({ data, commit, start, onOpenOrders }: {
   }
 
   if (view.kind === "edit")
-    return <NfseEditor key={view.nfse.id} data={data} initial={view.nfse} onSave={save} onCancel={() => setView({ kind: "list" })} />;
+    return <NfseEditor key={view.nfse.id} data={data} initial={view.nfse} onSave={save} onSaveTaxSet={saveTaxSet} onCancel={() => setView({ kind: "list" })} />;
   if (view.kind === "settings" || view.kind === "backend")
     return <FiscalPanel data={data} commit={commit} documentKind="nfse" presentation="sales" eyebrow="OPERAÇÃO · VENDAS"
       initialView={view.kind === "settings" ? "settings" : "documents"} onBackToList={() => setView({ kind: "list" })}

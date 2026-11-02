@@ -12,11 +12,14 @@ import {
 } from "./serviceInvoiceSchema";
 import type { ServiceInvoice } from "./serviceInvoiceSchema";
 import { nfseBillingTarget, nfseBlockingIssues, nfseNumberLabel, nfseRecipientFromClient, nfseTotals, nfseWarnings } from "./serviceInvoices";
+import { NfseTaxCodeSelect } from "./NfseTaxCodeSelect";
+import { NfseTaxSetManager } from "./NfseTaxSetManager";
+import { nfseTaxOptions } from "./nfseTaxCatalog";
+import type { NfseTaxSet } from "./nfseTaxSetSchema";
+import { applyNfseTaxSet, changeNfseCst, changeNfseOperation, detachNfseTaxSet, nfseTaxSetDiffers } from "./nfseTaxSets";
 import "./NfeEditor.css";
 
 const states = "AC AL AP AM BA CE DF ES GO MA MT MS MG PA PB PR PE PI RJ RN RS RO RR SC SP SE TO".split(" ");
-const operationIndicators = ["050101", "050102", "050103", "050104"];
-const cstOptions = ["000 - Tributação integral", "200 - Alíquota reduzida", "410 - Imunidade e não incidência", "510 - Diferimento"];
 const toInput = (cents: number) => (cents / 100).toFixed(2);
 const fromInput = (value: string) => Math.max(0, Math.round((Number(value) || 0) * 100));
 const rateInput = (value: string) => Math.min(100, Math.max(0, Number(value) || 0));
@@ -56,21 +59,28 @@ function ReadOnlyMoney({ label, value }: { label: string; value: number }) {
   return <label className="field"><span>{label}<small> · automático</small></span><input readOnly aria-readonly value={currency(value)} /></label>;
 }
 
-export function NfseEditor({ data, initial, onSave, onCancel }: {
+export function NfseEditor({ data, initial, onSave, onSaveTaxSet, onCancel }: {
   data: Database;
   initial: ServiceInvoice;
   onSave: (nfse: ServiceInvoice) => string | void;
+  onSaveTaxSet: (set: NfseTaxSet) => string | void;
   onCancel: () => void;
 }) {
   const [draft, setDraft] = useState(initial);
   const [error, setError] = useState("");
   const [paymentError, setPaymentError] = useState("");
+  const [managingTaxSets, setManagingTaxSets] = useState(false);
   const existing = data.serviceInvoices.some((item) => item.id === draft.id);
   const readOnly = draft.status !== "Pendente";
   const totals = nfseTotals(draft);
   const target = useMemo(() => nfseBillingTarget(data, draft), [data, draft]);
   const issues = nfseBlockingIssues(draft);
   const warnings = nfseWarnings(draft);
+  const taxOptions = useMemo(() => nfseTaxOptions({
+    nationalCode: draft.service.nationalCode, nbs: draft.service.nbs, operationIndicator: draft.service.operationIndicator,
+    cst: draft.service.cst, issueDate: draft.issueDate,
+  }), [draft.service.nationalCode, draft.service.nbs, draft.service.operationIndicator, draft.service.cst, draft.issueDate]);
+  const linkedTaxSet = data.settings.nfseTaxSets.find((set) => set.id === draft.service.taxSetId);
   const installmentsTotal = draft.payment.installments.reduce((sum, item) => sum + item.amount, 0);
   const salesOrder = draft.salesOrderId ? data.salesOrders.find((item) => item.id === draft.salesOrderId) : undefined;
   const serviceOrder = draft.serviceOrderId ? data.orders.find((item) => item.id === draft.serviceOrderId) : undefined;
@@ -87,6 +97,19 @@ export function NfseEditor({ data, initial, onSave, onCancel }: {
 
   function chooseClient(id: string) {
     setRecipient(nfseRecipientFromClient(data.clients.find((item) => item.id === id)));
+  }
+  function chooseTaxSet(id: string) {
+    setError("");
+    if (!id) {
+      update(detachNfseTaxSet);
+      return;
+    }
+    const set = data.settings.nfseTaxSets.find((item) => item.id === id && item.active);
+    if (!set) {
+      setError("O conjunto de tributação selecionado não está disponível ou está inativo.");
+      return;
+    }
+    update((current) => applyNfseTaxSet(current, set));
   }
   function generateInstallments() {
     setPaymentError("");
@@ -184,18 +207,39 @@ export function NfseEditor({ data, initial, onSave, onCancel }: {
             <textarea rows={4} maxLength={2000} value={draft.service.description} onChange={(event) => setService({ description: event.target.value })} /></label>
           <label className="field"><span>Valor do serviço</span><input type="number" min="0" step="0.01" value={toInput(draft.service.amount)}
             disabled={target.mode === "linked"} onChange={(event) => setService({ amount: fromInput(event.target.value) })} /></label>
-          <TextInput label="Conjunto de tributações (código do serviço)" value={draft.service.taxSet} wide
-            onChange={(taxSet) => setService({ taxSet })} />
+          <div className="nfse-tax-set-field nfe-wide">
+            <label className="field"><span>Conjunto de tributações</span>
+              <select value={draft.service.taxSetId} onChange={(event) => chooseTaxSet(event.target.value)}>
+                <option value="">Preenchimento manual</option>
+                {draft.service.taxSetId && (!linkedTaxSet || !linkedTaxSet.active) &&
+                  <option value={draft.service.taxSetId} disabled>{draft.service.taxSet || "Conjunto anterior"} (indisponível)</option>}
+                {data.settings.nfseTaxSets.filter((set) => set.active).map((set) =>
+                  <option key={set.id} value={set.id}>{set.name}{set.isDefault ? " · padrão" : ""}</option>)}
+              </select></label>
+            <button type="button" className="text-button" onClick={() => setManagingTaxSets(true)}>Gerenciar tributos</button>
+          </div>
+          {!draft.service.taxSetId && <TextInput label="Referência livre do serviço (opcional)" value={draft.service.taxSet}
+            onChange={(taxSet) => setService({ taxSet })} />}
           <TextInput label="Código de tributação nacional" value={draft.service.nationalCode} maxLength={20} onChange={(nationalCode) => setService({ nationalCode })} />
           <TextInput label="Código de tributação municipal" value={draft.service.municipalCode} maxLength={20} onChange={(municipalCode) => setService({ municipalCode })} />
           <TextInput label="NBS" value={draft.service.nbs} maxLength={20} onChange={(nbs) => setService({ nbs })} />
-          <TextInput label="Indicador de operação" value={draft.service.operationIndicator} maxLength={20} list="nfse-operation-indicators"
-            onChange={(operationIndicator) => setService({ operationIndicator })} />
-          <datalist id="nfse-operation-indicators">{operationIndicators.map((value) => <option key={value} value={value} />)}</datalist>
-          <TextInput label="CST IBS/CBS" value={draft.service.cst} maxLength={80} list="nfse-cst" onChange={(cst) => setService({ cst })} />
-          <datalist id="nfse-cst">{cstOptions.map((value) => <option key={value} value={value} />)}</datalist>
-          <TextInput label="Classificação tributária" value={draft.service.classification} maxLength={120} onChange={(classification) => setService({ classification })} />
+          <NfseTaxCodeSelect label="Indicador de operação" value={draft.service.operationIndicator} options={taxOptions.indicators}
+            length={6} maxLength={20} onChange={(operationIndicator) => update((current) => changeNfseOperation(current, operationIndicator))} />
+          <NfseTaxCodeSelect label="CST IBS/CBS" value={draft.service.cst} options={taxOptions.csts}
+            length={3} maxLength={80} disabled={!draft.service.operationIndicator && !draft.service.cst}
+            onChange={(cst) => update((current) => changeNfseCst(current, cst))} />
+          <NfseTaxCodeSelect label="Classificação tributária" value={draft.service.classification} options={taxOptions.classifications}
+            length={6} maxLength={120} disabled={!draft.service.cst && !draft.service.classification}
+            onChange={(classification) => setService({ classification })} />
         </div>
+        {linkedTaxSet && linkedTaxSet.active && nfseTaxSetDiffers(draft, linkedTaxSet) && <p className="nfe-hint" role="status">
+          Os valores desta nota diferem do conjunto atual e foram mantidos.{" "}
+          <button type="button" className="text-button" onClick={() => chooseTaxSet(linkedTaxSet.id)}>Reaplicar conjunto</button>
+        </p>}
+        {draft.service.taxSetId && (!linkedTaxSet || !linkedTaxSet.active) &&
+          <p className="nfe-hint">O conjunto vinculado está indisponível ou inativo; os valores já registrados na nota foram mantidos.</p>}
+        <p className="nfe-hint">Selecionar um conjunto substitui códigos, NBS, indicador e ISS e limpa CST/classificação. Ao voltar ao preenchimento manual, os códigos e alíquotas são mantidos. Alterações no cadastro não atualizam notas já preenchidas; confira também o IBPT.</p>
+        <p className="nfe-hint">As sugestões por serviço/NBS são preliminares, não determinam o enquadramento e não impedem outros códigos. Ao mudar o indicador, CST e classificação são limpos; ao mudar o CST, a classificação é limpa. Consulte a contabilidade.</p>
       </Section>
 
       <Section title="Impostos">
@@ -303,6 +347,7 @@ export function NfseEditor({ data, initial, onSave, onCancel }: {
           <textarea rows={3} maxLength={5000} value={draft.complementary} onChange={(event) => update((current) => ({ ...current, complementary: event.target.value }))} /></label>
       </Section>
     </fieldset>
+    {managingTaxSets && <NfseTaxSetManager sets={data.settings.nfseTaxSets} onSave={onSaveTaxSet} onClose={() => setManagingTaxSets(false)} />}
     {existing && <Section title="Histórico" collapsible defaultOpen={false}>
       <ul className="nfe-history">{draft.events.map((event, index) => <li key={index}>{new Date(event.at).toLocaleString("pt-BR")} · {event.description}</li>)}</ul>
     </Section>}

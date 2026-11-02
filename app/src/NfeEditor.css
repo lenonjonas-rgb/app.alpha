@@ -73,6 +73,18 @@
 }
 .nfe-grid .nfe-wide { grid-column: span 2; }
 .nfe-grid .field small { color: var(--muted); font-weight: 400; }
+.nfse-tax-set-field { display: flex; align-items: end; gap: 12px; min-width: 0; }
+.nfse-tax-set-field .field { flex: 1; min-width: 0; }
+.nfse-tax-set-field button { flex: none; padding-bottom: 9px; }
+.nfse-tax-manager { display: grid; gap: 14px; }
+.nfse-tax-set-list { width: 100%; }
+.nfse-tax-set-list th, .nfse-tax-set-list td { padding: 8px; text-align: left; }
+.nfse-tax-set-form { display: grid; gap: 14px; border-top: 1px solid var(--line); padding-top: 14px; }
+.nfse-tax-form-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.nfse-tax-form-heading h3 { margin: 0; font-size: 15px; }
+.nfse-tax-toggles { display: flex; flex-wrap: wrap; gap: 14px; font-size: 13px; }
+.nfse-tax-toggles label { display: inline-flex; align-items: center; gap: 6px; }
+.nfse-tax-form-actions { display: flex; justify-content: flex-end; }
 .nfe-checkbox { align-self: center; }
 .nfe-hint {
   margin: 8px 0 0;
@@ -176,6 +188,7 @@
   .sales-nfe-layout { grid-template-columns: 1fr; }
   .nfe-payment-terms { grid-template-columns: 1fr; }
   .nfe-grid .nfe-wide { grid-column: auto; }
+  .nfse-tax-set-field { flex-wrap: wrap; }
 }
 @media print {
   .nfe-print-hidden { display: none; }

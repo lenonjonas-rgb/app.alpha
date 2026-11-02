@@ -96,7 +96,7 @@ export function updateContractBilling(data: Database, contractId: string, input:
 
 function nfseForCharge(data: Database, contract: MaintenanceContract, charge: ContractCharge): ServiceInvoice {
   const billing = contractBillingOf(contract);
-  const draft = blankNfse(data);
+  const draft = blankNfse(data, { applyDefaultTaxSet: false });
   const note = contractPeriodNote(contract, charge.period);
   const client = data.clients.find((item) => item.id === charge.clientId);
   return {

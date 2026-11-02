@@ -75,6 +75,7 @@ export const serviceInvoiceSchema = z.object({
   service: z.object({
     description: z.string().trim().min(1, "Informe a descrição do serviço.").max(2000),
     amount: cents.refine((value) => value > 0, "Informe o valor do serviço."),
+    taxSetId: optionalText(200),
     taxSet: optionalText(160),
     nationalCode: optionalText(20),
     municipalCode: optionalText(20),

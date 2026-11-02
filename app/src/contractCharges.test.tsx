@@ -12,6 +12,7 @@ import { changeMaintenanceContractStatus, saveMaintenanceContract } from "./main
 import { MaintenanceContractsPanel } from "./MaintenanceContractsPanel";
 import { nfseTotals } from "./serviceInvoices";
 import { SalesChargesPanel } from "./SalesChargesPanel";
+import { saveNfseTaxSet } from "./nfseTaxSets";
 
 const bank = { id: "bank", name: "Conta principal", bank: "Banco", agency: "1", account: "1", kind: "Corrente" as const, active: true };
 const contract: MaintenanceContract = {
@@ -58,6 +59,16 @@ describe("cobranças de contratos", () => {
     const paid = settleFinanceEntry(first.data, entry.id, { id: "pay-1", amount: 10000, date: "2026-01-10", accountId: bank.id });
     expect(contractChargeStats(paid, current(paid))).toMatchObject({ installments: 12, generated: 3, paid: 1, open: 2, openAmount: 20000 });
     expect(contractChargeRows(paid, "2026-01", "2026-02-01")[0]).toMatchObject({ status: "Recebida", clientName: "Academia Horizonte (demo)" });
+  });
+
+  it("preserva o código e a alíquota do contrato sem aplicar o conjunto padrão", () => {
+    const data = saveNfseTaxSet(fixture({ generateNfse: true, serviceCode: "14.01", issRate: 5 }), {
+      id: "default-set", name: "Outro serviço", nationalCode: "010101", municipalCode: "", nbs: "115021000",
+      operationIndicator: "100301", issRate: 2, ibptRate: null, active: true, isDefault: true,
+    });
+    const generated = generateContractCharges(data, { from: "2026-01", through: "2026-01" }).data;
+    expect(generated.serviceInvoices[0].service).toMatchObject({ taxSetId: "", taxSet: "14.01", nationalCode: "", nbs: "" });
+    expect(generated.serviceInvoices[0].taxes.issRate).toBe(5);
   });
 
   it("não cobra contratos suspensos, isentos ou em avaliação", () => {
