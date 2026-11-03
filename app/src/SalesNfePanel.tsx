@@ -171,6 +171,9 @@ export function SalesNfePanel({ data, commit, initialOrderId, initialServiceOrde
     </header>
     {notice && <div className="sales-order-notice" role="status"><span>{notice}</span></div>}
     {error && <div className="error-message" role="alert">{error}</div>}
+    {data.outgoingInvoices.some((nfe) => nfe.salesOrderId && nfe.status === "Pendente") && <p className="nfe-hint">
+      Em base sincronizada, o lançamento de várias parcelas para notas de pedidos ainda não é suportado.
+      Para cancelar contas vinculadas a faturamento, use Contas a receber no Financeiro, após conferir os vínculos fiscais e bancários.</p>}
     <div className="sales-nfe-layout">
       <div>
         <div className="sales-nfe-toolbar">

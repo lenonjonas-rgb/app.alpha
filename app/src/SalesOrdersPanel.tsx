@@ -414,7 +414,9 @@ export function SalesOrdersPanel({ data, commit, onIssueFiscal, onCreateNfe, onO
           </select></label>
           <label className="field"><span>Data da venda</span><input type="date" required disabled={!editable} value={draft.date} onChange={(event) => setDraft((current) => ({ ...current, date: event.target.value }))} /></label>
           <label className="field"><span>Previsão de entrega</span><input type="date" disabled={!editable} min={draft.date} value={draft.expectedOn} onChange={(event) => setDraft((current) => ({ ...current, expectedOn: event.target.value }))} /></label>
-          <label className="field"><span>Vendedor</span><input maxLength={160} disabled={!editable} value={draft.seller} onChange={(event) => setDraft((current) => ({ ...current, seller: event.target.value }))} /></label>
+          <label className="field"><span>Vendedor</span><input list="commission-sellers" maxLength={160} disabled={!editable} value={draft.seller} onChange={(event) => setDraft((current) => ({ ...current, seller: event.target.value }))} />
+            <datalist id="commission-sellers">{data.finance.commissions?.sellers.filter((seller) => seller.active)
+              .map((seller) => <option key={seller.id} value={seller.name} />)}</datalist></label>
           <label className="field"><span>Condição de pagamento</span><input maxLength={500} placeholder="Informação comercial; não gera cobrança" disabled={!editable} value={draft.paymentTerms} onChange={(event) => setDraft((current) => ({ ...current, paymentTerms: event.target.value }))} /></label>
           <label className="field"><span>Vincular a OS (opcional)</span><select disabled={!editable || !draft.clientId} value={draft.serviceOrderId} onChange={(event) => setDraft((current) => ({ ...current, serviceOrderId: event.target.value }))}>
             <option value="">Sem OS vinculada</option>{data.orders.filter((order) => order.clientId === draft.clientId).map((order) => <option key={order.id} value={order.id}>{order.code} · {order.title}</option>)}

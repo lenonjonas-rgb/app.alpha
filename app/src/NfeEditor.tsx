@@ -437,6 +437,9 @@ export function NfeEditor({ data, initial, onSave, onCancel }: {
           {paymentError && <div className="error-message" role="alert">{paymentError}</div>}
           {draft.payment.installments.length > 0 && !data.finance.accounts.some((account) => account.active) && <p className="error-message">
             Nenhuma conta financeira ativa. Cadastre uma conta em Financeiro para lançar as parcelas, ou remova as parcelas para salvar a nota sem contas.</p>}
+          {draft.salesOrderId && draft.payment.installments.length > 1 && <p className="error-message" role="alert">
+            Em base sincronizada, o faturamento de pedido com múltiplas parcelas ainda não é compatível com as proteções financeiras.
+            Não salve com várias parcelas; use uma parcela ou remova-as para salvar sem contas.</p>}
           {target.fixed && <p className="nfe-hint">O pedido já tem faturamento de serviços; as parcelas devem somar o valor de produtos rateado no pedido ({currency(target.amount)}).</p>}
           {draft.payment.installments.length > 0 ? <div className="table-scroll"><table className="nfe-installments">
             <thead><tr><th>#</th><th>Dias</th><th>Data</th><th>Valor</th><th>Forma</th><th>Observação</th><th><span className="sr-only">Ações</span></th></tr></thead>
@@ -464,7 +467,10 @@ export function NfeEditor({ data, initial, onSave, onCancel }: {
           </table></div> : <p className="nfe-empty">Sem parcelas: a nota será salva sem lançar contas a receber.</p>}
           {draft.payment.installments.length > 0 && <p className={installmentsTotal === target.amount ? "nfe-hint" : "error-message"}>
             Total das parcelas: {currency(installmentsTotal)} de {currency(target.amount)}{installmentsTotal === target.amount
-              ? ". Ao salvar, as contas a receber serão lançadas." : ". Ajuste as parcelas ou gere novamente."}</p>}
+              ? draft.salesOrderId && draft.payment.installments.length > 1
+                ? ". O lançamento de várias parcelas ainda não é compatível com a base sincronizada."
+                : ". Ao salvar, as contas a receber serão lançadas."
+              : ". Ajuste as parcelas ou gere novamente."}</p>}
         </>}
       </Section>
 

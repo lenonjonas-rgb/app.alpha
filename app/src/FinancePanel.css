@@ -17,6 +17,19 @@
 .finance-filters .button { justify-self: start; }
 .finance-table caption { padding: 14px; text-align: left; font-weight: 600; }
 .finance-classification { display: block; margin-top: 8px; color: var(--muted, #64748b); }
+.finance-statements { display: grid; gap: 16px; min-width: 0; }
+.finance-statements-heading { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; }
+.finance-statements-heading h2, .finance-statements-heading p { margin: 0; }
+.finance-statements-heading p { margin-top: 5px; color: var(--muted, #64748b); }
+.finance-statement-actions, .finance-statement-links { display: flex; flex-wrap: wrap; gap: 8px; }
+.finance-statement-note { margin: 0; padding: 12px 14px; border: 1px solid #dbe8df; border-radius: 8px; background: #f5faf6; line-height: 1.5; }
+.finance-statement-metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+.finance-statement-metrics > div { display: grid; gap: 8px; min-width: 0; padding: 16px; border: 1px solid var(--line, #e5e7eb); border-radius: 10px; background: #fff; }
+.finance-statement-metrics strong { overflow-wrap: anywhere; font-size: 1.2rem; }
+.finance-statement-toolbar { display: grid; grid-template-columns: minmax(180px, 2fr) minmax(130px, 1fr) minmax(130px, 1fr) auto; align-items: end; gap: 10px; }
+.finance-entry-filters { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); align-items: end; gap: 10px; }
+.finance-entry-filters .button { justify-self: start; }
+.finance-commission-tier { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)) auto; align-items: end; gap: 10px; margin-bottom: 10px; }
 .billing-page { display: grid; gap: 14px; min-width: 0; }
 .billing-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
 .billing-heading h2 { margin: 3px 0 0; }
@@ -165,6 +178,11 @@
   .fiscal-side-document-actions .finance-actions { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 @media (max-width: 700px) {
+  .finance-statements-heading { flex-direction: column; }
+  .finance-statement-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .finance-statement-toolbar { grid-template-columns: 1fr; }
+  .finance-entry-filters { grid-template-columns: 1fr; }
+  .finance-commission-tier { grid-template-columns: 1fr; }
   .billing-heading { flex-direction: column; }
   .billing-steps { grid-template-columns: 1fr; }
   .billing-workspace { grid-template-columns: 1fr; }

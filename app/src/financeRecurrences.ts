@@ -1,6 +1,6 @@
 import { localDay, makeId, validateDatabase } from "./domain";
 import type { Database } from "./domain";
-import { financeRecurrenceSchema, monthlyDueDate, recurrencePeriodSchema } from "./financeSchema";
+import { financeRecurrenceSchema, monthlyDueDate, recurrencePeriodSchema, recurringEntryDetails } from "./financeSchema";
 import type { FinanceRecurrence } from "./financeSchema";
 import { classifyFinanceEntry } from "./financeManagement";
 
@@ -63,6 +63,9 @@ export function generateRecurringEntries(data: Database, expected: FinanceRecurr
     id: makeId(), kind: item.kind, party: item.party, ...(item.clientId ? { clientId: item.clientId } : {}),
     description: item.description, amount: item.amount, accountId: item.accountId, paymentMethod: item.paymentMethod,
     issuedOn: localDay(), dueOn: row.dueOn, recurrence: { id: item.id, period: row.period }, canceled: false, settlements: [],
+    ...(item.details ? { details: recurringEntryDetails(item,
+      (Number(row.period.slice(0, 4)) - Number(item.firstDueOn.slice(0, 4))) * 12 +
+      Number(row.period.slice(5)) - Number(item.firstDueOn.slice(5, 7))) } : {}),
   }));
   let updated = validateDatabase({ ...data, finance: { ...data.finance, entries: [...data.finance.entries, ...entries] } });
   for (const entry of entries) updated = classifyFinanceEntry(updated, { entryId: entry.id,

@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { localDay, validateDatabase } from "./domain";
 import type { Database } from "./domain";
+import { encodeCsv } from "./csv";
 import { entryBalance } from "./finance";
 import { costCenterSchema, financeCategorySchema, financeClassificationSchema, openingBalanceSchema, settlementCashAmount } from "./financeSchema";
 import type { CostCenter, FinanceCategory, FinanceClassification, FinanceEntry, FinanceManagement, OpeningBalance } from "./financeSchema";
@@ -62,11 +63,14 @@ export const managementFilterSchema = z.object({
   categoryId: z.string().default(""), costCenterId: z.string().default(""),
 }).refine((value) => value.start <= value.end, "A data inicial deve ser anterior ou igual à final.");
 export type ManagementFilter = z.infer<typeof managementFilterSchema>;
-export type ManagementMovement = {
+type ManagementMovementBase = {
   id: string; entryId: string; date: string; kind: FinanceEntry["kind"]; party: string; description: string;
-  accountId: string; categoryId: string; costCenterId: string; amount: number; source: "realized" | "forecast";
-  adjustment?: { principal: number; interest: number; fine: number; discount: number; reason: string };
+  accountId: string; categoryId: string; costCenterId: string; amount: number;
 };
+export type ManagementMovement = ManagementMovementBase & (
+  | { source: "realized"; settlementId: string; adjustment?: { principal: number; interest: number; fine: number; discount: number; reason: string } }
+  | { source: "forecast"; settlementId?: never; adjustment?: never }
+);
 
 export function defaultManagementFilter(today = localDay()): ManagementFilter {
   date.parse(today);
@@ -101,7 +105,7 @@ export function managementReport(data: Database, input: ManagementFilter, today 
     for (const settlement of entry.settlements) {
       if (settlement.reversed || settlement.date < filter.start || settlement.date > filter.end) continue;
       const movement: ManagementMovement = { ...base, id: `${entry.id}:${settlement.id}`, date: settlement.date,
-        accountId: settlement.accountId, amount: settlementCashAmount(settlement), source: "realized",
+        accountId: settlement.accountId, amount: settlementCashAmount(settlement), source: "realized", settlementId: settlement.id,
         ...(settlement.adjustment ? { adjustment: { principal: settlement.amount, ...settlement.adjustment } } : {}) };
       if (matches(movement)) movements.push(movement);
     }
@@ -185,7 +189,6 @@ export function managementReport(data: Database, input: ManagementFilter, today 
 
 export function managementCsv(data: Database, report: ReturnType<typeof managementReport>) {
   const management = financeManagement(data);
-  const escape = (value: string) => `"${(/^[\s]*[=+@\-\t\r]/.test(value) ? "'" : "") + value.replace(/"/g, '""')}"`;
   const rows = [
     ["Data", "Origem", "Tipo", "Cliente/Favorecido", "Descrição", "Banco", "Categoria", "Centro de custo", "Valor (R$)",
       "Principal liquidado (R$)", "Juros (R$)", "Multa (R$)", "Desconto (R$)", "Motivo do ajuste"],
@@ -208,5 +211,5 @@ export function managementCsv(data: Database, report: ReturnType<typeof manageme
       "", "", "", "", "",
     ]),
   ];
-  return "\uFEFF" + rows.map((row) => row.map(escape).join(";")).join("\r\n");
+  return encodeCsv(rows);
 }

@@ -14,6 +14,10 @@ import { saveFinanceEntry, entryBalance } from "./finance";
 import { changeRecurrenceStatus, generateRecurringEntries, previewRecurringEntries, saveFinanceRecurrence } from "./financeRecurrences";
 import type { FinanceRecurrence } from "./financeSchema";
 import { cancelPurchaseOrder, previewPurchaseSchedule, purchasing, receivePurchaseOrder, savePurchaseOrder, saveSupplier } from "./purchasing";
+import { previewCommission, recordCommission, saveCommissionSeller } from "./commissions";
+import type { CommissionSeller } from "./commissionSchema";
+import { cashMovementKey } from "./cashSessionSchema";
+import { cashSessionCandidates, closeCashSession, openCashSession } from "./cashSessions";
 
 const owner = "00000000-0000-4000-8000-000000000001";
 const tech = "00000000-0000-4000-8000-000000000002";
@@ -68,18 +72,136 @@ beforeAll(async () => {
   await db.exec(await readFile(new URL("../../supabase/migrations/20261016060000_finance_recurrence_guards.sql", import.meta.url), "utf8"));
   await db.exec(await readFile(new URL("../../supabase/migrations/20261016070000_purchase_guards.sql", import.meta.url), "utf8"));
   await db.exec(await readFile(new URL("../../supabase/migrations/20261020010000_bank_reconciliation_groups.sql", import.meta.url), "utf8"));
+  await db.exec(await readFile(new URL("../../supabase/migrations/20261103010000_finance_entry_details_guards.sql", import.meta.url), "utf8"));
+  await db.exec(await readFile(new URL("../../supabase/migrations/20261103020000_commission_guards.sql", import.meta.url), "utf8"));
+  await db.exec(await readFile(new URL("../../supabase/migrations/20261103030000_cash_session_guards.sql", import.meta.url), "utf8"));
 }, 30000);
 beforeEach(async () => {
   await db.exec("reset role");
   await db.exec("alter table public.company_data disable trigger guard_purchases");
   await db.exec("alter table public.company_data disable trigger guard_finance_recurrences");
+  await db.exec("alter table public.company_data disable trigger guard_commissions");
+  await db.exec("alter table public.company_data disable trigger guard_cash_sessions");
   await db.exec("alter table public.company_data disable trigger guard_finance_history; alter table public.company_data disable trigger guard_bank_reconciliation; alter table public.company_data disable trigger guard_finance_transfers; alter table public.company_data disable trigger guard_bank_transfer_matches; alter table public.company_data disable trigger guard_finance_installments; alter table public.company_data disable trigger guard_finance_settlement_adjustments; alter table public.company_data disable trigger guard_bank_reconciliation_groups");
   baseline = fixture();
   await db.query("update public.company_data set payload=$1,revision=1 where company_id=$2", [JSON.stringify(baseline), company]);
   await db.exec("delete from public.finance_change_permits; alter table public.company_data enable trigger guard_finance_history; alter table public.company_data enable trigger guard_bank_reconciliation; alter table public.company_data enable trigger guard_finance_transfers; alter table public.company_data enable trigger guard_bank_transfer_matches; alter table public.company_data enable trigger guard_finance_installments; alter table public.company_data enable trigger guard_finance_settlement_adjustments; alter table public.company_data enable trigger guard_bank_reconciliation_groups");
   await db.exec("alter table public.company_data enable trigger guard_finance_recurrences");
+  await db.exec("alter table public.company_data enable trigger guard_commissions");
+  await db.exec("alter table public.company_data enable trigger guard_cash_sessions");
   await db.exec("alter table public.company_data enable trigger guard_purchases");
   await identity("authenticated");
+});
+
+describe("proteção dos detalhes de contas", () => {
+  const details = { competenceOn: "2024-01-31", documentNumber: "DOC-123", seller: "",
+    monthlyInterestBasisPoints: 125, lateFineBasisPoints: 200 };
+  it("salva detalhes de uma conta nova e impede remoção ou reescrita por cliente antigo", async () => {
+    const data = saveFinanceEntry(baseline, { id: "manual-details", kind: "Pagar", party: "Fornecedor", description: "Compra",
+      amount: 10000, issuedOn: "2024-01-01", dueOn: "2024-01-31", accountId: "bank", paymentMethod: "Pix",
+      canceled: false, settlements: [], details });
+    await save(data);
+    const stripped = structuredClone(data); delete stripped.finance.entries.find((entry) => entry.id === "manual-details")!.details;
+    await expect(save(stripped, 2)).rejects.toThrow("Dados originais");
+    const changed = structuredClone(data);
+    changed.finance.entries.find((entry) => entry.id === "manual-details")!.details!.documentNumber = "alterado";
+    await expect(save(changed, 2)).rejects.toThrow("Dados originais");
+  });
+
+  describe("proteção das comissões", () => {
+    const seller: CommissionSeller = { id: "seller", name: "Vendedor teste", active: true,
+      rule: { release: "proportional", calculation: { type: "fixed", rate: 1000 } } };
+    it("valida a origem e os cálculos e preserva o histórico contra clientes antigos", async () => {
+      const data = saveCommissionSeller(baseline, seller);
+      await save(data);
+      const invoice = data.finance.invoices[0];
+      const preview = previewCommission(data, invoice.id, invoice.orders[0].orderId, seller.id);
+      const recorded = recordCommission(data, preview, true, "commission");
+      const tampered = structuredClone(recorded); tampered.finance.commissions!.records[0].items[0].amount++;
+      await expect(save(tampered, 2)).rejects.toThrow("nao correspondem");
+      const forgedRule = structuredClone(recorded);
+      forgedRule.finance.commissions!.records[0].rule.calculation = { type: "fixed", rate: 1 };
+      await expect(save(forgedRule, 2)).rejects.toThrow("regra atual");
+      await save(recorded, 2);
+      const stripped = structuredClone(recorded); delete stripped.finance.commissions;
+      await expect(save(stripped, 3)).rejects.toThrow("nao pode ser removido");
+      const altered = structuredClone(recorded); altered.finance.commissions!.records[0].amount++;
+      await expect(save(altered, 3)).rejects.toThrow("nao pode ser removido ou reescrito");
+      const removeSeller = structuredClone(recorded); removeSeller.finance.commissions!.sellers = [];
+      await expect(save(removeSeller, 3)).rejects.toThrow("nao podem ser removidos");
+      const next = saveCommissionSeller(recorded, { ...seller, name: "Nome novo",
+        rule: { ...seller.rule, calculation: { type: "fixed", rate: 2000 } } }, seller);
+      await save(next, 3);
+    });
+
+    describe("proteção de abertura e fechamento de caixa", () => {
+      it("valida movimentos e totais e impede remoção, duplicação ou reescrita do histórico", async () => {
+        let data = saveBankAccount(baseline, { id: "cash", name: "Caixa", bank: "Interno",
+          agency: "", account: "", kind: "Caixa", active: true });
+        await save(data);
+        data = openCashSession(data, { accountId: "cash", store: "Loja", openingAmount: 10000 }, true, "session");
+        await save(data, 2);
+        data = saveFinanceEntry(data, { id: "cash-entry", kind: "Receber", party: "Cliente", description: "Venda",
+          amount: 5000, issuedOn: localDay(), dueOn: localDay(), accountId: "cash",
+          paymentMethod: "Dinheiro", canceled: false, settlements: [] });
+        await save(data, 3);
+        data = settleFinanceEntry(data, "cash-entry", { id: "cash-payment", date: localDay(), amount: 5000, accountId: "cash" });
+        await save(data, 4);
+        const session = data.finance.cashSessions![0], choices = cashSessionCandidates(data, session);
+        const closed = closeCashSession(data, session, choices, choices.map((item) => cashMovementKey(item.movement)), 14900, true);
+        const fake = structuredClone(closed); fake.finance.cashSessions![0].closure!.movements[0].amount++;
+        await expect(save(fake, 5)).rejects.toThrow("diverge da origem");
+        const wrongTotal = structuredClone(closed); wrongTotal.finance.cashSessions![0].closure!.difference = 0;
+        await expect(save(wrongTotal, 5)).rejects.toThrow("diferenca");
+        await save(closed, 5);
+        const stripped = structuredClone(closed); delete stripped.finance.cashSessions;
+        await expect(save(stripped, 6)).rejects.toThrow("nao podem ser removidos");
+        const altered = structuredClone(closed); altered.finance.cashSessions![0].closure!.counted = 0;
+        await expect(save(altered, 6)).rejects.toThrow("nao podem ser removidos");
+        const reversed = reverseSettlement(closed, "cash-entry", "cash-payment");
+        await save(reversed, 6);
+      });
+    });
+    it("protege faixas inválidas e apura comissão com regra por desconto", async () => {
+      const tiered: CommissionSeller = { ...seller, rule: { release: "billing",
+        calculation: { type: "discount", tiers: [{ upTo: 1000, rate: 500 }, { upTo: 10000, rate: 200 }] } } };
+      const data = saveCommissionSeller(baseline, tiered);
+      const invalid = structuredClone(data);
+      const calculation = invalid.finance.commissions!.sellers[0].rule.calculation;
+      if (calculation.type !== "discount") throw new Error("Regra de teste inválida.");
+      calculation.tiers[1].upTo = 9000;
+      await expect(save(invalid)).rejects.toThrow("regra de comissao invalidos");
+      await save(data);
+      const invoice = data.finance.invoices[0];
+      const recorded = recordCommission(data, previewCommission(data, invoice.id, invoice.orders[0].orderId, seller.id), true);
+      await save(recorded, 2);
+    });
+  });
+  it("rejeita percentuais inválidos e parcelas com detalhes divergentes", async () => {
+    const input = { id: "installments-details", kind: "Pagar" as const, party: "Fornecedor", description: "Compra",
+      amount: 10000, issuedOn: "2024-01-01", dueOn: "2024-01-31", accountId: "bank", paymentMethod: "Pix" as const,
+      canceled: false, settlements: [], details };
+    const data = saveFinanceInstallments(baseline, input, ["2024-01-31", "2024-02-29"], true);
+    const invalid = structuredClone(data);
+    invalid.finance.entries.find((entry) => entry.installment?.number === 2)!.details!.lateFineBasisPoints = 10001;
+    await expect(save(invalid)).rejects.toThrow("Detalhes da conta");
+    invalid.finance.entries.find((entry) => entry.installment?.number === 2)!.details!.lateFineBasisPoints = 100;
+    await expect(save(invalid)).rejects.toThrow("Detalhes das parcelas");
+    await save(data);
+  });
+  it("preserva e valida a competência dos títulos gerados por recorrência", async () => {
+    const item: FinanceRecurrence = { id: "recurrence-details", kind: "Pagar", party: "Fornecedor",
+      description: "Mensalidade", amount: 10000, accountId: "bank", paymentMethod: "Pix",
+      firstDueOn: "2024-01-31", endsOn: "2024-03-31", details, createdAt: "2024-01-01T12:00:00Z", events: [] };
+    const data = saveFinanceRecurrence(baseline, item, true);
+    await save(data);
+    const preview = previewRecurringEntries(data, item.id, "2024-02", "2024-03");
+    const generated = generateRecurringEntries(data, item, "2024-02", "2024-03", preview, true);
+    const invalid = structuredClone(generated);
+    invalid.finance.entries.find((entry) => entry.recurrence?.period === "2024-02")!.details!.competenceOn = "2024-02-28";
+    await expect(save(invalid, 2)).rejects.toThrow("nao correspondem");
+    await save(generated, 2);
+  });
 });
 afterAll(async () => { await db.close(); });
 describe("proteção financeira no PostgreSQL", () => {

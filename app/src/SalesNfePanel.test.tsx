@@ -28,6 +28,8 @@ describe("tela de NF-e de saída", () => {
     expect(html).toContain(`aria-label="Ações da nota 000001"`);
     expect(html).toContain("Configuração fiscal");
     expect(html).toContain("Incluir nota fiscal");
+    expect(html).toContain("o lançamento de várias parcelas para notas de pedidos ainda não é suportado");
+    expect(html).toContain("use Contas a receber no Financeiro");
   });
 
   it("abre o editor a partir do pedido com destinatário travado, itens, totais e parcelas", () => {
@@ -41,6 +43,8 @@ describe("tela de NF-e de saída", () => {
     expect(html).toContain("Item 1: CST e/ou Classificação Tributária (IBS/CBS) não informados.");
     expect(html).toContain("Cálculo automático ligado");
     expect(html).toContain('aria-label="Valor da parcela 2"');
+    expect(html).toContain("o faturamento de pedido com múltiplas parcelas ainda não é compatível");
+    expect(html).not.toContain("Ao salvar, as contas a receber serão lançadas.");
     expect(html).toMatch(/<select[^>]*disabled=""[^>]*><option value="">Selecione o cliente/);
   });
 

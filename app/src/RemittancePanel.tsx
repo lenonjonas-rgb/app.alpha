@@ -11,7 +11,7 @@ const configSchema = z.object({
   accountId: z.string(), agencia: z.string(), conta: z.string(), dac: z.string(), carteira: z.string(),
   nextNossoNumero: z.number().int(), nextFileSequence: z.number().int(),
 });
-export function RemittancePanel({ data }: { data: Database }) {
+export function RemittancePanel({ data, onOpenReconciliation }: { data: Database; onOpenReconciliation?: () => void }) {
   const [accountId, setAccountId] = useState("");
   const [config, setConfig] = useState<z.infer<typeof configSchema> | null>(null);
   const [history, setHistory] = useState<z.infer<typeof remittanceHistorySchema>>([]);
@@ -72,8 +72,11 @@ export function RemittancePanel({ data }: { data: Database }) {
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
   return <section>
-    <h2>Remessas Itaú · CNAB400</h2>
+    <h2>Remessas e retornos</h2>
+    <h3>Remessas Itaú · CNAB400</h3>
     <p>Arquivo de cobrança simples para envio manual, sem API bancária. Confirme carteira, contrato e layout com o Itaú e homologue antes de enviar em produção. Não gera Pix, PDF de boleto, registro ou baixa automática.</p>
+    <p>Importação e processamento de retorno CNAB de cobrança ainda não estão disponíveis. Conciliação de extrato CSV/OFX é uma operação diferente e não substitui o retorno de boletos.</p>
+    {onOpenReconciliation && <button type="button" className="button secondary" onClick={onOpenReconciliation}>Abrir conciliação de extrato</button>}
     <p>Cadastre primeiro o emitente na aba Fiscal e a conta Itaú em Bancos. Aguarde o financeiro ficar Sincronizado. Endereços abaixo são dados específicos do arquivo e não alteram o cadastro do cliente.</p>
     <p>Toda remessa exige uma nota autorizada em produção por faturamento: NF-e para produtos e NFS-e para serviços, inclusive sem retenções. Sem nota, homologação ou outro documento ativo/incerto bloqueiam o lote inteiro, sem consumir numeração.</p>
     <p>O servidor confere XML, assinatura, protocolo e origem financeira da NF-e. NFS-e exige conferência atual confirmada na aba Fiscal; com retenções, remete apenas o líquido oficial conferido, nunca o bruto. Títulos antigos sem origem fiscal preservada não têm liberação automática.</p>

@@ -5,7 +5,7 @@
 Este documento compara os modulos visiveis do Bling com o escopo do Alpha Tec para orientar uma evolucao funcional. A meta e estudar equivalencia de capacidades com implementacao, regras e identidade proprias; nao copiar codigo, textos, marca ou interface proprietarios.
 
 - Referencia consultada em 02/11/2026, com sessao autenticada fornecida pelo usuario.
-- Foram observados a pagina inicial, menus principais, atalhos, a lista de pedidos de venda, Preferencias e a Central de Extensoes.
+- Foram observados a pagina inicial, menus principais, atalhos, pedidos de venda, Financeiro, Preferencias e a Central de Extensoes.
 - As listas de vendas e menus foram consultados sem criar, editar, excluir, importar, transmitir ou faturar registros. Nenhuma informacao de clientes foi incluida.
 - A conta, o plano, as permissoes e as integracoes habilitadas podem alterar os menus. Um item de menu confirma somente que a opcao foi exibida; nao confirma disponibilidade contratual nem funcionamento completo.
 - Nao foram inspecionados todos os formularios, telas de detalhe, regras de calculo, APIs, contratos de parceiros ou resultados de operacoes. As lacunas de regra estao marcadas como **nao inspecionadas**, e nao como comportamento confirmado.
@@ -24,13 +24,13 @@ Legenda do Alpha:
 | Area no Bling | Opcoes observadas | Equivalencia no Alpha |
 | --- | --- | --- |
 | Inicio / Meu Negocio | Visao geral, eventos, conta digital; dashboards geral, vendas, margem por pedido, produtos, clientes, curva ABC e metas | **Parcial**: existem agenda, indicadores operacionais e relatorios financeiros/operacionais. Dashboards comerciais, margem por pedido/SKU, curva ABC e metas nao foram encontrados. Eventos e conta digital nao foram encontrados. |
-| Cadastros | Produtos; clientes e fornecedores; vendedores; contas e categorias financeiras; formas de pagamento; categorias de produtos; listas de precos; relatorios de cadastros | **Parcial**: clientes, fornecedores, produtos/servicos e cadastros gerenciais existem. Vendedores, categorias de produto, listas de preco e relatorios cadastrais dedicados nao foram encontrados. Bancos e categorias financeiras cobrem parte das contas/categorias; equivalencia de formas de pagamento precisa ser detalhada. |
+| Cadastros | Produtos; clientes e fornecedores; vendedores; contas e categorias financeiras; formas de pagamento; categorias de produtos; listas de precos; relatorios de cadastros | **Parcial**: clientes, fornecedores, produtos/servicos, cadastros gerenciais e cadastro de vendedores para regras de comissao existem. Categorias de produto, listas de preco e relatorios cadastrais dedicados nao foram encontrados. Bancos e categorias financeiras cobrem parte das contas/categorias; equivalencia de formas de pagamento precisa ser detalhada. |
 | Vendas - gestao | Gestao de anuncios, loja virtual, pedidos de venda, notas fiscais de saida, NFC-e, frente de caixa, importacao manual de pedidos, propostas comerciais e relatorio avancado | **Parcial**: pedidos de venda em etapa inicial, propostas/orcamentos compartilhados e notas fiscais de saida existem; o fluxo fiscal e limitado e nao homologado em producao. Anuncios, e-commerce, NFC-e, PDV, importacao de pedidos e relatorio avancado nao foram encontrados. |
 | Vendas - logistica | Objetos de postagem, logistica reversa, checkout, impressao automatica de etiquetas e Bling Envios | **Ausente/parcial**: o Alpha possui rotas de atendimento tecnico, mas isso nao equivale a expedicao de vendas. Nao foram encontrados modulos de postagem, etiquetas ou checkout logistico. |
 | Vendas - servicos | Contratos, ordens de servico, CT-e, notas de servico, cobrancas e relatorios de servico | **Local**: contratos com cobranca, Cobrancas, Notas de servico (NFS-e), OS com as 9 situacoes e menu de tres pontos e relatorios de servico implementados (secao 3.2.2). Transmissao da NFS-e, boletos/e-mail e CT-e permanecem pendentes. |
 | Estoque - compras | Pedidos de compra, notas fiscais de entrada, fornecedores, sugestao de compras e check-in de recebimentos | **Parcial**: fornecedores, compras, cotacoes/aprovacoes, recebimentos e entradas no estoque existem. Importacao de NF-e de entrada e sugestao automatica de compras nao foram encontradas; regras detalhadas de sugestao e check-in do Bling nao foram inspecionadas. |
 | Estoque | Lancamentos, conferencia de estoque, ordens de producao, depositos, multiempresa e relatorios de compras/estoque | **Parcial**: livro de movimentos, contagem, depositos, transferencias, saldos e custo medio existem. Ordens de producao e operacao multiempresa em uma mesma base nao foram encontrados. Um relatorio dedicado de compras/estoque nao foi identificado. |
-| Financeiro - gestao | Caixas e bancos, contas a pagar/receber, remessas e retornos, ficha financeira, comissoes, controle de caixa e faturamento agrupado | **Parcial**: contas, bancos, faturamentos, transferencias, fluxo, conciliacao por CSV/OFX e arquivo CNAB base existem. Comissoes, controle de caixa de PDV e agrupamento de faturamentos nao foram encontrados. Retorno/baixa bancaria automatica e conciliacao por integracao permanecem pendentes. |
+| Financeiro - gestao | Caixas e bancos, contas a pagar/receber, remessas e retornos, ficha financeira, comissoes, controle de caixa e faturamento agrupado | **Parcial/local**: contas, extrato gerencial, ficha financeira, comissoes, abertura e fechamento interno de caixa, transferencias, conciliacao CSV/OFX, arquivo CNAB base e agrupamento de OS do mesmo cliente. Nao equivale a caixa de PDV nem a todos os caminhos de faturamento agrupado. Retorno/baixa bancaria automatica e conciliacao por integracao permanecem pendentes. |
 | Financeiro - tributos/solucoes | DAS MEI, GNRE/DARE-SP, espaco do contador, conta digital e relatorios financeiros | **Parcial/ausente**: relatorios e fluxo financeiro interno existem. DAS, GNRE/DARE, portal do contador e conta digital nao foram encontrados. |
 | Preferencias | Empresa, sistema, cadastros, suprimentos, vendas, notas fiscais, certificado, financas, servicos, integracoes, logistica, contabilidade, importacao e backup/exportacao | **Parcial**: empresa, usuarios, atendimento, relatorios, fiscal/certificado e backup estao organizados no Alpha. As outras preferencias, importacao especializada, contabilidade e administracao de integracoes precisam ser avaliadas conforme os modulos forem especificados. |
 | Central de Extensoes | Descoberta, integracoes, instalacoes, servicos e catalogo de marketplaces, plataformas de e-commerce, PDV, logistica e outros parceiros | **Ausente**: nao ha uma central de integracoes/marketplace no Alpha. Foram vistos exemplos como Mercado Livre, Shopee, Amazon, TikTok Shop, Tray, Bagy e servicos de logistica; a compatibilidade, cobertura e os contratos de API nao foram avaliados. |
@@ -122,7 +122,18 @@ A Central de Extensoes apresentou descoberta, integracoes, instalacoes, servicos
 
 ### 3.5 Outros menus
 
-Os menus de Cadastros, Estoque e Financeiro foram inspecionados no nivel de navegacao. Suas opcoes constam na tabela da secao 2. Paginas de produtos, compras, estoque, contas, tributos e relatorios nao foram exploradas em detalhe; os campos, validacoes, permissoes e efeitos transacionais precisam de levantamento proprio.
+Os menus de Cadastros e Estoque foram inspecionados no nivel de navegacao. Suas opcoes constam na tabela da secao 2. Paginas de produtos, compras e estoque nao foram exploradas em detalhe; os campos, validacoes, permissoes e efeitos transacionais precisam de levantamento proprio.
+
+### 3.6 Financeiro
+
+Foram consultadas as abas de caixas e bancos, contas a pagar/receber, remessas e retornos, ficha financeira, comissoes, controle de caixa, faturamento agrupado, relatorios, DAS MEI, GNRE/DARE-SP, espaco do contador e conta digital. Formularios seguros foram abertos e cancelados sem salvar. Nenhum pagamento, transferencia, envio ou emissao real foi executado; algumas telas estavam vazias e os efeitos finais de acoes externas nao foram verificados.
+
+- Caixas e bancos apresentou movimentacoes, saldos e conciliacao, com lancamento contendo categoria, data, valor, competencia, conta, historico e cliente/fornecedor; transferencias exibiram origem, destino, valor, data e float.
+- Contas a pagar/receber exibiram pessoa, valor, emissao, competencia, vencimento, historico, pagamento, conta, categoria, documento, juros e multa; havia ocorrencias, anexos e acoes de baixa, impressao, cobranca e envio. Nem todas as acoes foram executadas.
+- Comissoes ofereceu regra fixa ou por desconto e liberacao proporcional ou integral conforme faturamento e parcelas. A lista estava sem vendedores. Controle de caixa exibiu abertura com loja e troco, mas nao havia sessao para inspecionar fechamento.
+- Faturamento agrupado estava sem dados; foram observados filtros, cliente, itens, valor, condicao e geracao de contas. Relatorios incluiram balancete, DRE, fluxo e agrupamentos de entradas, saidas, pagamentos e recebimentos.
+
+Por decisao do usuario, o Alpha prioriza gestao interna e regras configuraveis por vendedor; integracoes reais dependem de contratacao e homologacao posteriores. A implementacao e seus limites estao no [README.md](../README.md): nao pressupor equivalencia completa com o Bling, retorno CNAB ou DRE contabil.
 
 ## 4. Estado e riscos do Alpha
 
@@ -141,7 +152,7 @@ Consulte [CHECKLIST-ERP.md](../CHECKLIST-ERP.md), [CHECKLIST-FATURAMENTO.md](../
 
 ## 5. Roteiro para completar a especificacao
 
-Este mapa e uma primeira passada por menus; nao e uma especificacao de paridade tela a tela. Para cada modulo ainda e necessario inspecionar, sem operar dados reais:
+Este mapa inclui consultas a menus e algumas telas, mas nao e uma especificacao de paridade tela a tela. Para cada modulo ainda e necessario inspecionar, sem operar dados reais:
 
 1. Listas, filtros, colunas, estados vazios, paginacao, exportacoes e acoes em lote.
 2. Formularios de criacao/edicao, campos obrigatorios, validacoes, precos, descontos, parcelas e permissoes.
@@ -158,7 +169,7 @@ Decisoes confirmadas pelo usuario para a primeira etapa de pedidos no Alpha:
 - Contas a receber sao criadas pela acao Lancar contas do menu do pedido; salvar o pedido nao cria lancamentos financeiros.
 - Situacoes seguem o Bling (Em aberto, Em andamento, Atendido, Cancelado). Cancelar um pedido com estoque lancado registra movimentos de estorno vinculados ao pedido e repoe o saldo no deposito original.
 
-A implementacao local cobre cadastro/edicao do pedido, conversao de orcamento aprovado, vinculo opcional com OS, descontos por item e geral, frete, outras despesas, vendedor, prazo previsto, condicao de pagamento como informacao, lancamento/estorno rastreavel de estoque e de contas e encaminhamento para NF-e/NFS-e. Nao inclui entrega parcial, reserva, nota parcial, NFC-e, cobranca bancaria automatica, listas de preco, comissoes ou integracoes de loja/logistica. A tela usa o documento local/JSONB existente; validacao server-side uniforme e concorrencia transacional continuam pendentes para producao.
+A implementacao local cobre cadastro/edicao do pedido, conversao de orcamento aprovado, vinculo opcional com OS, descontos por item e geral, frete, outras despesas, vendedor, prazo previsto, condicao de pagamento como informacao, lancamento/estorno rastreavel de estoque e de contas e encaminhamento para NF-e/NFS-e. Comissoes sao apuradas separadamente no Financeiro, sujeitas aos limites de itens congelados. Nao inclui entrega parcial, reserva, nota parcial, NFC-e, cobranca bancaria automatica, listas de preco ou integracoes de loja/logistica. A tela usa o documento local/JSONB existente; validacao server-side uniforme e concorrencia transacional continuam pendentes para producao.
 
 A interface consultada no Bling nao confirma essas regras internas; elas sao decisoes proprias do Alpha e nao devem ser atribuidas ao comportamento do Bling.
 

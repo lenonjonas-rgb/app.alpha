@@ -10,6 +10,12 @@ Marcar somente apos implementar e verificar. Codigo local, publicacao e homologa
 - [x] Categorias, centros de custo e classificacao dos titulos sem reescrever snapshots fiscais.
 - [x] Base inicial manual por banco e posicao gerencial.
 - [x] Relatorios por periodo/banco/categoria/centro e exportacao CSV.
+- [x] Extrato gerencial de baixas e transferencias, ficha por cliente cadastrado e exportacao CSV (local; sem consulta bancaria).
+- [x] Competencia, documento, vendedor, juros mensal e multa informativos em contas e recorrencias (local).
+- [x] Cadastro de vendedores, regras e apuracao interna revisada de comissoes, com historico e protecao SQL (local; nao gera pagamento).
+- [x] Abertura e fechamento interno de caixa com selecao explicita de movimentos, contagem, diferenca e historico protegido (local; nao e PDV).
+- [ ] Completar e homologar snapshots de itens para comissao em todos os faturamentos de NF-e.
+- [ ] Corrigir e homologar parcelamento e cancelamento integrado de faturamentos de NF-e vinculados a pedido, preservando as protecoes financeiras existentes.
 - [x] Transferencias entre contas, com duas pontas vinculadas, estorno atomico e protecao SQL de historico (validacao local; publicacao pendente).
 - [x] Parcelar novas contas manuais a pagar/receber, com previa mensal, datas editaveis, total exato e vinculos protegidos (validacao local).
 - [ ] Parcelar faturamentos de OS/titulos existentes e renegociar com historico e integracao fiscal/bancaria.
@@ -162,3 +168,9 @@ Homologacao da importacao com arquivos reais dos bancos permanece pendente e foi
 Cadastro basico de contratos de manutencao implementado localmente: cliente ativo, uma ou mais unidades/equipamentos vinculados, cobertura e vigencia; suspensao/reativacao/cancelamento com motivo e historico. Datas futuras e contratos vencidos sao identificados sem alterar automaticamente o status. O cadastro nao cria OS, tarefas, recorrencias ou contas; reajustes, renovacoes/versionamento e agenda preventiva permanecem pendentes.
 
 Validacao desta entrega: 557 testes aprovados em 47 arquivos; build/type-check, lint e `git diff --check` aprovados. Smoke test no navegador confirmou cadastro, vinculos e persistencia apos recarga, sem criar OS nem contas; dados locais originais restaurados. Sem migration SQL especifica, aplicacao em producao, commit ou push.
+
+Reformulacao financeira implementada localmente apos consulta ao Bling: extrato gerencial, ficha financeira, detalhes de contas, regras e apuracao manual de comissoes, abertura e fechamento interno de caixa e navegacao reorganizada. O caixa depende de selecao e contagem manuais; comissoes nao criam contas a pagar. Retorno CNAB, DAS MEI, GNRE/DARE, portal do contador e conta digital continuam nao integrados; relatorios nao sao DRE contabil. Faturamentos de NF-e sem itens congelados nao permitem apuracao automatica, e a divergencia preexistente entre parcelas de NF-e e a protecao SQL/cancelamento permanece pendente.
+
+Validacao da reformulacao: 368 testes aprovados em 29 arquivos, incluindo PGlite com todas as migrations, detalhes de parcelas/recorrencias, historicos e permissoes; build/type-check, lint e `git diff --check` aprovados. No navegador demo, foram testados baixa, extrato, abertura e fechamento de caixa e apuracao/liberacao de comissao, sem acessar dados reais.
+
+Antes de publicar, faca backup restauravel e valide a sequencia em teste. Reconcilie funcoes, triggers e dependencias com o catalogo de producao e aplique somente as migracoes cuja ausencia foi confirmada, antes do frontend; um historico de migracoes vazio nao autoriza reaplicar tudo. Na verificacao deste projeto estavam ausentes as protecoes de `20261016020000_finance_transfer_guards.sql`, `20261020010000_bank_reconciliation_groups.sql` e das tres migracoes de 20261103 para detalhes, comissoes e caixa. Confirme novamente a compatibilidade dos dados e atualize clientes administrativos antigos. A sequencia e as protecoes foram testadas localmente; a implantacao depende de backup e verificacao do ambiente de destino.

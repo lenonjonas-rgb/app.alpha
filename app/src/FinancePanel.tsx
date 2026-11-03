@@ -8,7 +8,7 @@ import type { Database } from "./domain";
 import { billOrders, cancelFinanceEntry, entryBalance, entryStatus, pendingBillingOrders, pendingBillingValues, previewBilling, reverseSettlement, saveBankAccount, saveFinanceEntry, settleFinanceEntry } from "./finance";
 import type { BankAccount, BillingKind, BillingTerms, FinanceEntry } from "./financeSchema";
 import { bankAccountSchema, financeEntrySchema, settlementCashAmount } from "./financeSchema";
-import { errorMessage } from "./useDatabase";
+import { downloadFile, errorMessage } from "./useDatabase";
 import "./FinancePanel.css";
 import { FiscalPanel } from "./FiscalPanel";
 import { RemittancePanel } from "./RemittancePanel";
@@ -26,16 +26,25 @@ import { FinanceTransfersPanel } from "./FinanceTransfersPanel";
 import { previewFinanceInstallments, saveFinanceInstallments } from "./financeInstallments";
 import { FinanceRecurrencesPanel } from "./FinanceRecurrencesPanel";
 import { PurchasingPanel } from "./PurchasingPanel";
+import { FinanceCashStatementPanel, FinanceCustomerStatementPanel } from "./FinanceStatementsPanel";
+import { filterFinanceEntries, financeEntriesCsv } from "./financeStatements";
+import type { FinanceEntryFilter } from "./financeStatements";
+import { FinanceEntryDetailsFields } from "./FinanceEntryDetailsFields";
+import { readFinanceEntryDetails } from "./financeEntryDetails";
+import { formatPercent } from "./financePercent";
+import { CommissionsPanel } from "./CommissionsPanel";
+import { CashSessionsPanel } from "./CashSessionsPanel";
 
-type Tab = ManagementTab | "Compras e fornecedores" | "Recorrências" | "Transferências" | "Conciliação bancária" | "A faturar" | "Contas a receber" | "Contas a pagar" | "Bancos" | "Faturamentos" | "Fiscal" | "Remessas";
+type Tab = ManagementTab | "Compras e fornecedores" | "Recorrências" | "Transferências" | "Conciliação bancária" | "A faturar" | "Contas a receber" | "Contas a pagar" | "Bancos" | "Caixas e bancos" | "Controle de caixa" | "Ficha financeira" | "Comissões" | "Faturamentos" | "Fiscal" | "Remessas" | "Serviços externos";
 type Editor = { kind: "bank"; account?: BankAccount } | { kind: "entry"; direction: FinanceEntry["kind"] } |
   { kind: "bill"; ids: string[] } | { kind: "settlement"; entry: FinanceEntry } | { kind: "classification"; entry: FinanceEntry };
 type Commit = (update: Database | ((current: Database) => Database)) => void;
+const financeStatuses: FinanceEntryFilter["status"][] = ["Todas", "Em aberto", "Atrasada", "Parcial", "Recebida", "Paga", "Compensada", "Cancelada"];
 const tabGroups: { label: string; tabs: Tab[] }[] = [
-  { label: "Visão geral", tabs: ["Painel gerencial", "Fluxo de caixa", "Relatórios"] },
-  { label: "Contas e compras", tabs: ["A faturar", "Contas a receber", "Contas a pagar", "Compras e fornecedores", "Recorrências", "Faturamentos"] },
-  { label: "Bancos", tabs: ["Bancos", "Transferências", "Conciliação bancária"] },
-  { label: "Fiscal e cadastros", tabs: ["Cadastros gerenciais", "Fiscal", "Remessas"] },
+  { label: "Gestão financeira", tabs: ["Caixas e bancos", "Contas a pagar", "Contas a receber", "Remessas", "Ficha financeira", "Comissões", "Controle de caixa", "A faturar", "Faturamentos"] },
+  { label: "Bancos e operações", tabs: ["Bancos", "Transferências", "Conciliação bancária", "Compras e fornecedores", "Recorrências"] },
+  { label: "Relatórios e cadastros", tabs: ["Painel gerencial", "Fluxo de caixa", "Relatórios", "Cadastros gerenciais"] },
+  { label: "Tributos e integrações", tabs: ["Fiscal", "Serviços externos"] },
 ];
 
 export function FinancePanel({ data, commit, onSuccess, onOpenOrder, initialTab, approvalActor }: {
@@ -48,7 +57,11 @@ export function FinancePanel({ data, commit, onSuccess, onOpenOrder, initialTab,
   const [clientId, setClientId] = useState("");
   const [billingQuery, setBillingQuery] = useState("");
   const [query, setQuery] = useState("");
-  const [status, setStatus] = useState("Todas");
+  const [status, setStatus] = useState<FinanceEntryFilter["status"]>("Todas");
+  const [dueFrom, setDueFrom] = useState("");
+  const [dueThrough, setDueThrough] = useState("");
+  const [entryAccountId, setEntryAccountId] = useState("");
+  const [entryCategoryId, setEntryCategoryId] = useState("");
   const [error, setError] = useState("");
   const [initialFiscalView, setInitialFiscalView] = useState<"issue" | undefined>();
   const [fiscalLinks, setFiscalLinks] = useState<z.infer<typeof financeFiscalLinksSchema> | null>(null);
@@ -80,14 +93,32 @@ export function FinancePanel({ data, commit, onSuccess, onOpenOrder, initialTab,
   const today = localDay();
   const management = financeManagement(data);
   const outstanding = (kind: FinanceEntry["kind"]) => data.finance.entries.filter((item) => item.kind === kind && !item.canceled).reduce((sum, item) => sum + entryBalance(item), 0);
-  const entries = data.finance.entries.filter((item) => item.kind === direction &&
-    `${item.party} ${item.description} ${item.purchaseId ?? ""} ${item.installment?.planId ?? ""} ${item.recurrence?.id ?? ""} ${item.recurrence?.period ?? ""}`.toLocaleLowerCase("pt-BR").includes(query.toLocaleLowerCase("pt-BR")) &&
-    (status === "Todas" || (status === "Em aberto" ? !item.canceled && entryBalance(item) > 0 : entryStatus(item, today) === status)));
+  let entries: FinanceEntry[] = [];
+  let entriesError = "";
+  try {
+    entries = filterFinanceEntries(data, { kind: direction, query, status, from: dueFrom, through: dueThrough,
+      accountId: entryAccountId, categoryId: entryCategoryId }, today);
+  } catch (cause) { entriesError = errorMessage(cause); }
   function act(update: (current: Database) => Database, message: string) {
     try { commit(update); setError(""); onSuccess(message); }
     catch (cause) { setError(errorMessage(cause)); }
   }
   function open(next: Editor) { setError(""); setEditor(next); }
+  function navigate(next: Tab) {
+    if (next !== "Fiscal") setInitialFiscalView(undefined);
+    setTab(next);
+    setError("");
+    if (next === "Contas a receber" || next === "Contas a pagar") {
+      setStatus("Todas"); setEntryCategoryId("");
+    }
+  }
+  function exportEntries() {
+    try {
+      if (entriesError) throw new Error(entriesError);
+      downloadFile(`contas-a-${direction.toLocaleLowerCase("pt-BR")}.csv`, financeEntriesCsv(data, entries, today), "text/csv;charset=utf-8");
+      setError("");
+    } catch (cause) { setError(errorMessage(cause)); }
+  }
   function openFiscalIssue() { setInitialFiscalView("issue"); setTab("Fiscal"); }
   async function refreshLinks() {
     setFiscalBusy(true); setError(""); setFiscalLinks(null);
@@ -120,7 +151,7 @@ export function FinancePanel({ data, commit, onSuccess, onOpenOrder, initialTab,
   }
   return <section className="finance-panel">
     {error && <p className="error-message" role="alert">{error}</p>}
-    {tab !== "Fiscal" && tab !== "A faturar" && <div className="finance-metrics">
+    {tab !== "Fiscal" && tab !== "A faturar" && tab !== "Caixas e bancos" && tab !== "Ficha financeira" && tab !== "Comissões" && tab !== "Controle de caixa" && tab !== "Serviços externos" && <div className="finance-metrics">
       <div><small>A faturar</small><strong>{currency(available.reduce((sum, order) => {
         const values = pendingBillingValues(data, order);
         return sum + values.products + values.services;
@@ -131,9 +162,9 @@ export function FinancePanel({ data, commit, onSuccess, onOpenOrder, initialTab,
     <nav className="finance-tabs" aria-label="Seções do financeiro">{tabGroups.map((group) =>
       <DropdownMenu key={group.label} label={group.tabs.includes(tab) ? tab : group.label}
         accessibleLabel={`Seções: ${group.label}`} active={group.tabs.includes(tab)}
-        actions={group.tabs.map((item) => ({ label: item, current: tab === item,
-          onSelect: () => { if (item !== "Fiscal") setInitialFiscalView(undefined); setTab(item); setError(""); } }))} />)}</nav>
-    {tab !== "Fiscal" && tab !== "A faturar" && <>
+        actions={group.tabs.map((item) => ({ label: item === "A faturar" ? "Faturamento agrupado · A faturar" : item === "Remessas" ? "Remessas e retornos" : item,
+          current: tab === item, onSelect: () => navigate(item) }))} />)}</nav>
+    {tab !== "Fiscal" && tab !== "A faturar" && tab !== "Caixas e bancos" && tab !== "Ficha financeira" && tab !== "Comissões" && tab !== "Controle de caixa" && tab !== "Serviços externos" && <>
       <p>O faturamento prepara contas internas; autorização fiscal é consultada na aba Fiscal. Boleto/Pix não são registrados automaticamente no banco.</p>
       <p>Vínculos fiscais/bancários são consultados no backend, não fazem parte do backup JSON. Atualize após emitir, consultar ou gerar remessa. Homologação não é emissão válida em produção.</p>
       <button className="button secondary" disabled={!fiscalConfigured || fiscalBusy} onClick={() => void refreshLinks()}>Atualizar vínculos fiscais e remessas</button>
@@ -142,12 +173,34 @@ export function FinancePanel({ data, commit, onSuccess, onOpenOrder, initialTab,
     </>}
     {(tab === "Painel gerencial" || tab === "Fluxo de caixa" || tab === "Relatórios" || tab === "Cadastros gerenciais") &&
       <FinanceManagementPanel data={data} tab={tab} commit={commit} onSuccess={onSuccess} />}
+    {tab === "Caixas e bancos" && <FinanceCashStatementPanel data={data} onNavigate={navigate}
+      onCreateBank={() => open({ kind: "bank" })} onCreateEntry={(kind) => open({ kind: "entry", direction: kind })} />}
+    {tab === "Ficha financeira" && <FinanceCustomerStatementPanel data={data} />}
+    {tab === "Comissões" && <CommissionsPanel data={data} commit={commit} onSuccess={onSuccess} />}
+    {tab === "Controle de caixa" && <CashSessionsPanel data={data} commit={commit} onSuccess={onSuccess} />}
     {tab === "Conciliação bancária" && <BankReconciliationPanel data={data} commit={commit} onSuccess={onSuccess} />}
     {tab === "Transferências" && <FinanceTransfersPanel data={data} commit={commit} onSuccess={onSuccess} />}
     {tab === "Recorrências" && <FinanceRecurrencesPanel data={data} commit={commit} onSuccess={onSuccess} />}
     {tab === "Compras e fornecedores" && <PurchasingPanel data={data} commit={commit} onSuccess={onSuccess} approvalActor={approvalActor} />}
     {tab === "Fiscal" && <FiscalPanel data={data} commit={commit} initialView={initialFiscalView} />}
-    {tab === "Remessas" && <RemittancePanel data={data} />}
+    {tab === "Remessas" && <RemittancePanel data={data} onOpenReconciliation={() => navigate("Conciliação bancária")} />}
+    {tab === "Serviços externos" && <section className="finance-management">
+      <h2>Tributos e serviços externos</h2>
+      <p className="finance-statement-note">A gestão financeira funciona internamente. A emissão ou transmissão de guias e as operações bancárias
+        dependem de contratação, integração e homologação; nenhum pagamento ou consulta externa é realizado nesta tela.</p>
+      <div className="finance-table"><table><thead><tr><th>Serviço</th><th>Situação no Alpha</th></tr></thead><tbody>
+        <tr><td>DAS MEI</td><td>Emissão e pagamento não integrados.</td></tr>
+        <tr><td>GNRE e DARE-SP</td><td>Geração e transmissão de guias não integradas.</td></tr>
+        <tr><td>Espaço do contador</td><td>Portal externo não integrado; os relatórios internos podem ser exportados em CSV.</td></tr>
+        <tr><td>Conta digital</td><td>Consulta de saldo, transferência bancária e pagamentos não integrados.</td></tr>
+        <tr><td>Retorno de cobrança</td><td>Processamento de retorno CNAB não implementado; conciliação de extratos é separada.</td></tr>
+      </tbody></table></div>
+      <div className="finance-actions">
+        <button type="button" className="button secondary" onClick={() => navigate("Fiscal")}>Abrir módulo fiscal</button>
+        <button type="button" className="button secondary" onClick={() => navigate("Relatórios")}>Ver relatórios internos</button>
+        <button type="button" className="button secondary" onClick={() => navigate("Remessas")}>Ver remessas e retornos</button>
+      </div>
+    </section>}
     {tab === "A faturar" && <section className="billing-page">
       <header className="billing-heading">
         <div><small className="fiscal-eyebrow">VENDAS · FATURAMENTO</small><h2>Faturar ordens de serviço</h2></div>
@@ -217,15 +270,42 @@ export function FinancePanel({ data, commit, onSuccess, onOpenOrder, initialTab,
     </section>}
     {(tab === "Contas a receber" || tab === "Contas a pagar") && <>
       <div className="section-heading">
-        <label className="field">Buscar conta<input type="search" value={query} onChange={(event) => setQuery(event.target.value)} /></label>
-        <label className="field">Situação<select value={status} onChange={(event) => setStatus(event.target.value)}>
-          {["Todas", "Em aberto", "Atrasada", "Parcial", "Recebida", "Paga", "Compensada", "Cancelada"].map((item) => <option key={item}>{item}</option>)}
-        </select></label>
+        <div><h2>Contas a {direction.toLocaleLowerCase("pt-BR")}</h2><p>Acompanhe vencimentos, baixas e classificações.</p></div>
         <button className="button primary" onClick={() => open({ kind: "entry", direction })}><Plus size={17} />Nova conta a {direction.toLowerCase()}</button>
       </div>
+      <div className="finance-entry-filters">
+        <label className="field">Buscar conta<input type="search" maxLength={1000} value={query} onChange={(event) => setQuery(event.target.value)} /></label>
+        <label className="field">Situação<select value={status} onChange={(event) => {
+          const value = financeStatuses.find((item) => item === event.target.value);
+          if (value) setStatus(value);
+        }}>
+          {financeStatuses.filter((item) => direction === "Receber" ? item !== "Paga" && item !== "Compensada" : item !== "Recebida")
+            .map((item) => <option key={item}>{item}</option>)}
+        </select></label>
+        <label className="field">Vencimento de<input type="date" value={dueFrom} onChange={(event) => setDueFrom(event.target.value)} /></label>
+        <label className="field">Vencimento até<input type="date" value={dueThrough} onChange={(event) => setDueThrough(event.target.value)} /></label>
+        <label className="field">Conta financeira<select value={entryAccountId} onChange={(event) => setEntryAccountId(event.target.value)}>
+          <option value="">Todas</option>{data.finance.accounts.map((account) =>
+            <option key={account.id} value={account.id}>{account.name}{!account.active && " (inativa)"}</option>)}
+        </select></label>
+        <label className="field">Categoria<select value={entryCategoryId} onChange={(event) => setEntryCategoryId(event.target.value)}>
+          <option value="">Todas</option>{management.categories.filter((category) => category.kind === direction).map((category) =>
+            <option key={category.id} value={category.id}>{category.name}{!category.active && " (inativa)"}</option>)}
+        </select></label>
+        <button type="button" className="button secondary" onClick={() => {
+          setQuery(""); setStatus("Todas"); setDueFrom(""); setDueThrough(""); setEntryAccountId(""); setEntryCategoryId("");
+        }}>Limpar filtros</button>
+        <button type="button" className="button secondary" disabled={Boolean(entriesError)} onClick={exportEntries}>Exportar contas CSV</button>
+      </div>
+      {entriesError && <p className="error-message" role="alert">{entriesError}</p>}
       <div className="finance-table"><table><thead><tr><th>{direction === "Receber" ? "Cliente" : "Favorecido"}</th><th>Descrição</th><th>Banco / pagamento</th><th>Vencimento</th><th>Valor</th><th>Saldo</th><th>Situação</th><th>Ações</th></tr></thead>
         <tbody>{entries.map((entry) => <tr key={entry.id}>
           <td>{entry.party}</td><td>{entry.description}
+            {entry.details && <small className="finance-classification">Competência: {displayDate(entry.details.competenceOn)}
+              {entry.details.documentNumber && ` · Documento: ${entry.details.documentNumber}`}
+              {entry.details.seller && ` · Vendedor: ${entry.details.seller}`}
+              <br />Juros mensal informativo: {formatPercent(entry.details.monthlyInterestBasisPoints)}% ·
+              Multa informativa: {formatPercent(entry.details.lateFineBasisPoints)}%</small>}
             {entry.purchaseId && <small className="finance-classification">Pedido de compra: {entry.purchaseId}</small>}
             {entry.purchaseReturnCreditId && <small className="finance-classification">Crédito de devolução de compra: {entry.purchaseReturnCreditId}</small>}
             {entry.recurrence && <small className="finance-classification">Recorrência: {entry.recurrence.id} · Mês {entry.recurrence.period}</small>}
@@ -238,7 +318,9 @@ export function FinancePanel({ data, commit, onSuccess, onOpenOrder, initialTab,
             {management.costCenters.find((item) => item.id === management.classifications.find((item) => item.entryId === entry.id)?.costCenterId)?.name ?? "Sem centro de custo"}
           </small></td>
           <td>{data.finance.accounts.find((account) => account.id === entry.accountId)?.name}<br />{entry.paymentMethod}</td>
-          <td>{displayDate(entry.dueOn)}</td><td>{currency(entry.amount)}{entry.retention && <small><br />Retenções: {currency(entry.retention.withheld)}<br />Líquido: {currency(entry.retention.net)}<br />IRRF {currency(entry.retention.irrf)} · INSS {currency(entry.retention.inss)} · CSLL {currency(entry.retention.csll)}</small>}</td><td>{currency(entryBalance(entry))}</td><td>{entryStatus(entry, today)}<FinanceFiscalStatus link={linked(entry.id)} /></td>
+          <td>{displayDate(entry.dueOn)}</td><td>{currency(entry.amount)}{entry.retention && <small><br />Retenções: {currency(entry.retention.withheld)}<br />Líquido: {currency(entry.retention.net)}<br />IRRF {currency(entry.retention.irrf)} · INSS {currency(entry.retention.inss)} · CSLL {currency(entry.retention.csll)}</small>}</td><td>{entry.canceled ? "—" : currency(entryBalance(entry))}</td><td>{entryStatus(entry, today)}
+            {entryStatus(entry, today) === "Atrasada" && entry.settlements.some((item) => !item.reversed) && <small className="finance-classification">Com baixa parcial</small>}
+            <FinanceFiscalStatus link={linked(entry.id)} /></td>
           <td><div className="finance-actions">
             {!entry.canceled && entryBalance(entry) > 0 && <button className="button secondary" onClick={() => open({ kind: "settlement", entry })}>Dar baixa</button>}
             <DropdownMenu accessibleLabel={`Mais ações: ${entry.description}`} actions={[
@@ -262,7 +344,7 @@ export function FinancePanel({ data, commit, onSuccess, onOpenOrder, initialTab,
               </div>)}</details>}
           </td>
         </tr>)}</tbody></table></div>
-      {!entries.length && <Empty title="Nenhuma conta encontrada" />}
+      {!entries.length && !entriesError && <Empty title="Nenhuma conta encontrada" />}
     </>}
     {tab === "Bancos" && <>
       <div className="section-heading"><h2>Bancos de recebimento e pagamento</h2><button className="button primary" onClick={() => open({ kind: "bank" })}><Plus size={17} />Cadastrar banco</button></div>
@@ -294,6 +376,9 @@ export function FinancePanel({ data, commit, onSuccess, onOpenOrder, initialTab,
         if (editor.kind === "bill") {
           setTab("Faturamentos");
           onSuccess("Faturamento criado. Confira as contas em Faturamentos; a nota fiscal deve ser preparada depois no módulo Fiscal.");
+        } else if (editor.kind === "entry" && tab === "Caixas e bancos") {
+          navigate(editor.direction === "Receber" ? "Contas a receber" : "Contas a pagar");
+          onSuccess("Conta criada em aberto. Registre a baixa para movimentar o extrato interno.");
         } else onSuccess("Registro financeiro salvo.");
       }} />}
   </section>;
@@ -367,7 +452,8 @@ function FinanceEditor({ data, editor, onClose, onSave }: {
           const client = data.clients.find((item) => item.id === clientId);
           if (editor.direction === "Receber" && !client) throw new Error("Selecione o cliente.");
           const entry = { id: entryId, kind: editor.direction, party: client?.name ?? text("party"), ...(clientId ? { clientId } : {}),
-            description: text("description"), amount: amount(), issuedOn: text("issuedOn"), ...options, canceled: false, settlements: [] };
+            description: text("description"), amount: amount(), issuedOn: text("issuedOn"), ...options, canceled: false, settlements: [],
+            details: readFinanceEntryDetails(form) };
           if (isInstallment) {
             const count = Number(installmentCount);
             const expected = previewFinanceInstallments(entry.amount, count, entry.dueOn);
@@ -427,9 +513,12 @@ function FinanceEditor({ data, editor, onClose, onSave }: {
           {editor.kind === "entry" && <>
             {editor.direction === "Receber" ? <label className="field">Cliente<select name="clientId" required defaultValue=""><option value="">Selecione</option>
               {data.clients.map((client) => <option key={client.id} value={client.id}>{client.name}</option>)}</select></label>
-              : <label className="field">Favorecido / fornecedor<input name="party" required maxLength={1000} /></label>}
+              : <label className="field">Favorecido / fornecedor<input name="party" list="finance-suppliers" required maxLength={1000} />
+                <datalist id="finance-suppliers">{data.finance.purchasing?.suppliers.filter((supplier) => supplier.active)
+                  .map((supplier) => <option key={supplier.id} value={supplier.name} />)}</datalist></label>}
             <label className="field">Descrição<input name="description" required maxLength={1000} /></label>
             <label className="field">Emissão<input type="date" name="issuedOn" required defaultValue={localDay()} /></label>
+            <FinanceEntryDetailsFields kind={editor.direction} />
             <FinanceClassificationFields data={data} kind={editor.direction} />
           </>}
           <label className="field">{editor.kind === "settlement" ? adjustmentEnabled ? "Principal da dívida a liquidar (R$)" : "Valor da baixa (R$)" : isInstallment ? "Valor total (R$)" : "Valor (R$)"}

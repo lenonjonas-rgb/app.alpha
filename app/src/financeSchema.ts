@@ -4,6 +4,10 @@ import { bankingSchema } from "./bankingSchema";
 import { isValidCnpj } from "./cnpj";
 import { isValidCpf } from "./cpf";
 import { validatePurchases } from "./purchasingValidation";
+import { commissionsSchema, validateCommissionHistory } from "./commissionSchema";
+import { cashSessionSchema, validateCashSessions } from "./cashSessionSchema";
+import { settlementCashAmount } from "./settlementMath";
+export { settlementCashAmount } from "./settlementMath";
 
 const id = z.string().min(1).max(200);
 const name = z.string().trim().min(1).max(1000);
@@ -55,9 +59,6 @@ export const financeSettlementSchema = z.object({
   if (value.adjustment && (value.adjustment.discount > value.amount || cash <= 0 || cash > 100_000_000))
     context.addIssue({ code: "custom", message: "Desconto não pode exceder o principal e o valor efetivo deve estar entre R$ 0,01 e R$ 1.000.000,00." });
 });
-export function settlementCashAmount(settlement: { amount: number; adjustment?: { interest: number; fine: number; discount: number } }) {
-  return settlement.amount + (settlement.adjustment?.interest ?? 0) + (settlement.adjustment?.fine ?? 0) - (settlement.adjustment?.discount ?? 0);
-}
 export const recurrencePeriodSchema = z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/);
 export function monthlyDueDate(firstDueOn: string, monthOffset: number) {
   date.parse(firstDueOn);
@@ -68,12 +69,20 @@ export function monthlyDueDate(firstDueOn: string, monthOffset: number) {
   target.setUTCDate(Math.min(first.getUTCDate(), target.getUTCDate()));
   return date.parse(target.toISOString().slice(0, 10));
 }
+export const financeEntryDetailsSchema = z.object({
+  competenceOn: date,
+  documentNumber: z.string().trim().max(200),
+  seller: z.string().trim().max(160),
+  monthlyInterestBasisPoints: z.number().int().min(0).max(10000),
+  lateFineBasisPoints: z.number().int().min(0).max(10000),
+});
 export const financeEntrySchema = z.object({
   id, kind: z.enum(["Receber", "Pagar"]), party: name, clientId: id.optional(),
   description: name, amount: money.refine((value) => value > 0, "Informe um valor maior que zero."),
   issuedOn: date, dueOn: date, accountId: id,
   paymentMethod: z.enum(["Pix", "Boleto", "Transferência", "Dinheiro", "Cartão", "Outro"]),
   invoiceId: id.optional(), canceled: z.boolean().default(false),
+  details: financeEntryDetailsSchema.optional(),
   retention: fiscalRetentionSchema.optional(),
   installment: installmentSchema.optional(),
   recurrence: z.object({ id, period: recurrencePeriodSchema }).optional(),
@@ -87,6 +96,7 @@ export const financeRecurrenceSchema = z.object({
   id, kind: financeEntrySchema.shape.kind, party: name, clientId: id.optional(),
   description: name, amount: financeEntrySchema.shape.amount, accountId: id,
   paymentMethod: financeEntrySchema.shape.paymentMethod, firstDueOn: date, endsOn: date,
+  details: financeEntryDetailsSchema.optional(),
   categoryId: id.optional(), costCenterId: id.optional(), createdAt: z.iso.datetime(),
   events: z.array(z.object({
     status: z.enum(["Ativa", "Suspensa", "Cancelada"]), at: z.iso.datetime(), reason: z.string().trim().min(5).max(1000),
@@ -174,6 +184,8 @@ export const financeSchema = z.object({
   banking: bankingSchema.optional(),
   transfers: z.array(financeTransferSchema).max(10000).optional(),
   recurrences: z.array(financeRecurrenceSchema).max(1000).optional(),
+  commissions: commissionsSchema.optional(),
+  cashSessions: z.array(cashSessionSchema).max(10000).optional(),
   purchasing: z.object({
     suppliers: z.array(supplierSchema).max(2000),
     orders: z.array(purchaseOrderSchema).max(5000),
@@ -196,8 +208,14 @@ export const billingKinds = ["Produtos", "Serviços"] as const;
 export type BillingKind = typeof billingKinds[number];
 export type BillingTerms = Pick<FinanceEntry, "accountId" | "dueOn" | "paymentMethod">;
 
+export function recurringEntryDetails(item: FinanceRecurrence, monthOffset: number) {
+  return item.details ? { ...item.details, competenceOn: monthlyDueDate(item.details.competenceOn, monthOffset) } : undefined;
+}
+
 export function validateFinance(finance: Finance, clientIds: Set<string>, orderClients: Map<string, string>) {
   validatePurchases(finance);
+  validateCommissionHistory(finance);
+  validateCashSessions(finance);
   const unique = (ids: string[]) => new Set(ids).size === ids.length;
   if (![finance.accounts, finance.entries, finance.invoices].every((items) => unique(items.map((item) => item.id))))
     throw new Error("Identificadores financeiros duplicados.");
@@ -222,7 +240,8 @@ export function validateFinance(finance: Finance, clientIds: Set<string>, orderC
     if (!item || !dueOn || dueOn > item.endsOn || generated.has(key) || entry.dueOn !== dueOn ||
       entry.kind !== item.kind || entry.amount !== item.amount || entry.party !== item.party ||
       entry.clientId !== item.clientId || entry.accountId !== item.accountId || entry.paymentMethod !== item.paymentMethod ||
-      entry.description !== item.description || entry.invoiceId || entry.retention || entry.installment || entry.purchaseId)
+      entry.description !== item.description || JSON.stringify(entry.details) !== JSON.stringify(recurringEntryDetails(item, offset)) ||
+      entry.invoiceId || entry.retention || entry.installment || entry.purchaseId)
       throw new Error("Conta recorrente com período duplicado ou origem, vigência ou valores incompatíveis.");
     generated.add(key);
   }
@@ -239,7 +258,8 @@ export function validateFinance(finance: Finance, clientIds: Set<string>, orderC
       return link.number !== index + 1 || link.count !== plan.count || link.total !== plan.total ||
         entry.invoiceId !== undefined || entry.retention !== undefined || entry.kind !== first.kind || entry.party !== first.party ||
         entry.clientId !== first.clientId || entry.accountId !== first.accountId || entry.paymentMethod !== first.paymentMethod ||
-        entry.description !== first.description || entry.issuedOn !== first.issuedOn || entry.dueOn < entry.issuedOn ||
+        entry.description !== first.description || entry.issuedOn !== first.issuedOn ||
+        JSON.stringify(entry.details) !== JSON.stringify(first.details) || entry.dueOn < entry.issuedOn ||
         (index > 0 && entry.dueOn <= items[index - 1].dueOn) ||
         entry.amount !== Math.floor(plan.total / plan.count) + (index < plan.total % plan.count ? 1 : 0);
     })) throw new Error("Parcelamento incompleto ou com valores, datas ou vínculos inconsistentes.");

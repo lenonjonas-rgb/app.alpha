@@ -6,6 +6,8 @@ import { financeRecurrenceSchema } from "./financeSchema";
 import type { FinanceRecurrence } from "./financeSchema";
 import { changeRecurrenceStatus, generateRecurringEntries, previewRecurringEntries, recurrenceStatus, saveFinanceRecurrence } from "./financeRecurrences";
 import { FinanceClassificationFields } from "./FinanceManagementPanel";
+import { FinanceEntryDetailsFields } from "./FinanceEntryDetailsFields";
+import { readFinanceEntryDetails } from "./financeEntryDetails";
 import { errorMessage } from "./useDatabase";
 
 type Commit = (update: (current: Database) => Database) => void;
@@ -81,6 +83,7 @@ function RecurrenceEditor({ data, editor, onClose, onSave }: { data: Database; e
         const item = financeRecurrenceSchema.parse({ id, kind, party: client?.name ?? text("party"), ...(client ? { clientId: client.id } : {}),
           description: text("description"), amount: Math.round(Number(text("amount")) * 100), accountId: text("accountId"),
           paymentMethod: text("paymentMethod"), firstDueOn: text("firstDueOn"), endsOn: text("endsOn"),
+          details: readFinanceEntryDetails(form),
           ...(text("categoryId") ? { categoryId: text("categoryId") } : {}), ...(text("costCenterId") ? { costCenterId: text("costCenterId") } : {}),
           createdAt: new Date().toISOString(), events: [] });
         onSave((current) => saveFinanceRecurrence(current, item, confirmed));
@@ -99,6 +102,7 @@ function RecurrenceEditor({ data, editor, onClose, onSave }: { data: Database; e
           {data.clients.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label> :
           <label className="field">Favorecido / fornecedor<input name="party" required maxLength={1000} /></label>}
         <label className="field">Descrição<input name="description" required maxLength={1000} /></label>
+        <FinanceEntryDetailsFields kind={kind} recurring />
         <label className="field">Valor mensal (R$)<input name="amount" type="number" min="0.01" max="1000000" step="0.01" required /></label>
         <label className="field">Primeiro vencimento<input name="firstDueOn" type="date" required defaultValue={localDay()} /></label>
         <label className="field">Fim da vigência<input name="endsOn" type="date" required /></label>
